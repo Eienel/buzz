@@ -18,3 +18,7 @@ idl-build = ["anchor-lang/idl-build"]
 
 [dependencies]
 anchor-lang = "0.30.1"
+# Pin solana-program to match the installed Solana CLI (1.18.26). Without this,
+# anchor-lang 0.30.1 floats solana-program to 2.x, pulling edition2024 transitive
+# crates (e.g. cpufeatures 0.3) that the 1.18 SBF toolchain can't parse.
+solana-program = "=1.18.26"
