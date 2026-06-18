@@ -9,15 +9,20 @@ not a casino. You never walk away with nothing.
 See **[SPEC.md](SPEC.md)** for the full game design (v1.0, simulation-validated)
 and **[ARCHITECTURE.md](ARCHITECTURE.md)** for the on-chain design.
 
-## Status — build in progress
+## Status — feature-complete, hardening next
 - [x] Game design locked & simulation-validated (`/sim*.py`, `/engine`)
 - [x] Milestone 1: config + SOL escrow + lobby state machine
-- [ ] Milestone 2: instance loop + commit-reveal moves
-- [ ] Milestone 3: fog/fate death resolution + VRF
-- [ ] Milestone 4: prediction skill-pool
-- [ ] Milestone 5: settlement + invariant asserts
-- [ ] Milestone 6: insane round + jackpot pool
+- [x] Milestone 2: instance loop + commit-reveal moves
+- [x] Milestone 3: fog/fate death resolution + refunds + cash-out/land
+- [x] Milestone 4: prediction skill-pool
+- [x] Milestone 5: settlement (creator cut + luck pool + skill pool)
+- [x] Milestone 6: treasury (house revenue) + insane-round jackpot
+- [ ] Hardening: real VRF (replace placeholder RNG); open-join window to the
+      50% lock; in-program conservation asserts; close_game/dust sweep
 - [ ] Audit → mainnet
+
+All 12 integration tests green on CI (real validator). Placeholder RNG in
+`select_death` / `roll_insane` MUST be replaced with a VRF before mainnet.
 
 ## Layout
 ```
