@@ -228,10 +228,19 @@ describe("last-circle — milestone 2: instance loop (commit-reveal move)", () =
       .rpc();
     const g2 = await program.account.game.fetch(gamePda);
     assert.equal(g2.aliveCircles, 1, "one circle left");
-    assert.deepEqual(g2.status, { settling: {} }, "game moved to Settling");
+    assert.deepEqual(g2.phase, { scoring: {} }, "death opens the scoring window");
     const dead = await program.account.circle.fetch(circlePda(doomed));
     assert.equal(dead.alive, false);
     assert.ok(dead.refundBps >= 5500 && dead.refundBps <= 8000, "refund rate locked in band");
+
+    // close scoring -> with one circle left the game settles
+    await sleep(7000);
+    await program.methods
+      .advanceInstance()
+      .accounts({ game: gamePda, cranker: authority.publicKey })
+      .rpc();
+    const g3 = await program.account.game.fetch(gamePda);
+    assert.deepEqual(g3.status, { settling: {} }, "game moved to Settling");
   });
 });
 
@@ -317,9 +326,9 @@ describe("last-circle — milestone 3: death + refund (cash out)", () => {
     const g2 = await program.account.game.fetch(gamePda);
     assert.equal(g2.aliveCircles, 2, "3 -> 2 circles");
     assert.ok(g2.leftoverPot.toNumber() > 0, "haircut swept into leftover pot");
-    assert.equal(g2.instance, 2, "advanced to next instance");
+    assert.deepEqual(g2.phase, { scoring: {} }, "scoring window open after death");
 
-    // the lone member of the doomed circle cashes out
+    // the lone member of the doomed circle cashes out (works regardless of phase)
     const owner = ownerOf(doomed);
     const before = await provider.connection.getBalance(owner);
     await program.methods
@@ -340,5 +349,99 @@ describe("last-circle — milestone 3: death + refund (cash out)", () => {
     const p = await program.account.player.fetch(playerPda(owner));
     assert.deepEqual(p.status, { cashedOut: {} });
     assert.equal(p.stake.toNumber(), 0);
+  });
+});
+
+describe("last-circle — milestone 4: prediction skill points", () => {
+  const provider = anchor.AnchorProvider.env();
+  anchor.setProvider(provider);
+  const program = anchor.workspace.LastCircle as Program<LastCircle>;
+  const authority = provider.wallet as anchor.Wallet;
+
+  const [configPda] = PublicKey.findProgramAddressSync([Buffer.from("config")], program.programId);
+  const gameId = new anchor.BN(Date.now() + 3);
+  const [gamePda] = PublicKey.findProgramAddressSync(
+    [Buffer.from("game"), gameId.toArrayLike(Buffer, "le", 8)],
+    program.programId
+  );
+  const [vaultPda] = PublicKey.findProgramAddressSync(
+    [Buffer.from("vault"), gamePda.toBuffer()],
+    program.programId
+  );
+  const circlePda = (id: number) =>
+    PublicKey.findProgramAddressSync([Buffer.from("circle"), gamePda.toBuffer(), Buffer.from([id])], program.programId)[0];
+  const playerPda = (owner: PublicKey) =>
+    PublicKey.findProgramAddressSync([Buffer.from("player"), gamePda.toBuffer(), owner.toBuffer()], program.programId)[0];
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  const p1 = Keypair.generate();
+  const p2 = Keypair.generate();
+
+  it("commits a prediction, scores it after the death", async () => {
+    for (const kp of [p1, p2]) {
+      const sig = await provider.connection.requestAirdrop(kp.publicKey, 2 * LAMPORTS_PER_SOL);
+      await provider.connection.confirmTransaction(sig);
+    }
+    await program.methods
+      .createGame(gameId, 6)
+      .accounts({ config: configPda, game: gamePda, vault: vaultPda, authority: authority.publicKey })
+      .rpc();
+    const stake = new anchor.BN(LAMPORTS_PER_SOL);
+    const setup: [number, PublicKey, any[]][] = [
+      [0, authority.publicKey, []],
+      [1, p1.publicKey, [p1]],
+      [2, p2.publicKey, [p2]],
+    ];
+    for (const [id, owner, signers] of setup) {
+      await program.methods
+        .createCircle(id, stake)
+        .accounts({ config: configPda, game: gamePda, vault: vaultPda, circle: circlePda(id), player: playerPda(owner), owner })
+        .signers(signers)
+        .rpc();
+    }
+    await program.methods.startGame().accounts({ game: gamePda, authority: authority.publicKey }).rpc();
+
+    // authority predicts circle 0 will die (instance 1)
+    const predicted = 0;
+    const nonce = new anchor.BN(987654321);
+    const instance = 1;
+    const preimage = Buffer.concat([
+      Buffer.from([predicted]),
+      nonce.toArrayLike(Buffer, "le", 8),
+      authority.publicKey.toBuffer(),
+      gamePda.toBuffer(),
+      Buffer.from(new Uint16Array([instance]).buffer),
+    ]);
+    const hash = Buffer.from(keccak_256.arrayBuffer(preimage));
+    await program.methods
+      .commitPrediction(Array.from(hash))
+      .accounts({ game: gamePda, player: playerPda(authority.publicKey), owner: authority.publicKey })
+      .rpc();
+
+    // crank through to a death
+    await sleep(9000);
+    await program.methods.advanceToReveal().accounts({ game: gamePda, cranker: authority.publicKey }).rpc();
+    await sleep(7000);
+    await program.methods
+      .selectDeath()
+      .accounts({ game: gamePda, cranker: authority.publicKey })
+      .remainingAccounts([0, 1, 2].map((i) => ({ pubkey: circlePda(i), isSigner: false, isWritable: false })))
+      .rpc();
+    const g1 = await program.account.game.fetch(gamePda);
+    const doomed = g1.doomedCircle;
+    await program.methods
+      .executeDeath(doomed)
+      .accounts({ game: gamePda, circle: circlePda(doomed), cranker: authority.publicKey })
+      .rpc();
+
+    // reveal the prediction during the scoring window
+    await program.methods
+      .revealPrediction(predicted, nonce)
+      .accounts({ game: gamePda, player: playerPda(authority.publicKey), owner: authority.publicKey })
+      .rpc();
+
+    const p = await program.account.player.fetch(playerPda(authority.publicKey));
+    const expectedPoints = doomed === predicted ? 1 : 0;
+    assert.equal(p.points, expectedPoints, `points correct for doomed=${doomed}, predicted=${predicted}`);
   });
 });

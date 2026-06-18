@@ -291,7 +291,61 @@ pub mod last_circle {
         let haircut = (c.total_stake as u128 * (BPS - r_bps as u128) / BPS) as u64;
         g.leftover_pot = g.leftover_pot.checked_add(haircut).ok_or(GameError::MathOverflow)?;
 
+        // Open the scoring window: players reveal predictions against this death.
         let now = Clock::get()?.unix_timestamp;
+        g.phase = InstancePhase::Scoring;
+        g.phase_ends_at = now + g.reveal_window();
+        Ok(())
+    }
+
+    /// Commit a hashed prediction of WHICH circle dies this instance.
+    /// hash = keccak(predicted_circle ‖ nonce_le ‖ owner ‖ game ‖ instance_le).
+    pub fn commit_prediction(ctx: Context<CommitMove>, hash: [u8; 32]) -> Result<()> {
+        let g = &ctx.accounts.game;
+        require!(g.status == GameStatus::Running, GameError::WrongPhase);
+        require!(g.phase == InstancePhase::Commit, GameError::WrongPhase);
+        require!(Clock::get()?.unix_timestamp < g.phase_ends_at, GameError::PhaseEnded);
+        let p = &mut ctx.accounts.player;
+        require!(p.status == PlayerStatus::Active, GameError::PlayerInactive);
+        p.prediction_hash = hash;
+        p.prediction_instance = g.instance;
+        Ok(())
+    }
+
+    /// Reveal a prediction during the Scoring window; a correct call (matching the
+    /// circle that died this instance) earns +1 skill point.
+    pub fn reveal_prediction(ctx: Context<RevealPrediction>, predicted_circle: u8, nonce: u64) -> Result<()> {
+        let g = &ctx.accounts.game;
+        require!(g.status == GameStatus::Running, GameError::WrongPhase);
+        require!(g.phase == InstancePhase::Scoring, GameError::WrongPhase);
+        require!(Clock::get()?.unix_timestamp < g.phase_ends_at, GameError::PhaseEnded);
+        let p = &mut ctx.accounts.player;
+        require!(p.prediction_instance == g.instance, GameError::NothingCommitted);
+
+        let expected = anchor_lang::solana_program::keccak::hashv(&[
+            &[predicted_circle],
+            &nonce.to_le_bytes(),
+            p.owner.as_ref(),
+            g.key().as_ref(),
+            &g.instance.to_le_bytes(),
+        ]);
+        require!(expected.0 == p.prediction_hash, GameError::BadReveal);
+
+        if predicted_circle == g.doomed_circle {
+            p.points += 1;
+        }
+        p.prediction_instance = 0; // consumed
+        Ok(())
+    }
+
+    /// Permissionless crank: end the scoring window and either advance to the
+    /// next instance's commit phase, or move to Settling if one circle remains.
+    pub fn advance_instance(ctx: Context<Crank>) -> Result<()> {
+        let g = &mut ctx.accounts.game;
+        require!(g.status == GameStatus::Running, GameError::WrongPhase);
+        require!(g.phase == InstancePhase::Scoring, GameError::WrongPhase);
+        let now = Clock::get()?.unix_timestamp;
+        require!(now >= g.phase_ends_at, GameError::PhaseNotOver);
         if g.alive_circles == 1 {
             g.status = GameStatus::Settling;
         } else {
@@ -430,6 +484,8 @@ fn init_player(player: &mut Account<Player>, game: Pubkey, owner: Pubkey, stake:
     player.status = PlayerStatus::Active;
     player.committed_hash = [0u8; 32];
     player.commit_instance = 0;
+    player.prediction_hash = [0u8; 32];
+    player.prediction_instance = 0;
     player.bump = bump;
 }
 
@@ -510,12 +566,16 @@ pub struct Player {
     pub status: PlayerStatus,
     /// keccak commitment for the current instance's move (zeroed when consumed).
     pub committed_hash: [u8; 32],
-    /// instance the commitment is for; 0 = no live commitment.
+    /// instance the move commitment is for; 0 = no live commitment.
     pub commit_instance: u16,
+    /// keccak commitment for the current instance's death PREDICTION.
+    pub prediction_hash: [u8; 32],
+    /// instance the prediction is for; 0 = none live.
+    pub prediction_instance: u16,
     pub bump: u8,
 }
 impl Player {
-    pub const SPACE: usize = 8 + 32 + 32 + 8 + 1 + 4 + 1 + 32 + 2 + 1;
+    pub const SPACE: usize = 8 + 32 + 32 + 8 + 1 + 4 + 1 + 32 + 2 + 32 + 2 + 1;
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq)]
@@ -539,6 +599,8 @@ pub enum InstancePhase {
     Reveal,
     /// death selected, awaiting execute_death.
     Resolving,
+    /// death executed; players reveal predictions for skill points.
+    Scoring,
 }
 
 // ---------------------------------------------------------------------------
@@ -675,6 +737,21 @@ pub struct Crank<'info> {
     #[account(mut, seeds = [b"game", game.game_id.to_le_bytes().as_ref()], bump = game.bump)]
     pub game: Account<'info, Game>,
     pub cranker: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct RevealPrediction<'info> {
+    #[account(seeds = [b"game", game.game_id.to_le_bytes().as_ref()], bump = game.bump)]
+    pub game: Account<'info, Game>,
+    #[account(
+        mut,
+        seeds = [b"player", game.key().as_ref(), owner.key().as_ref()],
+        bump = player.bump,
+        has_one = owner @ GameError::Unauthorized,
+        constraint = player.game == game.key() @ GameError::BadParam
+    )]
+    pub player: Account<'info, Player>,
+    pub owner: Signer<'info>,
 }
 
 #[derive(Accounts)]
