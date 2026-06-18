@@ -44,9 +44,18 @@ jobs:
       - name: Sync program key into Anchor.toml / declare_id
         run: anchor keys sync || true
 
-      - name: Generate v3 lockfile (platform-tools Cargo can't read v4)
+      - name: Generate v3 lockfile + pin SBF-incompatible runtime crates
         run: |
           cargo generate-lockfile
+          echo "=== reverse-deps of the offending crypto crates (stable can parse now) ==="
+          for c in block-buffer digest crypto-common sha2; do
+            echo "----- who pulls $c -----"; cargo tree -i "$c" 2>&1 | head -20 || true
+          done
+          echo "=== pin RustCrypto runtime chain to last edition2021 releases ==="
+          for pin in block-buffer:0.10.4 digest:0.10.7 crypto-common:0.1.6 sha2:0.10.8 sha3:0.10.8 generic-array:0.14.7 cpufeatures:0.2.17; do
+            n="${pin%%:*}"; v="${pin##*:}"
+            cargo update -p "$n" --precise "$v" 2>/dev/null && echo "pinned $n -> $v" || echo "skip $n"
+          done
           sed -i 's/^version = 4$/version = 3/' Cargo.lock
           echo "lockfile header:"; head -3 Cargo.lock
 
