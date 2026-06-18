@@ -1,0 +1,59 @@
+name: devnet-build
+
+# Builds the program .so with the committed declare_id (NO keys sync) and uploads
+# it as an artifact, so it can be deployed to devnet from a local Solana CLI
+# (which only needs the binary + keypair, not the build toolchain).
+on:
+  workflow_dispatch:
+
+env:
+  ANCHOR_VERSION: "0.31.1"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system deps (libudev for hidapi in anchor-cli)
+        run: sudo apt-get update && sudo apt-get install -y pkg-config build-essential libudev-dev libusb-1.0-0-dev
+
+      - name: Install host Rust toolchain (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - name: Install Solana CLI (stable channel)
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+
+      - name: Cache anchor-cli binary
+        id: cache-anchor
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/anchor
+          key: anchor-cli-${{ env.ANCHOR_VERSION }}-${{ runner.os }}
+
+      - name: Install Anchor CLI
+        if: steps.cache-anchor.outputs.cache-hit != 'true'
+        run: cargo install --git https://github.com/coral-xyz/anchor --tag v${ANCHOR_VERSION} anchor-cli --force
+
+      # Build with the committed declare_id (deliberately NO `anchor keys sync`).
+      - name: Anchor build
+        run: anchor build
+
+      - name: Show program id baked into the binary
+        run: anchor keys list || true
+
+      - name: Upload program binary + IDL
+        uses: actions/upload-artifact@v4
+        with:
+          name: last-circle-program
+          path: |
+            target/deploy/last_circle.so
+            target/idl/last_circle.json
+          if-no-files-found: error
