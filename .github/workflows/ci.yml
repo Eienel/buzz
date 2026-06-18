@@ -1,0 +1,56 @@
+name: anchor-ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+env:
+  SOLANA_VERSION: "1.18.26"
+  ANCHOR_VERSION: "0.30.1"
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.79.0
+
+      - name: Cache cargo + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - name: Install Solana CLI
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/v${SOLANA_VERSION}/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+
+      - name: Verify Solana
+        run: solana --version
+
+      - name: Install Anchor CLI (avm)
+        run: |
+          cargo install --git https://github.com/coral-xyz/anchor avm --tag v${ANCHOR_VERSION} --force
+          avm install ${ANCHOR_VERSION}
+          avm use ${ANCHOR_VERSION}
+          anchor --version
+
+      - name: Sync program key into Anchor.toml / declare_id
+        run: anchor keys sync || true
+
+      - name: Anchor build
+        run: anchor build
+
+      - name: Node setup
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install JS deps
+        run: npm install
+
+      - name: Anchor test (spins a local validator)
+        run: anchor test --skip-build

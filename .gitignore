@@ -1,0 +1,15 @@
+# Rust / Anchor
+target/
+**/*.rs.bk
+test-ledger/
+.anchor/
+# Node
+node_modules/
+.yarn/
+dist/
+# Solana keys (never commit real keys)
+*.json.key
+id.json
+# OS
+.DS_Store
+Thumbs.db
