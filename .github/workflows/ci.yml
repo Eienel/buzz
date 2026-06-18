@@ -44,6 +44,12 @@ jobs:
       - name: Sync program key into Anchor.toml / declare_id
         run: anchor keys sync || true
 
+      - name: Generate v3 lockfile (platform-tools Cargo can't read v4)
+        run: |
+          cargo generate-lockfile
+          sed -i 's/^version = 4$/version = 3/' Cargo.lock
+          echo "lockfile header:"; head -3 Cargo.lock
+
       - name: Anchor build
         run: anchor build
 
