@@ -71,6 +71,12 @@ jobs:
             name="${pin%%:*}"; ver="${pin##*:}"
             cargo update -p "$name" --precise "$ver" 2>/dev/null && echo "pinned $name -> $ver" || echo "skip $name (not in tree / locked elsewhere)"
           done
+          echo "=================== REVERSE-DEP DIAGNOSTICS ==================="
+          for c in toml_datetime toml_edit crypto-common digest proc-macro-crate; do
+            echo "----- who requires $c ? -----"
+            cargo tree -i "$c" -e features 2>&1 | head -25 || echo "(cargo tree failed for $c)"
+          done
+          echo "============================================================="
 
       - name: Anchor build
         run: anchor build
