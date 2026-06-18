@@ -183,7 +183,7 @@ describe("last-circle — milestone 2: instance loop (commit-reveal move)", () =
       .rpc();
 
     // wait out the commit window (instance_seconds=10 -> commit 6s), then crank
-    await sleep(6500);
+    await sleep(9000);
     await program.methods
       .advanceToReveal()
       .accounts({ game: gamePda, cranker: authority.publicKey })
@@ -210,7 +210,7 @@ describe("last-circle — milestone 2: instance loop (commit-reveal move)", () =
   });
 
   it("selects and executes a death; 2 circles -> 1 leaves Settling", async () => {
-    await sleep(4200); // reveal window (4s) + buffer
+    await sleep(7000); // reveal window (4s) + generous margin for validator clock lag
     // select the dying circle (pass every alive circle)
     await program.methods
       .selectDeath()
@@ -299,9 +299,9 @@ describe("last-circle — milestone 3: death + refund (cash out)", () => {
 
   it("runs an instance to a death; eliminated player cashes out their refund", async () => {
     // no moves this instance — just crank through the phases to a death
-    await sleep(6500);
+    await sleep(9000);
     await program.methods.advanceToReveal().accounts({ game: gamePda, cranker: authority.publicKey }).rpc();
-    await sleep(4200);
+    await sleep(7000); // reveal window (4s) + generous margin for validator clock lag
     await program.methods
       .selectDeath()
       .accounts({ game: gamePda, cranker: authority.publicKey })
