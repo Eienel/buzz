@@ -48,8 +48,8 @@ jobs:
       - name: Anchor build (IDL)
         run: anchor build
 
-      - name: Rebuild program for sBPF v1 (deploy-compatible)
-        run: cargo build-sbf --arch v1
+      - name: Rebuild program for sBPF v0 (universally-supported loader version)
+        run: cargo build-sbf --arch v0
 
       - name: Show program id baked into the binary
         run: anchor keys list || true
