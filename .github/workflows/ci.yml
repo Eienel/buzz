@@ -15,11 +15,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
-        # 1.79 is the sweet spot for Anchor 0.30.1: new enough that --locked deps
-        # (idna) resolve, old enough to still compile anchor-cli's old `time` crate
-        # (Rust 1.80+ breaks it with E0282).
-        uses: dtolnay/rust-toolchain@1.79.0
+      # Modern host Rust: needed so host Cargo can PARSE/RESOLVE the dep tree,
+      # much of which has adopted edition2024. The actual on-chain program is
+      # compiled by Solana's own platform-tools toolchain (see Anchor build).
+      - name: Install host Rust toolchain (stable)
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Cache cargo + target
         uses: Swatinem/rust-cache@v2
@@ -34,49 +34,15 @@ jobs:
       - name: Verify Solana
         run: solana --version
 
-      - name: Install Anchor CLI (avm)
+      # Install anchor-cli directly (no avm, NO --locked) so transitive deps like
+      # `time` resolve to versions that compile on stable Rust.
+      - name: Install Anchor CLI
         run: |
-          cargo install --git https://github.com/coral-xyz/anchor avm --tag v${ANCHOR_VERSION} --locked --force
-          avm install ${ANCHOR_VERSION}
-          avm use ${ANCHOR_VERSION}
+          cargo install --git https://github.com/coral-xyz/anchor --tag v${ANCHOR_VERSION} anchor-cli --force
           anchor --version
 
       - name: Sync program key into Anchor.toml / declare_id
         run: anchor keys sync || true
-
-      - name: Pin edition2024-incompatible transitive deps
-        # The Solana 1.18 SBF toolchain (rust 1.75) can't parse manifests that
-        # adopted edition2024 (toml 0.9 / toml_parser, winnow 0.7, etc.). Generate
-        # a lockfile and pin those chains back to their last pre-edition2024 release.
-        run: |
-          cargo generate-lockfile
-          # Pin high-level crates to their last pre-edition2024 release; this
-          # cascades the whole sub-tree (e.g. sha2/digest -> crypto-common 0.1).
-          for pin in \
-            "toml:0.8.23" \
-            "toml_edit:0.22.22" \
-            "toml_datetime:0.6.11" \
-            "winnow:0.6.26" \
-            "cpufeatures:0.2.17" \
-            "crypto-common:0.1.6" \
-            "digest:0.10.7" \
-            "block-buffer:0.10.4" \
-            "generic-array:0.14.7" \
-            "sha2:0.10.8" \
-            "sha3:0.10.8" \
-            "hmac:0.12.1" \
-            "ahash:0.8.11" \
-            "zerocopy:0.7.35" \
-            "zerocopy-derive:0.7.35"; do
-            name="${pin%%:*}"; ver="${pin##*:}"
-            cargo update -p "$name" --precise "$ver" 2>/dev/null && echo "pinned $name -> $ver" || echo "skip $name (not in tree / locked elsewhere)"
-          done
-          echo "=================== REVERSE-DEP DIAGNOSTICS ==================="
-          for c in toml_datetime toml_edit crypto-common digest proc-macro-crate; do
-            echo "----- who requires $c ? -----"
-            cargo tree -i "$c" -e features 2>&1 | head -25 || echo "(cargo tree failed for $c)"
-          done
-          echo "============================================================="
 
       - name: Anchor build
         run: anchor build
