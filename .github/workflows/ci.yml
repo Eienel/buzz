@@ -38,12 +38,22 @@ jobs:
       - name: Verify Solana
         run: solana --version
 
+      # Cache the compiled anchor binary so we don't rebuild it (~8 min) every run.
+      - name: Cache anchor-cli binary
+        id: cache-anchor
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/anchor
+          key: anchor-cli-${{ env.ANCHOR_VERSION }}-${{ runner.os }}
+
       # Install anchor-cli directly (no avm, NO --locked) so transitive deps like
-      # `time` resolve to versions that compile on stable Rust.
+      # `time` resolve to versions that compile on stable Rust. Skipped on cache hit.
       - name: Install Anchor CLI
-        run: |
-          cargo install --git https://github.com/coral-xyz/anchor --tag v${ANCHOR_VERSION} anchor-cli --force
-          anchor --version
+        if: steps.cache-anchor.outputs.cache-hit != 'true'
+        run: cargo install --git https://github.com/coral-xyz/anchor --tag v${ANCHOR_VERSION} anchor-cli --force
+
+      - name: Verify Anchor
+        run: anchor --version
 
       - name: Create a Solana keypair (anchor test needs a wallet)
         run: |
