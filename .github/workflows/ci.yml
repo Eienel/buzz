@@ -44,6 +44,22 @@ jobs:
       - name: Sync program key into Anchor.toml / declare_id
         run: anchor keys sync || true
 
+      - name: Pin edition2024-incompatible transitive deps
+        # The Solana 1.18 SBF toolchain (rust 1.75) can't parse manifests that
+        # adopted edition2024 (toml 0.9 / toml_parser, winnow 0.7, etc.). Generate
+        # a lockfile and pin those chains back to their last pre-edition2024 release.
+        run: |
+          cargo generate-lockfile
+          for pin in \
+            "toml:0.8.23" \
+            "toml_edit:0.22.22" \
+            "toml_datetime:0.6.11" \
+            "winnow:0.6.26" \
+            "cpufeatures:0.2.17"; do
+            name="${pin%%:*}"; ver="${pin##*:}"
+            cargo update -p "$name" --precise "$ver" 2>/dev/null && echo "pinned $name -> $ver" || echo "skip $name (not in tree)"
+          done
+
       - name: Anchor build
         run: anchor build
 
