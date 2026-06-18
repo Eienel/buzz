@@ -43,8 +43,13 @@ jobs:
         run: cargo install --git https://github.com/coral-xyz/anchor --tag v${ANCHOR_VERSION} anchor-cli --force
 
       # Build with the committed declare_id (deliberately NO `anchor keys sync`).
-      - name: Anchor build
+      # IDL via anchor build, then rebuild the .so targeting sBPF v1 (the version
+      # devnet/mainnet loaders accept; the toolchain default is too new).
+      - name: Anchor build (IDL)
         run: anchor build
+
+      - name: Rebuild program for sBPF v1 (deploy-compatible)
+        run: cargo build-sbf --arch v1
 
       - name: Show program id baked into the binary
         run: anchor keys list || true
