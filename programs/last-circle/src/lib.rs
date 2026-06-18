@@ -14,6 +14,11 @@ declare_id!("Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS");
 
 /// Basis-points denominator.
 const BPS: u128 = 10_000;
+/// Fate-strike probability ε = 15% (a uniformly random circle dies).
+const FATE_STRIKE_BPS: u64 = 1_500;
+/// Refund floor/ceiling in bps (55% → 80%, rising with survival time).
+const REFUND_LO_BPS: u64 = 5_500;
+const REFUND_HI_BPS: u64 = 8_000;
 
 #[program]
 pub mod last_circle {
@@ -59,6 +64,7 @@ pub mod last_circle {
         g.phase = InstancePhase::Commit;
         g.phase_ends_at = 0;
         g.instance_seconds = ctx.accounts.config.instance_seconds;
+        g.doomed_circle = 0;
         g.circle_count = 0;
         g.player_count = 0;
         g.alive_circles = 0;
@@ -92,6 +98,7 @@ pub mod last_circle {
         circle.member_count = 1;
         circle.total_stake = net;
         circle.alive = true;
+        circle.refund_bps = 0;
         circle.bump = ctx.bumps.circle;
 
         init_player(&mut ctx.accounts.player, g.key(), ctx.accounts.owner.key(), net, circle_id, ctx.bumps.player);
@@ -204,18 +211,137 @@ pub mod last_circle {
         Ok(())
     }
 
-    /// Permissionless crank: end the reveal window and advance to the next
-    /// instance's commit phase. (Death/resolution lands in milestone 3.)
-    pub fn resolve_instance(ctx: Context<Crank>) -> Result<()> {
+    /// Permissionless crank: end the reveal window and SELECT the dying circle.
+    /// Pass every alive Circle as a remaining_account. With prob ε a uniformly
+    /// random circle dies (FATE STRIKE); otherwise the FEWEST-players circle
+    /// dies (tie → least stake → pseudo-random). Stores the doomed id; the
+    /// mutation happens in execute_death.
+    ///
+    /// NOTE: randomness here is a placeholder slot/clock hash — a later milestone
+    /// swaps in a real VRF before mainnet.
+    pub fn select_death<'info>(
+        ctx: Context<'_, '_, 'info, 'info, SelectDeath<'info>>,
+    ) -> Result<()> {
         let g = &mut ctx.accounts.game;
         require!(g.status == GameStatus::Running, GameError::WrongPhase);
         require!(g.phase == InstancePhase::Reveal, GameError::WrongPhase);
+        let clock = Clock::get()?;
+        require!(clock.unix_timestamp >= g.phase_ends_at, GameError::PhaseNotOver);
+
+        // Collect all alive circles from the remaining accounts.
+        let mut alive: Vec<(u8, u32, u64)> = Vec::with_capacity(g.alive_circles as usize);
+        for acc in ctx.remaining_accounts.iter() {
+            let c: Account<Circle> = Account::try_from(acc)?;
+            require!(c.game == g.key(), GameError::BadParam);
+            if c.alive {
+                alive.push((c.circle_id, c.member_count, c.total_stake));
+            }
+        }
+        // Caller must present EVERY alive circle, else the min could be gamed.
+        require!(alive.len() as u8 == g.alive_circles, GameError::IncompleteCircleSet);
+        require!(alive.len() >= 2, GameError::NotEnoughCircles);
+
+        // Pseudo-random seed (PLACEHOLDER — replace with VRF).
+        let seed = anchor_lang::solana_program::keccak::hashv(&[
+            &clock.slot.to_le_bytes(),
+            &clock.unix_timestamp.to_le_bytes(),
+            &g.instance.to_le_bytes(),
+            g.key().as_ref(),
+        ])
+        .0;
+        let r1 = u64::from_le_bytes(seed[0..8].try_into().unwrap());
+        let r2 = u64::from_le_bytes(seed[8..16].try_into().unwrap());
+
+        let doomed = if (r1 % 10_000) < FATE_STRIKE_BPS {
+            // FATE STRIKE: uniformly random alive circle.
+            alive[(r2 as usize) % alive.len()].0
+        } else {
+            // Skill/fog: fewest players, tie → least stake, tie → pseudo-random.
+            let min_members = alive.iter().map(|x| x.1).min().unwrap();
+            let mut cand: Vec<&(u8, u32, u64)> = alive.iter().filter(|x| x.1 == min_members).collect();
+            if cand.len() > 1 {
+                let min_stake = cand.iter().map(|x| x.2).min().unwrap();
+                cand.retain(|x| x.2 == min_stake);
+            }
+            cand[(r2 as usize) % cand.len()].0
+        };
+
+        g.doomed_circle = doomed;
+        g.phase = InstancePhase::Resolving;
+        Ok(())
+    }
+
+    /// Permissionless crank: kill the doomed circle, lock its refund rate, sweep
+    /// the haircut into the leftover pot, and either advance to the next instance
+    /// or move to Settling if only one circle remains.
+    pub fn execute_death(ctx: Context<ExecuteDeath>, circle_id: u8) -> Result<()> {
+        let g = &mut ctx.accounts.game;
+        let c = &mut ctx.accounts.circle;
+        require!(g.status == GameStatus::Running, GameError::WrongPhase);
+        require!(g.phase == InstancePhase::Resolving, GameError::WrongPhase);
+        require!(circle_id == g.doomed_circle, GameError::BadParam);
+        require!(c.circle_id == circle_id && c.alive, GameError::BadParam);
+
+        let r_bps = refund_bps(g.instance, g.num_circles);
+        c.alive = false;
+        c.refund_bps = r_bps;
+        g.alive_circles -= 1;
+
+        // Haircut (the un-refunded slice) feeds the leftover pot.
+        let haircut = (c.total_stake as u128 * (BPS - r_bps as u128) / BPS) as u64;
+        g.leftover_pot = g.leftover_pot.checked_add(haircut).ok_or(GameError::MathOverflow)?;
+
         let now = Clock::get()?.unix_timestamp;
-        require!(now >= g.phase_ends_at, GameError::PhaseNotOver);
-        // TODO(milestone 3): fog/fate death selection + refunds here.
-        g.instance += 1;
-        g.phase = InstancePhase::Commit;
-        g.phase_ends_at = now + g.commit_window();
+        if g.alive_circles == 1 {
+            g.status = GameStatus::Settling;
+        } else {
+            g.instance += 1;
+            g.phase = InstancePhase::Commit;
+            g.phase_ends_at = now + g.commit_window();
+        }
+        Ok(())
+    }
+
+    /// An eliminated player banks their refund (stake × refund_bps) from the
+    /// vault and leaves the game. Their circle must be dead.
+    pub fn cash_out(ctx: Context<CashOut>) -> Result<()> {
+        let g = &ctx.accounts.game;
+        let c = &ctx.accounts.circle;
+        let p = &mut ctx.accounts.player;
+        require!(!c.alive, GameError::CircleAlive);
+        require!(c.circle_id == p.current_circle, GameError::BadParam);
+        require!(p.status == PlayerStatus::Active, GameError::PlayerInactive);
+
+        let refund = (p.stake as u128 * c.refund_bps as u128 / BPS) as u64;
+        transfer_from_vault(
+            &ctx.accounts.vault,
+            &ctx.accounts.owner.to_account_info(),
+            &ctx.accounts.system_program,
+            g.key(),
+            g.vault_bump,
+            refund,
+        )?;
+        p.status = PlayerStatus::CashedOut;
+        p.stake = 0;
+        Ok(())
+    }
+
+    /// An eliminated player carries their refund forward into a surviving circle.
+    pub fn land(ctx: Context<Land>, target_circle: u8) -> Result<()> {
+        let p = &mut ctx.accounts.player;
+        let from = &ctx.accounts.from_circle;
+        let to = &mut ctx.accounts.to_circle;
+        require!(!from.alive, GameError::CircleAlive);
+        require!(from.circle_id == p.current_circle, GameError::BadParam);
+        require!(to.alive, GameError::CircleDead);
+        require!(to.circle_id == target_circle, GameError::BadParam);
+        require!(p.status == PlayerStatus::Active, GameError::PlayerInactive);
+
+        let new_stake = (p.stake as u128 * from.refund_bps as u128 / BPS) as u64;
+        p.stake = new_stake;
+        p.current_circle = target_circle;
+        to.member_count += 1;
+        to.total_stake = to.total_stake.checked_add(new_stake).ok_or(GameError::MathOverflow)?;
         Ok(())
     }
 }
@@ -256,6 +382,42 @@ fn record_deposit(game: &mut Account<Game>, stake: u64, net: u64) -> Result<()> 
     let rake = stake.checked_sub(net).ok_or(GameError::MathOverflow)?;
     game.fees_collected = game.fees_collected.checked_add(rake).ok_or(GameError::MathOverflow)?;
     game.total_deposited = game.total_deposited.checked_add(stake).ok_or(GameError::MathOverflow)?;
+    Ok(())
+}
+
+/// Deterministic survival-weighted refund rate (bps), 55% → 80% as t → T_MAX.
+/// T_MAX = num_circles (by the final death t ≈ num_circles − 1).
+fn refund_bps(instance: u16, num_circles: u8) -> u16 {
+    let t = instance as u64;
+    let tmax = (num_circles as u64).max(1);
+    let span = REFUND_HI_BPS - REFUND_LO_BPS;
+    (REFUND_LO_BPS + (t.min(tmax) * span) / tmax) as u16
+}
+
+/// Transfer `amount` lamports out of the program-owned vault PDA (signed).
+fn transfer_from_vault<'info>(
+    vault: &SystemAccount<'info>,
+    to: &AccountInfo<'info>,
+    system_program: &Program<'info, System>,
+    game_key: Pubkey,
+    vault_bump: u8,
+    amount: u64,
+) -> Result<()> {
+    if amount == 0 {
+        return Ok(());
+    }
+    let seeds: &[&[u8]] = &[b"vault", game_key.as_ref(), &[vault_bump]];
+    anchor_lang::system_program::transfer(
+        CpiContext::new_with_signer(
+            system_program.to_account_info(),
+            anchor_lang::system_program::Transfer {
+                from: vault.to_account_info(),
+                to: to.clone(),
+            },
+            &[seeds],
+        ),
+        amount,
+    )?;
     Ok(())
 }
 
@@ -300,6 +462,8 @@ pub struct Game {
     pub phase: InstancePhase,
     pub phase_ends_at: i64,
     pub instance_seconds: u32,
+    /// circle id selected to die this instance (valid only during Resolving).
+    pub doomed_circle: u8,
     pub circle_count: u8,
     pub alive_circles: u8,
     pub player_count: u32,
@@ -310,7 +474,7 @@ pub struct Game {
     pub bump: u8,
 }
 impl Game {
-    pub const SPACE: usize = 8 + 8 + 32 + 1 + 1 + 2 + 2 + 1 + 8 + 4 + 1 + 1 + 4 + 8 + 8 + 8 + 1 + 1;
+    pub const SPACE: usize = 8 + 8 + 32 + 1 + 1 + 2 + 2 + 1 + 8 + 4 + 1 + 1 + 1 + 4 + 8 + 8 + 8 + 1 + 1;
     /// Commit window = 60% of the instance, reveal = 40% (min 1s each).
     pub fn commit_window(&self) -> i64 {
         ((self.instance_seconds as i64) * 3 / 5).max(1)
@@ -328,10 +492,12 @@ pub struct Circle {
     pub member_count: u32,
     pub total_stake: u64,
     pub alive: bool,
+    /// refund rate (bps) locked in when this circle died; 0 while alive.
+    pub refund_bps: u16,
     pub bump: u8,
 }
 impl Circle {
-    pub const SPACE: usize = 8 + 32 + 1 + 32 + 4 + 8 + 1 + 1;
+    pub const SPACE: usize = 8 + 32 + 1 + 32 + 4 + 8 + 1 + 2 + 1;
 }
 
 #[account]
@@ -371,6 +537,8 @@ pub enum PlayerStatus {
 pub enum InstancePhase {
     Commit,
     Reveal,
+    /// death selected, awaiting execute_death.
+    Resolving,
 }
 
 // ---------------------------------------------------------------------------
@@ -537,6 +705,80 @@ pub struct RevealMove<'info> {
     pub owner: Signer<'info>,
 }
 
+/// All alive circles are passed via `remaining_accounts` (read-only).
+#[derive(Accounts)]
+pub struct SelectDeath<'info> {
+    #[account(mut, seeds = [b"game", game.game_id.to_le_bytes().as_ref()], bump = game.bump)]
+    pub game: Account<'info, Game>,
+    pub cranker: Signer<'info>,
+}
+
+#[derive(Accounts)]
+#[instruction(circle_id: u8)]
+pub struct ExecuteDeath<'info> {
+    #[account(mut, seeds = [b"game", game.game_id.to_le_bytes().as_ref()], bump = game.bump)]
+    pub game: Account<'info, Game>,
+    #[account(
+        mut,
+        seeds = [b"circle", game.key().as_ref(), &[circle_id]],
+        bump = circle.bump
+    )]
+    pub circle: Account<'info, Circle>,
+    pub cranker: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct CashOut<'info> {
+    #[account(seeds = [b"game", game.game_id.to_le_bytes().as_ref()], bump = game.bump)]
+    pub game: Account<'info, Game>,
+    #[account(mut, seeds = [b"vault", game.key().as_ref()], bump = game.vault_bump)]
+    pub vault: SystemAccount<'info>,
+    #[account(
+        seeds = [b"circle", game.key().as_ref(), &[circle.circle_id]],
+        bump = circle.bump
+    )]
+    pub circle: Account<'info, Circle>,
+    #[account(
+        mut,
+        seeds = [b"player", game.key().as_ref(), owner.key().as_ref()],
+        bump = player.bump,
+        has_one = owner @ GameError::Unauthorized,
+        constraint = player.game == game.key() @ GameError::BadParam
+    )]
+    pub player: Account<'info, Player>,
+    #[account(mut)]
+    pub owner: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(target_circle: u8)]
+pub struct Land<'info> {
+    #[account(seeds = [b"game", game.game_id.to_le_bytes().as_ref()], bump = game.bump)]
+    pub game: Account<'info, Game>,
+    #[account(
+        mut,
+        seeds = [b"player", game.key().as_ref(), owner.key().as_ref()],
+        bump = player.bump,
+        has_one = owner @ GameError::Unauthorized,
+        constraint = player.game == game.key() @ GameError::BadParam
+    )]
+    pub player: Account<'info, Player>,
+    #[account(
+        mut,
+        seeds = [b"circle", game.key().as_ref(), &[from_circle.circle_id]],
+        bump = from_circle.bump
+    )]
+    pub from_circle: Account<'info, Circle>,
+    #[account(
+        mut,
+        seeds = [b"circle", game.key().as_ref(), &[target_circle]],
+        bump = to_circle.bump
+    )]
+    pub to_circle: Account<'info, Circle>,
+    pub owner: Signer<'info>,
+}
+
 // ---------------------------------------------------------------------------
 // errors
 // ---------------------------------------------------------------------------
@@ -569,4 +811,8 @@ pub enum GameError {
     NothingCommitted,
     #[msg("Reveal target must differ from current circle")]
     NotAMove,
+    #[msg("Must pass every alive circle to select death")]
+    IncompleteCircleSet,
+    #[msg("Circle is still alive")]
+    CircleAlive,
 }
