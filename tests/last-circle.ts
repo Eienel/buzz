@@ -90,7 +90,7 @@ describe("last-circle — milestone 1: lobby + escrow", () => {
   });
 });
 
-import { Keypair, SystemProgram } from "@solana/web3.js";
+import { Keypair, SystemProgram, SYSVAR_SLOT_HASHES_PUBKEY } from "@solana/web3.js";
 import { keccak_256 } from "js-sha3";
 
 describe("last-circle — milestone 2: instance loop (commit-reveal move)", () => {
@@ -214,7 +214,7 @@ describe("last-circle — milestone 2: instance loop (commit-reveal move)", () =
     // select the dying circle (pass every alive circle)
     await program.methods
       .selectDeath()
-      .accounts({ game: gamePda, cranker: authority.publicKey })
+      .accounts({ game: gamePda, recentSlotHashes: SYSVAR_SLOT_HASHES_PUBKEY, cranker: authority.publicKey })
       .remainingAccounts([
         { pubkey: circlePda(0), isSigner: false, isWritable: false },
         { pubkey: circlePda(1), isSigner: false, isWritable: false },
@@ -313,7 +313,7 @@ describe("last-circle — milestone 3: death + refund (cash out)", () => {
     await sleep(7000); // reveal window (4s) + generous margin for validator clock lag
     await program.methods
       .selectDeath()
-      .accounts({ game: gamePda, cranker: authority.publicKey })
+      .accounts({ game: gamePda, recentSlotHashes: SYSVAR_SLOT_HASHES_PUBKEY, cranker: authority.publicKey })
       .remainingAccounts([0, 1, 2].map((i) => ({ pubkey: circlePda(i), isSigner: false, isWritable: false })))
       .rpc();
     const g1 = await program.account.game.fetch(gamePda);
@@ -424,7 +424,7 @@ describe("last-circle — milestone 4: prediction skill points", () => {
     await sleep(7000);
     await program.methods
       .selectDeath()
-      .accounts({ game: gamePda, cranker: authority.publicKey })
+      .accounts({ game: gamePda, recentSlotHashes: SYSVAR_SLOT_HASHES_PUBKEY, cranker: authority.publicKey })
       .remainingAccounts([0, 1, 2].map((i) => ({ pubkey: circlePda(i), isSigner: false, isWritable: false })))
       .rpc();
     const g1 = await program.account.game.fetch(gamePda);
@@ -519,7 +519,7 @@ describe("last-circle — milestone 5: settlement (pot distribution)", () => {
     await sleep(7000);
     await program.methods
       .selectDeath()
-      .accounts({ game: gamePda, cranker: authority.publicKey })
+      .accounts({ game: gamePda, recentSlotHashes: SYSVAR_SLOT_HASHES_PUBKEY, cranker: authority.publicKey })
       .remainingAccounts([0, 1].map((i) => ({ pubkey: circlePda(i), isSigner: false, isWritable: false })))
       .rpc();
     const gd = await program.account.game.fetch(gamePda);
@@ -615,7 +615,7 @@ describe("last-circle — milestone 6: treasury + insane round", () => {
     await sleep(9000);
     await program.methods.advanceToReveal().accounts({ game: G.gamePda, cranker: authority.publicKey }).rpc();
     await sleep(7000);
-    await program.methods.selectDeath().accounts({ game: G.gamePda, cranker: authority.publicKey })
+    await program.methods.selectDeath().accounts({ game: G.gamePda, recentSlotHashes: SYSVAR_SLOT_HASHES_PUBKEY, cranker: authority.publicKey })
       .remainingAccounts(owners.map((o) => ({ pubkey: G.circlePda(o.id), isSigner: false, isWritable: false }))).rpc();
     const doomed = (await program.account.game.fetch(G.gamePda)).doomedCircle;
     await program.methods.executeDeath(doomed).accounts({ game: G.gamePda, circle: G.circlePda(doomed), cranker: authority.publicKey }).rpc();
@@ -683,7 +683,7 @@ describe("last-circle — milestone 6: treasury + insane round", () => {
 
     // forced insane (prob = 100% in test config)
     await program.methods.rollInsane()
-      .accounts({ config: configPda, game: G.gamePda, vault: G.vaultPda, treasury: treasuryPda, treasuryVault: treasuryVaultPda, cranker: authority.publicKey, systemProgram: SystemProgram.programId })
+      .accounts({ config: configPda, game: G.gamePda, vault: G.vaultPda, treasury: treasuryPda, treasuryVault: treasuryVaultPda, recentSlotHashes: SYSVAR_SLOT_HASHES_PUBKEY, cranker: authority.publicKey, systemProgram: SystemProgram.programId })
       .rpc();
     const gAfter = await program.account.game.fetch(G.gamePda);
     assert.equal(gAfter.insane, true, "game flipped INSANE");

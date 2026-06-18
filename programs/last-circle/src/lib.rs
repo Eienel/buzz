@@ -259,10 +259,12 @@ pub mod last_circle {
         require!(alive.len() as u8 == g.alive_circles, GameError::IncompleteCircleSet);
         require!(alive.len() >= 2, GameError::NotEnoughCircles);
 
-        // Pseudo-random seed (PLACEHOLDER — replace with VRF).
+        // Entropy from the SlotHashes sysvar (see slothash_entropy seam), mixed
+        // with game/instance for domain separation.
+        let entropy = slothash_entropy(&ctx.accounts.recent_slot_hashes)?;
         let seed = anchor_lang::solana_program::keccak::hashv(&[
+            &entropy,
             &clock.slot.to_le_bytes(),
-            &clock.unix_timestamp.to_le_bytes(),
             &g.instance.to_le_bytes(),
             g.key().as_ref(),
         ])
@@ -592,9 +594,10 @@ pub mod last_circle {
         require!(!rolled, GameError::AlreadyClaimed);
 
         let clock = Clock::get()?;
+        let entropy = slothash_entropy(&ctx.accounts.recent_slot_hashes)?;
         let seed = anchor_lang::solana_program::keccak::hashv(&[
+            &entropy,
             &clock.slot.to_le_bytes(),
-            &clock.unix_timestamp.to_le_bytes(),
             gkey.as_ref(),
             b"insane",
         ])
@@ -670,6 +673,27 @@ fn refund_bps(instance: u16, num_circles: u8) -> u16 {
     let tmax = (num_circles as u64).max(1);
     let span = REFUND_HI_BPS - REFUND_LO_BPS;
     (REFUND_LO_BPS + (t.min(tmax) * span) / tmax) as u16
+}
+
+/// Randomness seam. Reads the most recent block hash from the SlotHashes
+/// sysvar account — unpredictable to players at commit time (unlike Clock).
+///
+/// NOTE: a block producer can still bias WHICH recent hash lands via tx timing.
+/// For production manipulation-resistance, replace this seam with a real VRF
+/// (Switchboard On-Demand): commit a randomness account pre-reveal and read its
+/// settled value here instead. The call sites mix in game/instance for domain
+/// separation, so only this function changes.
+fn slothash_entropy(slot_hashes_ai: &AccountInfo) -> Result<[u8; 32]> {
+    require!(
+        *slot_hashes_ai.key == anchor_lang::solana_program::sysvar::slot_hashes::id(),
+        GameError::BadParam
+    );
+    let data = slot_hashes_ai.try_borrow_data().map_err(|_| GameError::BadParam)?;
+    // layout: [num_entries: u64][ (slot: u64, hash: [u8;32]) ... ] most-recent first
+    require!(data.len() >= 48, GameError::BadParam);
+    let mut h = [0u8; 32];
+    h.copy_from_slice(&data[16..48]);
+    Ok(h)
 }
 
 /// Split the leftover pot into (creator_cut, luck_pool, skill_pool).
@@ -1081,6 +1105,8 @@ pub struct RevealMove<'info> {
 pub struct SelectDeath<'info> {
     #[account(mut, seeds = [b"game", game.game_id.to_le_bytes().as_ref()], bump = game.bump)]
     pub game: Account<'info, Game>,
+    /// CHECK: validated against the SlotHashes sysvar id in slothash_entropy.
+    pub recent_slot_hashes: UncheckedAccount<'info>,
     pub cranker: Signer<'info>,
 }
 
@@ -1231,6 +1257,8 @@ pub struct RollInsane<'info> {
     pub treasury: Account<'info, Treasury>,
     #[account(mut, seeds = [b"treasury_vault"], bump = treasury.vault_bump)]
     pub treasury_vault: SystemAccount<'info>,
+    /// CHECK: validated against the SlotHashes sysvar id in slothash_entropy.
+    pub recent_slot_hashes: UncheckedAccount<'info>,
     pub cranker: Signer<'info>,
     pub system_program: Program<'info, System>,
 }
