@@ -14,6 +14,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install system deps (libudev for hidapi in anchor-cli)
+        run: sudo apt-get update && sudo apt-get install -y pkg-config build-essential libudev-dev libusb-1.0-0-dev
+
       # Modern host Rust: needed so host Cargo can PARSE/RESOLVE the dep tree,
       # much of which has adopted edition2024. The actual on-chain program is
       # compiled by Solana's own platform-tools toolchain (see Anchor build).
