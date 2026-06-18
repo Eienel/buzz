@@ -33,7 +33,7 @@ describe("last-circle — milestone 1: lobby + escrow", () => {
   it("initializes config (idempotent-safe)", async () => {
     try {
       await program.methods
-        .initializeConfig(FEE_BPS, HOUSE_CUT_BPS, MIN_STAKE, MAX_STAKE, 10)
+        .initializeConfig(FEE_BPS, HOUSE_CUT_BPS, MIN_STAKE, MAX_STAKE, 10, 10000)
         .accounts({ config: configPda, authority: authority.publicKey })
         .rpc();
     } catch (_) {
@@ -578,5 +578,116 @@ describe("last-circle — milestone 5: settlement (pot distribution)", () => {
       .signers(kpOf(skillOwner))
       .rpc();
     assert.ok((await provider.connection.getBalance(skillOwner)) > before, "skill pool paid to correct predictor");
+  });
+});
+
+describe("last-circle — milestone 6: treasury + insane round", () => {
+  const provider = anchor.AnchorProvider.env();
+  anchor.setProvider(provider);
+  const program = anchor.workspace.LastCircle as Program<LastCircle>;
+  const authority = provider.wallet as anchor.Wallet;
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  const [configPda] = PublicKey.findProgramAddressSync([Buffer.from("config")], program.programId);
+  const [treasuryPda] = PublicKey.findProgramAddressSync([Buffer.from("treasury")], program.programId);
+  const [treasuryVaultPda] = PublicKey.findProgramAddressSync([Buffer.from("treasury_vault")], program.programId);
+
+  // per-game PDA helpers
+  const g = (gid: anchor.BN) => {
+    const [gamePda] = PublicKey.findProgramAddressSync([Buffer.from("game"), gid.toArrayLike(Buffer, "le", 8)], program.programId);
+    const [vaultPda] = PublicKey.findProgramAddressSync([Buffer.from("vault"), gamePda.toBuffer()], program.programId);
+    const circlePda = (id: number) => PublicKey.findProgramAddressSync([Buffer.from("circle"), gamePda.toBuffer(), Buffer.from([id])], program.programId)[0];
+    const playerPda = (o: PublicKey) => PublicKey.findProgramAddressSync([Buffer.from("player"), gamePda.toBuffer(), o.toBuffer()], program.programId)[0];
+    return { gamePda, vaultPda, circlePda, playerPda };
+  };
+
+  // run a fresh game (with `owners` per circle id) to its first death, returning the doomed id
+  const runToFirstDeath = async (gid: anchor.BN, owners: { id: number; kp: PublicKey; signers: any[] }[]) => {
+    const G = g(gid);
+    await program.methods.createGame(gid, 6).accounts({ config: configPda, game: G.gamePda, vault: G.vaultPda, authority: authority.publicKey }).rpc();
+    const stake = new anchor.BN(LAMPORTS_PER_SOL);
+    for (const o of owners) {
+      await program.methods.createCircle(o.id, stake)
+        .accounts({ config: configPda, game: G.gamePda, vault: G.vaultPda, circle: G.circlePda(o.id), player: G.playerPda(o.kp), owner: o.kp })
+        .signers(o.signers).rpc();
+    }
+    await program.methods.startGame().accounts({ game: G.gamePda, authority: authority.publicKey }).rpc();
+    await sleep(9000);
+    await program.methods.advanceToReveal().accounts({ game: G.gamePda, cranker: authority.publicKey }).rpc();
+    await sleep(7000);
+    await program.methods.selectDeath().accounts({ game: G.gamePda, cranker: authority.publicKey })
+      .remainingAccounts(owners.map((o) => ({ pubkey: G.circlePda(o.id), isSigner: false, isWritable: false }))).rpc();
+    const doomed = (await program.account.game.fetch(G.gamePda)).doomedCircle;
+    await program.methods.executeDeath(doomed).accounts({ game: G.gamePda, circle: G.circlePda(doomed), cranker: authority.publicKey }).rpc();
+    await sleep(7000);
+    await program.methods.advanceInstance().accounts({ game: G.gamePda, cranker: authority.publicKey }).rpc();
+    return { G, doomed };
+  };
+
+  it("inits treasury, collects fees from a finished game, withdraws house profit", async () => {
+    try {
+      await program.methods.initTreasury()
+        .accounts({ treasury: treasuryPda, treasuryVault: treasuryVaultPda, authority: authority.publicKey }).rpc();
+    } catch (_) {}
+
+    const pA = Keypair.generate();
+    const sig = await provider.connection.requestAirdrop(pA.publicKey, 2 * LAMPORTS_PER_SOL);
+    await provider.connection.confirmTransaction(sig);
+
+    // G1: 2 circles -> 1 death -> Settling
+    const gid1 = new anchor.BN(Date.now() + 100);
+    const { G } = await runToFirstDeath(gid1, [
+      { id: 0, kp: authority.publicKey, signers: [] },
+      { id: 1, kp: pA.publicKey, signers: [pA] },
+    ]);
+    assert.deepEqual((await program.account.game.fetch(G.gamePda)).status, { settling: {} });
+
+    const tBefore = await program.account.treasury.fetch(treasuryPda);
+    await program.methods.collectFees()
+      .accounts({ config: configPda, game: G.gamePda, vault: G.vaultPda, treasury: treasuryPda, treasuryVault: treasuryVaultPda, cranker: authority.publicKey, systemProgram: SystemProgram.programId })
+      .rpc();
+    const tAfter = await program.account.treasury.fetch(treasuryPda);
+    assert.ok(tAfter.houseBalance.toNumber() > tBefore.houseBalance.toNumber(), "house profit accrued");
+    assert.ok(tAfter.jackpotPool.toNumber() > tBefore.jackpotPool.toNumber(), "jackpot pool grew");
+
+    // withdraw all house profit
+    const houseBal = tAfter.houseBalance;
+    await program.methods.withdrawHouse(houseBal)
+      .accounts({ treasury: treasuryPda, treasuryVault: treasuryVaultPda, authority: authority.publicKey, systemProgram: SystemProgram.programId })
+      .rpc();
+    const tFinal = await program.account.treasury.fetch(treasuryPda);
+    assert.equal(tFinal.houseBalance.toNumber(), 0, "house balance withdrawn");
+    assert.ok(tFinal.jackpotPool.toNumber() > 0, "jackpot pool retained for insane rounds");
+  });
+
+  it("rolls an INSANE round; the jackpot pool injects into the live pot", async () => {
+    const jackpot = (await program.account.treasury.fetch(treasuryPda)).jackpotPool.toNumber();
+    assert.ok(jackpot > 0, "jackpot funded by the previous game");
+
+    const ps = [Keypair.generate(), Keypair.generate()];
+    for (const kp of ps) {
+      const sig = await provider.connection.requestAirdrop(kp.publicKey, 2 * LAMPORTS_PER_SOL);
+      await provider.connection.confirmTransaction(sig);
+    }
+    // G2: 3 circles -> 1 death -> instance 2 (>= lock), still Running
+    const gid2 = new anchor.BN(Date.now() + 101);
+    const { G } = await runToFirstDeath(gid2, [
+      { id: 0, kp: authority.publicKey, signers: [] },
+      { id: 1, kp: ps[0].publicKey, signers: [ps[0]] },
+      { id: 2, kp: ps[1].publicKey, signers: [ps[1]] },
+    ]);
+    const gMid = await program.account.game.fetch(G.gamePda);
+    assert.equal(gMid.instance, 2, "past the 50% lock");
+    assert.deepEqual(gMid.status, { running: {} });
+    const leftoverBefore = gMid.leftoverPot.toNumber();
+
+    // forced insane (prob = 100% in test config)
+    await program.methods.rollInsane()
+      .accounts({ config: configPda, game: G.gamePda, vault: G.vaultPda, treasury: treasuryPda, treasuryVault: treasuryVaultPda, cranker: authority.publicKey, systemProgram: SystemProgram.programId })
+      .rpc();
+    const gAfter = await program.account.game.fetch(G.gamePda);
+    assert.equal(gAfter.insane, true, "game flipped INSANE");
+    assert.equal(gAfter.leftoverPot.toNumber(), leftoverBefore + jackpot, "jackpot injected into the pot");
+    assert.equal((await program.account.treasury.fetch(treasuryPda)).jackpotPool.toNumber(), 0, "jackpot pool emptied");
   });
 });

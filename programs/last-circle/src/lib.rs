@@ -36,9 +36,11 @@ pub mod last_circle {
         min_stake: u64,
         max_stake: u64,
         instance_seconds: u32,
+        insane_prob_bps: u16,
     ) -> Result<()> {
         require!(fee_bps <= 2_000, GameError::BadParam); // cap rake at 20%
         require!(house_cut_bps <= 10_000, GameError::BadParam);
+        require!(insane_prob_bps <= 10_000, GameError::BadParam);
         require!(min_stake > 0 && max_stake >= min_stake, GameError::BadParam);
         require!(instance_seconds > 0, GameError::BadParam);
 
@@ -49,6 +51,7 @@ pub mod last_circle {
         c.min_stake = min_stake;
         c.max_stake = max_stake;
         c.instance_seconds = instance_seconds;
+        c.insane_prob_bps = insane_prob_bps;
         c.bump = ctx.bumps.config;
         Ok(())
     }
@@ -77,6 +80,8 @@ pub mod last_circle {
         g.total_deposited = 0;
         g.total_points = 0;
         g.creator_cut_paid = false;
+        g.insane_rolled = false;
+        g.insane = false;
         g.vault_bump = ctx.bumps.vault;
         g.bump = ctx.bumps.game;
         Ok(())
@@ -505,6 +510,111 @@ pub mod last_circle {
             share,
         )
     }
+
+    // ----- Treasury: house revenue + insane-round jackpot -------------------
+
+    /// One-time: create the cross-game treasury.
+    pub fn init_treasury(ctx: Context<InitTreasury>) -> Result<()> {
+        let t = &mut ctx.accounts.treasury;
+        t.authority = ctx.accounts.authority.key();
+        t.house_balance = 0;
+        t.jackpot_pool = 0;
+        t.vault_bump = ctx.bumps.treasury_vault;
+        t.bump = ctx.bumps.treasury;
+        Ok(())
+    }
+
+    /// Sweep a finished game's collected rake into the treasury, split into
+    /// house profit (house_cut) and the jackpot pool (the rest).
+    pub fn collect_fees(ctx: Context<CollectFees>) -> Result<()> {
+        let (status, fees, gkey, gvbump) = {
+            let g = &ctx.accounts.game;
+            (g.status, g.fees_collected, g.key(), g.vault_bump)
+        };
+        require!(status == GameStatus::Settling, GameError::WrongPhase);
+        require!(fees > 0, GameError::NothingToClaim);
+
+        let house = (fees as u128 * ctx.accounts.config.house_cut_bps as u128 / BPS) as u64;
+        let jackpot = fees - house;
+
+        transfer_from_vault(
+            &ctx.accounts.vault,
+            &ctx.accounts.treasury_vault.to_account_info(),
+            &ctx.accounts.system_program,
+            gkey,
+            gvbump,
+            fees,
+        )?;
+        let t = &mut ctx.accounts.treasury;
+        t.house_balance = t.house_balance.checked_add(house).ok_or(GameError::MathOverflow)?;
+        t.jackpot_pool = t.jackpot_pool.checked_add(jackpot).ok_or(GameError::MathOverflow)?;
+        ctx.accounts.game.fees_collected = 0;
+        Ok(())
+    }
+
+    /// Treasury authority withdraws accumulated house profit.
+    pub fn withdraw_house(ctx: Context<WithdrawHouse>, amount: u64) -> Result<()> {
+        let vbump = {
+            let t = &ctx.accounts.treasury;
+            require!(t.authority == ctx.accounts.authority.key(), GameError::Unauthorized);
+            require!(amount <= t.house_balance, GameError::NothingToClaim);
+            t.vault_bump
+        };
+        ctx.accounts.treasury.house_balance -= amount;
+        transfer_from_treasury(
+            &ctx.accounts.treasury_vault,
+            &ctx.accounts.authority.to_account_info(),
+            &ctx.accounts.system_program,
+            vbump,
+            amount,
+        )
+    }
+
+    /// Post-lock crank: roll for an INSANE round. On a hit, the whole jackpot
+    /// pool is injected into this game's leftover pot (and the pool resets).
+    /// Revealed after the 50% lock so it can't be targeted at deposit time.
+    ///
+    /// NOTE: placeholder randomness (slot/clock hash) — swap in VRF before mainnet.
+    pub fn roll_insane(ctx: Context<RollInsane>) -> Result<()> {
+        let (status, instance, lock, rolled, gkey, gvbump) = {
+            let g = &ctx.accounts.game;
+            (g.status, g.instance, g.lock_instance, g.insane_rolled, g.key(), g.vault_bump)
+        };
+        require!(status == GameStatus::Running, GameError::WrongPhase);
+        require!(instance >= lock, GameError::TooEarly);
+        require!(!rolled, GameError::AlreadyClaimed);
+
+        let clock = Clock::get()?;
+        let seed = anchor_lang::solana_program::keccak::hashv(&[
+            &clock.slot.to_le_bytes(),
+            &clock.unix_timestamp.to_le_bytes(),
+            gkey.as_ref(),
+            b"insane",
+        ])
+        .0;
+        let roll = (u64::from_le_bytes(seed[0..8].try_into().unwrap()) % 10_000) as u16;
+        let hit = roll < ctx.accounts.config.insane_prob_bps;
+
+        ctx.accounts.game.insane_rolled = true;
+        if hit {
+            let jackpot = ctx.accounts.treasury.jackpot_pool;
+            if jackpot > 0 {
+                transfer_from_treasury(
+                    &ctx.accounts.treasury_vault,
+                    &ctx.accounts.vault.to_account_info(),
+                    &ctx.accounts.system_program,
+                    ctx.accounts.treasury.vault_bump,
+                    jackpot,
+                )?;
+                ctx.accounts.treasury.jackpot_pool = 0;
+                let g = &mut ctx.accounts.game;
+                g.leftover_pot = g.leftover_pot.checked_add(jackpot).ok_or(GameError::MathOverflow)?;
+            }
+            ctx.accounts.game.insane = true;
+        }
+        let _ = gvbump;
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -570,6 +680,32 @@ fn pot_split(leftover: u64, total_points: u64) -> (u64, u64, u64) {
     (creator_cut, luck_pool, skill_pool)
 }
 
+/// Transfer `amount` lamports out of the treasury vault PDA (signed).
+fn transfer_from_treasury<'info>(
+    treasury_vault: &SystemAccount<'info>,
+    to: &AccountInfo<'info>,
+    system_program: &Program<'info, System>,
+    vault_bump: u8,
+    amount: u64,
+) -> Result<()> {
+    if amount == 0 {
+        return Ok(());
+    }
+    let seeds: &[&[u8]] = &[b"treasury_vault", &[vault_bump]];
+    anchor_lang::system_program::transfer(
+        CpiContext::new_with_signer(
+            system_program.to_account_info(),
+            anchor_lang::system_program::Transfer {
+                from: treasury_vault.to_account_info(),
+                to: to.clone(),
+            },
+            &[seeds],
+        ),
+        amount,
+    )?;
+    Ok(())
+}
+
 /// Transfer `amount` lamports out of the program-owned vault PDA (signed).
 fn transfer_from_vault<'info>(
     vault: &SystemAccount<'info>,
@@ -624,10 +760,26 @@ pub struct GameConfig {
     pub min_stake: u64,
     pub max_stake: u64,
     pub instance_seconds: u32,
+    /// probability (bps) that a game flips INSANE at the post-lock roll.
+    pub insane_prob_bps: u16,
     pub bump: u8,
 }
 impl GameConfig {
-    pub const SPACE: usize = 8 + 32 + 2 + 2 + 8 + 8 + 4 + 1;
+    pub const SPACE: usize = 8 + 32 + 2 + 2 + 8 + 8 + 4 + 2 + 1;
+}
+
+/// Cross-game treasury: accumulates house profit (withdrawable) and the jackpot
+/// pool that feeds insane rounds. Lamports live in a separate treasury vault PDA.
+#[account]
+pub struct Treasury {
+    pub authority: Pubkey,
+    pub house_balance: u64,
+    pub jackpot_pool: u64,
+    pub vault_bump: u8,
+    pub bump: u8,
+}
+impl Treasury {
+    pub const SPACE: usize = 8 + 32 + 8 + 8 + 1 + 1;
 }
 
 #[account]
@@ -653,12 +805,15 @@ pub struct Game {
     pub total_points: u64,
     /// set once the winning circle's creator has claimed κ.
     pub creator_cut_paid: bool,
+    /// whether the post-lock insane roll has happened, and its outcome.
+    pub insane_rolled: bool,
+    pub insane: bool,
     pub vault_bump: u8,
     pub bump: u8,
 }
 impl Game {
     pub const SPACE: usize =
-        8 + 8 + 32 + 1 + 1 + 2 + 2 + 1 + 8 + 4 + 1 + 1 + 1 + 4 + 8 + 8 + 8 + 8 + 1 + 1 + 1;
+        8 + 8 + 32 + 1 + 1 + 2 + 2 + 1 + 8 + 4 + 1 + 1 + 1 + 4 + 8 + 8 + 8 + 8 + 1 + 1 + 1 + 1 + 1;
     /// Commit window = 60% of the instance, reveal = 40% (min 1s each).
     pub fn commit_window(&self) -> i64 {
         ((self.instance_seconds as i64) * 3 / 5).max(1)
@@ -1020,6 +1175,60 @@ pub struct ClaimSkill<'info> {
 }
 
 #[derive(Accounts)]
+pub struct InitTreasury<'info> {
+    #[account(init, payer = authority, space = Treasury::SPACE, seeds = [b"treasury"], bump)]
+    pub treasury: Account<'info, Treasury>,
+    #[account(seeds = [b"treasury_vault"], bump)]
+    pub treasury_vault: SystemAccount<'info>,
+    #[account(mut)]
+    pub authority: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct CollectFees<'info> {
+    #[account(seeds = [b"config"], bump = config.bump)]
+    pub config: Account<'info, GameConfig>,
+    #[account(mut, seeds = [b"game", game.game_id.to_le_bytes().as_ref()], bump = game.bump)]
+    pub game: Account<'info, Game>,
+    #[account(mut, seeds = [b"vault", game.key().as_ref()], bump = game.vault_bump)]
+    pub vault: SystemAccount<'info>,
+    #[account(mut, seeds = [b"treasury"], bump = treasury.bump)]
+    pub treasury: Account<'info, Treasury>,
+    #[account(mut, seeds = [b"treasury_vault"], bump = treasury.vault_bump)]
+    pub treasury_vault: SystemAccount<'info>,
+    pub cranker: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct WithdrawHouse<'info> {
+    #[account(mut, seeds = [b"treasury"], bump = treasury.bump)]
+    pub treasury: Account<'info, Treasury>,
+    #[account(mut, seeds = [b"treasury_vault"], bump = treasury.vault_bump)]
+    pub treasury_vault: SystemAccount<'info>,
+    #[account(mut)]
+    pub authority: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct RollInsane<'info> {
+    #[account(seeds = [b"config"], bump = config.bump)]
+    pub config: Account<'info, GameConfig>,
+    #[account(mut, seeds = [b"game", game.game_id.to_le_bytes().as_ref()], bump = game.bump)]
+    pub game: Account<'info, Game>,
+    #[account(mut, seeds = [b"vault", game.key().as_ref()], bump = game.vault_bump)]
+    pub vault: SystemAccount<'info>,
+    #[account(mut, seeds = [b"treasury"], bump = treasury.bump)]
+    pub treasury: Account<'info, Treasury>,
+    #[account(mut, seeds = [b"treasury_vault"], bump = treasury.vault_bump)]
+    pub treasury_vault: SystemAccount<'info>,
+    pub cranker: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
 #[instruction(target_circle: u8)]
 pub struct Land<'info> {
     #[account(seeds = [b"game", game.game_id.to_le_bytes().as_ref()], bump = game.bump)]
@@ -1089,4 +1298,6 @@ pub enum GameError {
     NotInWinningCircle,
     #[msg("Nothing to claim")]
     NothingToClaim,
+    #[msg("Too early: action only allowed after the 50% lock")]
+    TooEarly,
 }
