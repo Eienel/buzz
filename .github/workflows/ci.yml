@@ -45,6 +45,11 @@ jobs:
           cargo install --git https://github.com/coral-xyz/anchor --tag v${ANCHOR_VERSION} anchor-cli --force
           anchor --version
 
+      - name: Create a Solana keypair (anchor test needs a wallet)
+        run: |
+          solana-keygen new --no-bip39-passphrase --force -o "$HOME/.config/solana/id.json"
+          solana config set --keypair "$HOME/.config/solana/id.json"
+
       - name: Sync program key into Anchor.toml / declare_id
         run: anchor keys sync || true
 
