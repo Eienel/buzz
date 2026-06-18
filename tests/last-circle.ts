@@ -445,3 +445,138 @@ describe("last-circle — milestone 4: prediction skill points", () => {
     assert.equal(p.points, expectedPoints, `points correct for doomed=${doomed}, predicted=${predicted}`);
   });
 });
+
+describe("last-circle — milestone 5: settlement (pot distribution)", () => {
+  const provider = anchor.AnchorProvider.env();
+  anchor.setProvider(provider);
+  const program = anchor.workspace.LastCircle as Program<LastCircle>;
+  const authority = provider.wallet as anchor.Wallet;
+
+  const [configPda] = PublicKey.findProgramAddressSync([Buffer.from("config")], program.programId);
+  const gameId = new anchor.BN(Date.now() + 4);
+  const [gamePda] = PublicKey.findProgramAddressSync(
+    [Buffer.from("game"), gameId.toArrayLike(Buffer, "le", 8)],
+    program.programId
+  );
+  const [vaultPda] = PublicKey.findProgramAddressSync([Buffer.from("vault"), gamePda.toBuffer()], program.programId);
+  const circlePda = (id: number) =>
+    PublicKey.findProgramAddressSync([Buffer.from("circle"), gamePda.toBuffer(), Buffer.from([id])], program.programId)[0];
+  const playerPda = (owner: PublicKey) =>
+    PublicKey.findProgramAddressSync([Buffer.from("player"), gamePda.toBuffer(), owner.toBuffer()], program.programId)[0];
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  const p1 = Keypair.generate();
+  const kpOf = (owner: PublicKey) => (owner.equals(authority.publicKey) ? [] : [p1]);
+
+  const predHash = (predicted: number, nonce: anchor.BN, owner: PublicKey) =>
+    Buffer.from(
+      keccak_256.arrayBuffer(
+        Buffer.concat([
+          Buffer.from([predicted]),
+          nonce.toArrayLike(Buffer, "le", 8),
+          owner.toBuffer(),
+          gamePda.toBuffer(),
+          Buffer.from(new Uint16Array([1]).buffer),
+        ])
+      )
+    );
+
+  it("runs a 2-circle game to Settling and distributes the pot", async () => {
+    const sig = await provider.connection.requestAirdrop(p1.publicKey, 2 * LAMPORTS_PER_SOL);
+    await provider.connection.confirmTransaction(sig);
+
+    await program.methods
+      .createGame(gameId, 6)
+      .accounts({ config: configPda, game: gamePda, vault: vaultPda, authority: authority.publicKey })
+      .rpc();
+    const stake = new anchor.BN(LAMPORTS_PER_SOL);
+    await program.methods
+      .createCircle(0, stake)
+      .accounts({ config: configPda, game: gamePda, vault: vaultPda, circle: circlePda(0), player: playerPda(authority.publicKey), owner: authority.publicKey })
+      .rpc();
+    await program.methods
+      .createCircle(1, stake)
+      .accounts({ config: configPda, game: gamePda, vault: vaultPda, circle: circlePda(1), player: playerPda(p1.publicKey), owner: p1.publicKey })
+      .signers([p1])
+      .rpc();
+    await program.methods.startGame().accounts({ game: gamePda, authority: authority.publicKey }).rpc();
+
+    // both predict opposite circles -> exactly one is correct
+    const nonceA = new anchor.BN(111);
+    const nonceB = new anchor.BN(222);
+    await program.methods
+      .commitPrediction(Array.from(predHash(0, nonceA, authority.publicKey)))
+      .accounts({ game: gamePda, player: playerPda(authority.publicKey), owner: authority.publicKey })
+      .rpc();
+    await program.methods
+      .commitPrediction(Array.from(predHash(1, nonceB, p1.publicKey)))
+      .accounts({ game: gamePda, player: playerPda(p1.publicKey), owner: p1.publicKey })
+      .signers([p1])
+      .rpc();
+
+    await sleep(9000);
+    await program.methods.advanceToReveal().accounts({ game: gamePda, cranker: authority.publicKey }).rpc();
+    await sleep(7000);
+    await program.methods
+      .selectDeath()
+      .accounts({ game: gamePda, cranker: authority.publicKey })
+      .remainingAccounts([0, 1].map((i) => ({ pubkey: circlePda(i), isSigner: false, isWritable: false })))
+      .rpc();
+    const gd = await program.account.game.fetch(gamePda);
+    const doomed = gd.doomedCircle;
+    await program.methods
+      .executeDeath(doomed)
+      .accounts({ game: gamePda, circle: circlePda(doomed), cranker: authority.publicKey })
+      .rpc();
+
+    // reveal both predictions (one scores a point)
+    await program.methods
+      .revealPrediction(0, nonceA)
+      .accounts({ game: gamePda, player: playerPda(authority.publicKey), owner: authority.publicKey })
+      .rpc();
+    await program.methods
+      .revealPrediction(1, nonceB)
+      .accounts({ game: gamePda, player: playerPda(p1.publicKey), owner: p1.publicKey })
+      .signers([p1])
+      .rpc();
+
+    // close scoring -> Settling (one circle left)
+    await sleep(7000);
+    await program.methods.advanceInstance().accounts({ game: gamePda, cranker: authority.publicKey }).rpc();
+    const gs = await program.account.game.fetch(gamePda);
+    assert.deepEqual(gs.status, { settling: {} });
+    assert.equal(gs.totalPoints.toNumber(), 1, "exactly one correct prediction");
+
+    const winner = doomed === 0 ? 1 : 0;
+    const winnerOwner = winner === 0 ? authority.publicKey : p1.publicKey;
+    const skillOwner = doomed === 0 ? authority.publicKey : p1.publicKey; // predicted the death
+
+    // creator cut
+    let before = await provider.connection.getBalance(winnerOwner);
+    await program.methods
+      .claimCreatorCut()
+      .accounts({ game: gamePda, vault: vaultPda, winningCircle: circlePda(winner), owner: winnerOwner, systemProgram: SystemProgram.programId })
+      .signers(kpOf(winnerOwner))
+      .rpc();
+    assert.ok((await provider.connection.getBalance(winnerOwner)) > before, "creator received κ cut");
+
+    // winnings (stake-back + luck pool)
+    before = await provider.connection.getBalance(winnerOwner);
+    await program.methods
+      .claimWinnings()
+      .accounts({ game: gamePda, vault: vaultPda, winningCircle: circlePda(winner), player: playerPda(winnerOwner), owner: winnerOwner, systemProgram: SystemProgram.programId })
+      .signers(kpOf(winnerOwner))
+      .rpc();
+    const afterWin = await provider.connection.getBalance(winnerOwner);
+    assert.ok(afterWin - before > 0.9 * LAMPORTS_PER_SOL, "survivor got stake-back + luck share");
+
+    // skill pool (claimed by the correct predictor)
+    before = await provider.connection.getBalance(skillOwner);
+    await program.methods
+      .claimSkill()
+      .accounts({ game: gamePda, vault: vaultPda, player: playerPda(skillOwner), owner: skillOwner, systemProgram: SystemProgram.programId })
+      .signers(kpOf(skillOwner))
+      .rpc();
+    assert.ok((await provider.connection.getBalance(skillOwner)) > before, "skill pool paid to correct predictor");
+  });
+});

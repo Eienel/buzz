@@ -19,6 +19,10 @@ const FATE_STRIKE_BPS: u64 = 1_500;
 /// Refund floor/ceiling in bps (55% → 80%, rising with survival time).
 const REFUND_LO_BPS: u64 = 5_500;
 const REFUND_HI_BPS: u64 = 8_000;
+/// Endgame split: creator cut κ = 15% of the leftover pot.
+const KAPPA_BPS: u128 = 1_500;
+/// Of the remaining pot, σ = 50% forms the skill pool, the rest the luck pool.
+const SIGMA_BPS: u128 = 5_000;
 
 #[program]
 pub mod last_circle {
@@ -71,6 +75,8 @@ pub mod last_circle {
         g.leftover_pot = 0;
         g.fees_collected = 0;
         g.total_deposited = 0;
+        g.total_points = 0;
+        g.creator_cut_paid = false;
         g.vault_bump = ctx.bumps.vault;
         g.bump = ctx.bumps.game;
         Ok(())
@@ -315,26 +321,34 @@ pub mod last_circle {
     /// Reveal a prediction during the Scoring window; a correct call (matching the
     /// circle that died this instance) earns +1 skill point.
     pub fn reveal_prediction(ctx: Context<RevealPrediction>, predicted_circle: u8, nonce: u64) -> Result<()> {
-        let g = &ctx.accounts.game;
-        require!(g.status == GameStatus::Running, GameError::WrongPhase);
-        require!(g.phase == InstancePhase::Scoring, GameError::WrongPhase);
-        require!(Clock::get()?.unix_timestamp < g.phase_ends_at, GameError::PhaseEnded);
-        let p = &mut ctx.accounts.player;
-        require!(p.prediction_instance == g.instance, GameError::NothingCommitted);
+        // snapshot the game fields we need so we can mutate game + player after.
+        let (status, phase, ends, instance, doomed, gkey) = {
+            let g = &ctx.accounts.game;
+            (g.status, g.phase, g.phase_ends_at, g.instance, g.doomed_circle, g.key())
+        };
+        require!(status == GameStatus::Running, GameError::WrongPhase);
+        require!(phase == InstancePhase::Scoring, GameError::WrongPhase);
+        require!(Clock::get()?.unix_timestamp < ends, GameError::PhaseEnded);
 
+        let p = &mut ctx.accounts.player;
+        require!(p.prediction_instance == instance, GameError::NothingCommitted);
         let expected = anchor_lang::solana_program::keccak::hashv(&[
             &[predicted_circle],
             &nonce.to_le_bytes(),
             p.owner.as_ref(),
-            g.key().as_ref(),
-            &g.instance.to_le_bytes(),
+            gkey.as_ref(),
+            &instance.to_le_bytes(),
         ]);
         require!(expected.0 == p.prediction_hash, GameError::BadReveal);
 
-        if predicted_circle == g.doomed_circle {
+        let correct = predicted_circle == doomed;
+        if correct {
             p.points += 1;
         }
         p.prediction_instance = 0; // consumed
+        if correct {
+            ctx.accounts.game.total_points += 1;
+        }
         Ok(())
     }
 
@@ -398,6 +412,99 @@ pub mod last_circle {
         to.total_stake = to.total_stake.checked_add(new_stake).ok_or(GameError::MathOverflow)?;
         Ok(())
     }
+
+    // ----- Settlement (status == Settling, one circle left) -----------------
+
+    /// The winning circle's creator claims their κ cut of the leftover pot.
+    pub fn claim_creator_cut(ctx: Context<ClaimCreatorCut>) -> Result<()> {
+        let (status, leftover, total_points, vbump, gkey, paid) = {
+            let g = &ctx.accounts.game;
+            (g.status, g.leftover_pot, g.total_points, g.vault_bump, g.key(), g.creator_cut_paid)
+        };
+        require!(status == GameStatus::Settling, GameError::WrongPhase);
+        require!(!paid, GameError::AlreadyClaimed);
+        let c = &ctx.accounts.winning_circle;
+        require!(c.alive, GameError::BadParam);
+        require!(c.creator == ctx.accounts.owner.key(), GameError::Unauthorized);
+
+        let (creator_cut, _, _) = pot_split(leftover, total_points);
+        ctx.accounts.game.creator_cut_paid = true;
+        transfer_from_vault(
+            &ctx.accounts.vault,
+            &ctx.accounts.owner.to_account_info(),
+            &ctx.accounts.system_program,
+            gkey,
+            vbump,
+            creator_cut,
+        )
+    }
+
+    /// A surviving player (in the winning circle) claims stake-back + their
+    /// stake-weighted share of the luck pool.
+    pub fn claim_winnings(ctx: Context<ClaimWinnings>) -> Result<()> {
+        let (status, leftover, total_points, vbump, gkey) = {
+            let g = &ctx.accounts.game;
+            (g.status, g.leftover_pot, g.total_points, g.vault_bump, g.key())
+        };
+        require!(status == GameStatus::Settling, GameError::WrongPhase);
+        let (c_alive, c_id, c_total) = {
+            let c = &ctx.accounts.winning_circle;
+            (c.alive, c.circle_id, c.total_stake)
+        };
+        require!(c_alive, GameError::BadParam);
+
+        let payout = {
+            let p = &mut ctx.accounts.player;
+            require!(p.current_circle == c_id, GameError::NotInWinningCircle);
+            require!(p.status == PlayerStatus::Active, GameError::AlreadyClaimed);
+            let (_, luck_pool, _) = pot_split(leftover, total_points);
+            let luck_share = if c_total > 0 {
+                (luck_pool as u128 * p.stake as u128 / c_total as u128) as u64
+            } else {
+                0
+            };
+            let pay = p.stake + luck_share;
+            p.status = PlayerStatus::Settled;
+            p.stake = 0;
+            pay
+        };
+        transfer_from_vault(
+            &ctx.accounts.vault,
+            &ctx.accounts.owner.to_account_info(),
+            &ctx.accounts.system_program,
+            gkey,
+            vbump,
+            payout,
+        )
+    }
+
+    /// Any player who scored skill points claims their points-weighted share of
+    /// the skill pool (survivors and eliminated alike).
+    pub fn claim_skill(ctx: Context<ClaimSkill>) -> Result<()> {
+        let (status, leftover, total_points, vbump, gkey) = {
+            let g = &ctx.accounts.game;
+            (g.status, g.leftover_pot, g.total_points, g.vault_bump, g.key())
+        };
+        require!(status == GameStatus::Settling, GameError::WrongPhase);
+
+        let share = {
+            let p = &mut ctx.accounts.player;
+            require!(!p.skill_claimed, GameError::AlreadyClaimed);
+            require!(p.points > 0, GameError::NothingToClaim);
+            let (_, _, skill_pool) = pot_split(leftover, total_points);
+            let s = (skill_pool as u128 * p.points as u128 / total_points as u128) as u64;
+            p.skill_claimed = true;
+            s
+        };
+        transfer_from_vault(
+            &ctx.accounts.vault,
+            &ctx.accounts.owner.to_account_info(),
+            &ctx.accounts.system_program,
+            gkey,
+            vbump,
+            share,
+        )
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -448,6 +555,21 @@ fn refund_bps(instance: u16, num_circles: u8) -> u16 {
     (REFUND_LO_BPS + (t.min(tmax) * span) / tmax) as u16
 }
 
+/// Split the leftover pot into (creator_cut, luck_pool, skill_pool).
+/// If no points were ever scored, the skill pool folds into the luck pool.
+fn pot_split(leftover: u64, total_points: u64) -> (u64, u64, u64) {
+    let l = leftover as u128;
+    let creator_cut = (l * KAPPA_BPS / BPS) as u64;
+    let distributable = l - creator_cut as u128;
+    let skill_pool = if total_points > 0 {
+        (distributable * SIGMA_BPS / BPS) as u64
+    } else {
+        0
+    };
+    let luck_pool = (distributable as u64) - skill_pool;
+    (creator_cut, luck_pool, skill_pool)
+}
+
 /// Transfer `amount` lamports out of the program-owned vault PDA (signed).
 fn transfer_from_vault<'info>(
     vault: &SystemAccount<'info>,
@@ -486,6 +608,7 @@ fn init_player(player: &mut Account<Player>, game: Pubkey, owner: Pubkey, stake:
     player.commit_instance = 0;
     player.prediction_hash = [0u8; 32];
     player.prediction_instance = 0;
+    player.skill_claimed = false;
     player.bump = bump;
 }
 
@@ -526,11 +649,16 @@ pub struct Game {
     pub leftover_pot: u64,
     pub fees_collected: u64,
     pub total_deposited: u64,
+    /// running sum of all skill points awarded (skill-pool denominator).
+    pub total_points: u64,
+    /// set once the winning circle's creator has claimed κ.
+    pub creator_cut_paid: bool,
     pub vault_bump: u8,
     pub bump: u8,
 }
 impl Game {
-    pub const SPACE: usize = 8 + 8 + 32 + 1 + 1 + 2 + 2 + 1 + 8 + 4 + 1 + 1 + 1 + 4 + 8 + 8 + 8 + 1 + 1;
+    pub const SPACE: usize =
+        8 + 8 + 32 + 1 + 1 + 2 + 2 + 1 + 8 + 4 + 1 + 1 + 1 + 4 + 8 + 8 + 8 + 8 + 1 + 1 + 1;
     /// Commit window = 60% of the instance, reveal = 40% (min 1s each).
     pub fn commit_window(&self) -> i64 {
         ((self.instance_seconds as i64) * 3 / 5).max(1)
@@ -572,10 +700,12 @@ pub struct Player {
     pub prediction_hash: [u8; 32],
     /// instance the prediction is for; 0 = none live.
     pub prediction_instance: u16,
+    /// set once this player has claimed their skill-pool share.
+    pub skill_claimed: bool,
     pub bump: u8,
 }
 impl Player {
-    pub const SPACE: usize = 8 + 32 + 32 + 8 + 1 + 4 + 1 + 32 + 2 + 32 + 2 + 1;
+    pub const SPACE: usize = 8 + 32 + 32 + 8 + 1 + 4 + 1 + 32 + 2 + 32 + 2 + 1 + 1;
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq)]
@@ -591,6 +721,8 @@ pub enum PlayerStatus {
     Active,
     CashedOut,
     Eliminated,
+    /// claimed endgame winnings (stake-back + luck share).
+    Settled,
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq)]
@@ -741,7 +873,7 @@ pub struct Crank<'info> {
 
 #[derive(Accounts)]
 pub struct RevealPrediction<'info> {
-    #[account(seeds = [b"game", game.game_id.to_le_bytes().as_ref()], bump = game.bump)]
+    #[account(mut, seeds = [b"game", game.game_id.to_le_bytes().as_ref()], bump = game.bump)]
     pub game: Account<'info, Game>,
     #[account(
         mut,
@@ -829,6 +961,65 @@ pub struct CashOut<'info> {
 }
 
 #[derive(Accounts)]
+pub struct ClaimCreatorCut<'info> {
+    #[account(mut, seeds = [b"game", game.game_id.to_le_bytes().as_ref()], bump = game.bump)]
+    pub game: Account<'info, Game>,
+    #[account(mut, seeds = [b"vault", game.key().as_ref()], bump = game.vault_bump)]
+    pub vault: SystemAccount<'info>,
+    #[account(
+        seeds = [b"circle", game.key().as_ref(), &[winning_circle.circle_id]],
+        bump = winning_circle.bump
+    )]
+    pub winning_circle: Account<'info, Circle>,
+    #[account(mut)]
+    pub owner: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct ClaimWinnings<'info> {
+    #[account(seeds = [b"game", game.game_id.to_le_bytes().as_ref()], bump = game.bump)]
+    pub game: Account<'info, Game>,
+    #[account(mut, seeds = [b"vault", game.key().as_ref()], bump = game.vault_bump)]
+    pub vault: SystemAccount<'info>,
+    #[account(
+        seeds = [b"circle", game.key().as_ref(), &[winning_circle.circle_id]],
+        bump = winning_circle.bump
+    )]
+    pub winning_circle: Account<'info, Circle>,
+    #[account(
+        mut,
+        seeds = [b"player", game.key().as_ref(), owner.key().as_ref()],
+        bump = player.bump,
+        has_one = owner @ GameError::Unauthorized,
+        constraint = player.game == game.key() @ GameError::BadParam
+    )]
+    pub player: Account<'info, Player>,
+    #[account(mut)]
+    pub owner: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct ClaimSkill<'info> {
+    #[account(seeds = [b"game", game.game_id.to_le_bytes().as_ref()], bump = game.bump)]
+    pub game: Account<'info, Game>,
+    #[account(mut, seeds = [b"vault", game.key().as_ref()], bump = game.vault_bump)]
+    pub vault: SystemAccount<'info>,
+    #[account(
+        mut,
+        seeds = [b"player", game.key().as_ref(), owner.key().as_ref()],
+        bump = player.bump,
+        has_one = owner @ GameError::Unauthorized,
+        constraint = player.game == game.key() @ GameError::BadParam
+    )]
+    pub player: Account<'info, Player>,
+    #[account(mut)]
+    pub owner: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
 #[instruction(target_circle: u8)]
 pub struct Land<'info> {
     #[account(seeds = [b"game", game.game_id.to_le_bytes().as_ref()], bump = game.bump)]
@@ -892,4 +1083,10 @@ pub enum GameError {
     IncompleteCircleSet,
     #[msg("Circle is still alive")]
     CircleAlive,
+    #[msg("Already claimed")]
+    AlreadyClaimed,
+    #[msg("Player is not in the winning circle")]
+    NotInWinningCircle,
+    #[msg("Nothing to claim")]
+    NothingToClaim,
 }
