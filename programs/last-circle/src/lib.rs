@@ -120,10 +120,17 @@ pub mod last_circle {
         Ok(())
     }
 
-    /// Join an existing circle in the lobby and stake into it.
+    /// Join an existing circle and stake into it. Allowed during the Lobby, and
+    /// for newcomers during the Commit phase of running instances up to the 50%
+    /// lock (`instance <= lock_instance`); frozen thereafter (anti-manipulation).
     pub fn join_circle(ctx: Context<JoinCircle>, stake: u64) -> Result<()> {
         let g = &mut ctx.accounts.game;
-        require!(g.status == GameStatus::Lobby, GameError::WrongPhase);
+        let open = g.status == GameStatus::Lobby
+            || (g.status == GameStatus::Running
+                && g.phase == InstancePhase::Commit
+                && g.instance <= g.lock_instance
+                && Clock::get()?.unix_timestamp < g.phase_ends_at);
+        require!(open, GameError::JoinWindowClosed);
         require!(ctx.accounts.circle.alive, GameError::CircleDead);
 
         let net = take_deposit(
@@ -1300,4 +1307,6 @@ pub enum GameError {
     NothingToClaim,
     #[msg("Too early: action only allowed after the 50% lock")]
     TooEarly,
+    #[msg("The join window is closed (past the 50% lock or wrong phase)")]
+    JoinWindowClosed,
 }
