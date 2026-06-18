@@ -56,6 +56,9 @@ pub mod last_circle {
         // join-freeze at the 50% mark: half of the (num_circles - 1) instances.
         g.lock_instance = (((num_circles as u16) - 1) / 2).max(1);
         g.instance = 0;
+        g.phase = InstancePhase::Commit;
+        g.phase_ends_at = 0;
+        g.instance_seconds = ctx.accounts.config.instance_seconds;
         g.circle_count = 0;
         g.player_count = 0;
         g.alive_circles = 0;
@@ -124,13 +127,95 @@ pub mod last_circle {
         Ok(())
     }
 
-    /// Close the lobby and start the instance loop.
+    /// Close the lobby and start the instance loop (instance 1, Commit phase).
     pub fn start_game(ctx: Context<StartGame>) -> Result<()> {
         let g = &mut ctx.accounts.game;
         require!(g.status == GameStatus::Lobby, GameError::WrongPhase);
         require!(g.alive_circles >= 2, GameError::NotEnoughCircles);
+        let now = Clock::get()?.unix_timestamp;
         g.status = GameStatus::Running;
-        g.instance = 0;
+        g.instance = 1;
+        g.phase = InstancePhase::Commit;
+        g.phase_ends_at = now + g.commit_window();
+        Ok(())
+    }
+
+    /// Commit a hashed move for the current instance (hides stay/move under fog).
+    /// hash = keccak(target_circle ‖ nonce_le ‖ owner ‖ game ‖ instance_le).
+    pub fn commit_move(ctx: Context<CommitMove>, hash: [u8; 32]) -> Result<()> {
+        let g = &ctx.accounts.game;
+        require!(g.status == GameStatus::Running, GameError::WrongPhase);
+        require!(g.phase == InstancePhase::Commit, GameError::WrongPhase);
+        require!(Clock::get()?.unix_timestamp < g.phase_ends_at, GameError::PhaseEnded);
+        let p = &mut ctx.accounts.player;
+        require!(p.status == PlayerStatus::Active, GameError::PlayerInactive);
+        p.committed_hash = hash;
+        p.commit_instance = g.instance;
+        Ok(())
+    }
+
+    /// Permissionless crank: end the commit window, open the reveal window.
+    pub fn advance_to_reveal(ctx: Context<Crank>) -> Result<()> {
+        let g = &mut ctx.accounts.game;
+        require!(g.status == GameStatus::Running, GameError::WrongPhase);
+        require!(g.phase == InstancePhase::Commit, GameError::WrongPhase);
+        let now = Clock::get()?.unix_timestamp;
+        require!(now >= g.phase_ends_at, GameError::PhaseNotOver);
+        g.phase = InstancePhase::Reveal;
+        g.phase_ends_at = now + g.reveal_window();
+        Ok(())
+    }
+
+    /// Reveal a committed MOVE (target must differ from current circle) and apply
+    /// it: move the player's whole stake from `from_circle` to `to_circle`.
+    pub fn reveal_move(ctx: Context<RevealMove>, target_circle: u8, nonce: u64) -> Result<()> {
+        let g = &ctx.accounts.game;
+        require!(g.status == GameStatus::Running, GameError::WrongPhase);
+        require!(g.phase == InstancePhase::Reveal, GameError::WrongPhase);
+        require!(Clock::get()?.unix_timestamp < g.phase_ends_at, GameError::PhaseEnded);
+
+        let p = &mut ctx.accounts.player;
+        require!(p.commit_instance == g.instance, GameError::NothingCommitted);
+        require!(target_circle != p.current_circle, GameError::NotAMove);
+
+        // Recompute the commitment and check it matches.
+        let expected = anchor_lang::solana_program::keccak::hashv(&[
+            &[target_circle],
+            &nonce.to_le_bytes(),
+            p.owner.as_ref(),
+            g.key().as_ref(),
+            &g.instance.to_le_bytes(),
+        ]);
+        require!(expected.0 == p.committed_hash, GameError::BadReveal);
+
+        let from = &mut ctx.accounts.from_circle;
+        let to = &mut ctx.accounts.to_circle;
+        require!(from.circle_id == p.current_circle, GameError::BadParam);
+        require!(to.circle_id == target_circle, GameError::BadParam);
+        require!(to.alive, GameError::CircleDead);
+
+        from.member_count -= 1;
+        from.total_stake = from.total_stake.checked_sub(p.stake).ok_or(GameError::MathOverflow)?;
+        to.member_count += 1;
+        to.total_stake = to.total_stake.checked_add(p.stake).ok_or(GameError::MathOverflow)?;
+
+        p.current_circle = target_circle;
+        p.commit_instance = 0; // consumed; prevents double-reveal
+        Ok(())
+    }
+
+    /// Permissionless crank: end the reveal window and advance to the next
+    /// instance's commit phase. (Death/resolution lands in milestone 3.)
+    pub fn resolve_instance(ctx: Context<Crank>) -> Result<()> {
+        let g = &mut ctx.accounts.game;
+        require!(g.status == GameStatus::Running, GameError::WrongPhase);
+        require!(g.phase == InstancePhase::Reveal, GameError::WrongPhase);
+        let now = Clock::get()?.unix_timestamp;
+        require!(now >= g.phase_ends_at, GameError::PhaseNotOver);
+        // TODO(milestone 3): fog/fate death selection + refunds here.
+        g.instance += 1;
+        g.phase = InstancePhase::Commit;
+        g.phase_ends_at = now + g.commit_window();
         Ok(())
     }
 }
@@ -181,6 +266,8 @@ fn init_player(player: &mut Account<Player>, game: Pubkey, owner: Pubkey, stake:
     player.current_circle = circle_id;
     player.points = 0;
     player.status = PlayerStatus::Active;
+    player.committed_hash = [0u8; 32];
+    player.commit_instance = 0;
     player.bump = bump;
 }
 
@@ -210,6 +297,9 @@ pub struct Game {
     pub num_circles: u8,
     pub lock_instance: u16,
     pub instance: u16,
+    pub phase: InstancePhase,
+    pub phase_ends_at: i64,
+    pub instance_seconds: u32,
     pub circle_count: u8,
     pub alive_circles: u8,
     pub player_count: u32,
@@ -220,7 +310,14 @@ pub struct Game {
     pub bump: u8,
 }
 impl Game {
-    pub const SPACE: usize = 8 + 8 + 32 + 1 + 1 + 2 + 2 + 1 + 1 + 4 + 8 + 8 + 8 + 1 + 1;
+    pub const SPACE: usize = 8 + 8 + 32 + 1 + 1 + 2 + 2 + 1 + 8 + 4 + 1 + 1 + 4 + 8 + 8 + 8 + 1 + 1;
+    /// Commit window = 60% of the instance, reveal = 40% (min 1s each).
+    pub fn commit_window(&self) -> i64 {
+        ((self.instance_seconds as i64) * 3 / 5).max(1)
+    }
+    pub fn reveal_window(&self) -> i64 {
+        ((self.instance_seconds as i64) * 2 / 5).max(1)
+    }
 }
 
 #[account]
@@ -245,10 +342,14 @@ pub struct Player {
     pub current_circle: u8,
     pub points: u32,
     pub status: PlayerStatus,
+    /// keccak commitment for the current instance's move (zeroed when consumed).
+    pub committed_hash: [u8; 32],
+    /// instance the commitment is for; 0 = no live commitment.
+    pub commit_instance: u16,
     pub bump: u8,
 }
 impl Player {
-    pub const SPACE: usize = 8 + 32 + 32 + 8 + 1 + 4 + 1 + 1;
+    pub const SPACE: usize = 8 + 32 + 32 + 8 + 1 + 4 + 1 + 32 + 2 + 1;
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq)]
@@ -264,6 +365,12 @@ pub enum PlayerStatus {
     Active,
     CashedOut,
     Eliminated,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq)]
+pub enum InstancePhase {
+    Commit,
+    Reveal,
 }
 
 // ---------------------------------------------------------------------------
@@ -379,6 +486,57 @@ pub struct StartGame<'info> {
     pub authority: Signer<'info>,
 }
 
+#[derive(Accounts)]
+pub struct CommitMove<'info> {
+    #[account(seeds = [b"game", game.game_id.to_le_bytes().as_ref()], bump = game.bump)]
+    pub game: Account<'info, Game>,
+    #[account(
+        mut,
+        seeds = [b"player", game.key().as_ref(), owner.key().as_ref()],
+        bump = player.bump,
+        has_one = owner @ GameError::Unauthorized,
+        constraint = player.game == game.key() @ GameError::BadParam
+    )]
+    pub player: Account<'info, Player>,
+    pub owner: Signer<'info>,
+}
+
+/// Permissionless phase crank (anyone may call once the window has elapsed).
+#[derive(Accounts)]
+pub struct Crank<'info> {
+    #[account(mut, seeds = [b"game", game.game_id.to_le_bytes().as_ref()], bump = game.bump)]
+    pub game: Account<'info, Game>,
+    pub cranker: Signer<'info>,
+}
+
+#[derive(Accounts)]
+#[instruction(target_circle: u8)]
+pub struct RevealMove<'info> {
+    #[account(seeds = [b"game", game.game_id.to_le_bytes().as_ref()], bump = game.bump)]
+    pub game: Account<'info, Game>,
+    #[account(
+        mut,
+        seeds = [b"player", game.key().as_ref(), owner.key().as_ref()],
+        bump = player.bump,
+        has_one = owner @ GameError::Unauthorized,
+        constraint = player.game == game.key() @ GameError::BadParam
+    )]
+    pub player: Account<'info, Player>,
+    #[account(
+        mut,
+        seeds = [b"circle", game.key().as_ref(), &[from_circle.circle_id]],
+        bump = from_circle.bump
+    )]
+    pub from_circle: Account<'info, Circle>,
+    #[account(
+        mut,
+        seeds = [b"circle", game.key().as_ref(), &[target_circle]],
+        bump = to_circle.bump
+    )]
+    pub to_circle: Account<'info, Circle>,
+    pub owner: Signer<'info>,
+}
+
 // ---------------------------------------------------------------------------
 // errors
 // ---------------------------------------------------------------------------
@@ -399,4 +557,16 @@ pub enum GameError {
     MathOverflow,
     #[msg("Unauthorized")]
     Unauthorized,
+    #[msg("Player is not active")]
+    PlayerInactive,
+    #[msg("This phase's window has ended")]
+    PhaseEnded,
+    #[msg("This phase's window is not over yet")]
+    PhaseNotOver,
+    #[msg("Reveal does not match commitment")]
+    BadReveal,
+    #[msg("No live commitment for this instance")]
+    NothingCommitted,
+    #[msg("Reveal target must differ from current circle")]
+    NotAMove,
 }
