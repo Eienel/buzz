@@ -6,10 +6,10 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-last_circle = "77c9GngD2kpr1iGKbANrecmDj4dbPNNWzwyMvjeZhAGN"
+last_circle = "4TNbztSMd3zxG57M25y8WhpcKrQMJQVYEK6EnnkQy1Hw"
 
 [programs.devnet]
-last_circle = "77c9GngD2kpr1iGKbANrecmDj4dbPNNWzwyMvjeZhAGN"
+last_circle = "4TNbztSMd3zxG57M25y8WhpcKrQMJQVYEK6EnnkQy1Hw"
 
 [registry]
 url = "https://api.apr.dev"

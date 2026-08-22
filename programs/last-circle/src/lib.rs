@@ -10,7 +10,7 @@
 
 use anchor_lang::prelude::*;
 
-declare_id!("77c9GngD2kpr1iGKbANrecmDj4dbPNNWzwyMvjeZhAGN");
+declare_id!("4TNbztSMd3zxG57M25y8WhpcKrQMJQVYEK6EnnkQy1Hw");
 
 /// Basis-points denominator.
 const BPS: u128 = 10_000;
@@ -79,6 +79,8 @@ pub mod last_circle {
         g.fees_collected = 0;
         g.total_deposited = 0;
         g.total_points = 0;
+        g.entropy_slot = 0;
+        g.insane_entropy_slot = 0;
         g.creator_cut_paid = false;
         g.insane_rolled = false;
         g.insane = false;
@@ -184,10 +186,16 @@ pub mod last_circle {
         let g = &mut ctx.accounts.game;
         require!(g.status == GameStatus::Running, GameError::WrongPhase);
         require!(g.phase == InstancePhase::Commit, GameError::WrongPhase);
-        let now = Clock::get()?.unix_timestamp;
+        let clock = Clock::get()?;
+        let now = clock.unix_timestamp;
         require!(now >= g.phase_ends_at, GameError::PhaseNotOver);
         g.phase = InstancePhase::Reveal;
         g.phase_ends_at = now + g.reveal_window();
+        // Commit NOW to the future slot whose hash will seed this instance's
+        // death roll (~2 slots/sec keeps it inside the reveal window). Fixing
+        // the slot before its hash exists makes select_death submission-time
+        // grinding useless.
+        g.entropy_slot = clock.slot + (g.reveal_window() as u64) * 2;
         Ok(())
     }
 
@@ -216,6 +224,10 @@ pub mod last_circle {
         let from = &mut ctx.accounts.from_circle;
         let to = &mut ctx.accounts.to_circle;
         require!(from.circle_id == p.current_circle, GameError::BadParam);
+        // A member of a dead circle must exit via land/cash_out (which applies
+        // the refund haircut) — moving out with the full stake would double-count
+        // the haircut already swept into the leftover pot.
+        require!(from.alive, GameError::CircleDead);
         require!(to.circle_id == target_circle, GameError::BadParam);
         require!(to.alive, GameError::CircleDead);
 
@@ -245,6 +257,9 @@ pub mod last_circle {
         require!(g.phase == InstancePhase::Reveal, GameError::WrongPhase);
         let clock = Clock::get()?;
         require!(clock.unix_timestamp >= g.phase_ends_at, GameError::PhaseNotOver);
+        // The pre-committed entropy slot must have passed, so its hash is fixed
+        // on-chain and the cranker cannot pick a favorable submission slot.
+        require!(g.entropy_slot > 0 && clock.slot >= g.entropy_slot, GameError::PhaseNotOver);
 
         // Collect all alive circles from the remaining accounts.
         let mut alive: Vec<(u8, u32, u64)> = Vec::with_capacity(g.alive_circles as usize);
@@ -259,12 +274,14 @@ pub mod last_circle {
         require!(alive.len() as u8 == g.alive_circles, GameError::IncompleteCircleSet);
         require!(alive.len() >= 2, GameError::NotEnoughCircles);
 
-        // Entropy from the SlotHashes sysvar (see slothash_entropy seam), mixed
-        // with game/instance for domain separation.
-        let entropy = slothash_entropy(&ctx.accounts.recent_slot_hashes)?;
+        // Entropy = the SlotHashes entry at (or nearest before) the slot we
+        // committed to in advance_to_reveal, mixed with game/instance for
+        // domain separation. NOTE: deliberately no clock.slot in the seed —
+        // the seed must not vary with WHEN the crank lands.
+        let entropy = slothash_at(&ctx.accounts.recent_slot_hashes, g.entropy_slot)?;
         let seed = anchor_lang::solana_program::keccak::hashv(&[
             &entropy,
-            &clock.slot.to_le_bytes(),
+            &g.entropy_slot.to_le_bytes(),
             &g.instance.to_le_bytes(),
             g.key().as_ref(),
         ])
@@ -372,7 +389,8 @@ pub mod last_circle {
         let g = &mut ctx.accounts.game;
         require!(g.status == GameStatus::Running, GameError::WrongPhase);
         require!(g.phase == InstancePhase::Scoring, GameError::WrongPhase);
-        let now = Clock::get()?.unix_timestamp;
+        let clock = Clock::get()?;
+        let now = clock.unix_timestamp;
         require!(now >= g.phase_ends_at, GameError::PhaseNotOver);
         if g.alive_circles == 1 {
             g.status = GameStatus::Settling;
@@ -380,6 +398,11 @@ pub mod last_circle {
             g.instance += 1;
             g.phase = InstancePhase::Commit;
             g.phase_ends_at = now + g.commit_window();
+            // Crossing the 50% lock arms the insane roll: commit to a future
+            // slot so roll_insane's cranker cannot grind submission timing.
+            if g.instance >= g.lock_instance && g.insane_entropy_slot == 0 {
+                g.insane_entropy_slot = clock.slot + 5;
+            }
         }
         Ok(())
     }
@@ -410,6 +433,10 @@ pub mod last_circle {
 
     /// An eliminated player carries their refund forward into a surviving circle.
     pub fn land(ctx: Context<Land>, target_circle: u8) -> Result<()> {
+        // Landing is only a live-game action: once the game reaches Settling the
+        // final-circle membership is fixed, otherwise every eliminated player
+        // would land into the winner post-hoc and dilute the luck pool risk-free.
+        require!(ctx.accounts.game.status == GameStatus::Running, GameError::WrongPhase);
         let p = &mut ctx.accounts.player;
         let from = &ctx.accounts.from_circle;
         let to = &mut ctx.accounts.to_circle;
@@ -585,19 +612,23 @@ pub mod last_circle {
     ///
     /// NOTE: placeholder randomness (slot/clock hash) — swap in VRF before mainnet.
     pub fn roll_insane(ctx: Context<RollInsane>) -> Result<()> {
-        let (status, instance, lock, rolled, gkey, gvbump) = {
+        let (status, instance, lock, rolled, entropy_slot, gkey, gvbump) = {
             let g = &ctx.accounts.game;
-            (g.status, g.instance, g.lock_instance, g.insane_rolled, g.key(), g.vault_bump)
+            (g.status, g.instance, g.lock_instance, g.insane_rolled, g.insane_entropy_slot, g.key(), g.vault_bump)
         };
         require!(status == GameStatus::Running, GameError::WrongPhase);
         require!(instance >= lock, GameError::TooEarly);
         require!(!rolled, GameError::AlreadyClaimed);
 
         let clock = Clock::get()?;
-        let entropy = slothash_entropy(&ctx.accounts.recent_slot_hashes)?;
+        // Roll only once the pre-committed slot has passed; seed from that
+        // fixed slot's hash (no clock.slot) so the outcome cannot be ground
+        // by choosing when to submit the crank.
+        require!(entropy_slot > 0 && clock.slot >= entropy_slot, GameError::TooEarly);
+        let entropy = slothash_at(&ctx.accounts.recent_slot_hashes, entropy_slot)?;
         let seed = anchor_lang::solana_program::keccak::hashv(&[
             &entropy,
-            &clock.slot.to_le_bytes(),
+            &entropy_slot.to_le_bytes(),
             gkey.as_ref(),
             b"insane",
         ])
@@ -675,15 +706,18 @@ fn refund_bps(instance: u16, num_circles: u8) -> u16 {
     (REFUND_LO_BPS + (t.min(tmax) * span) / tmax) as u16
 }
 
-/// Randomness seam. Reads the most recent block hash from the SlotHashes
-/// sysvar account — unpredictable to players at commit time (unlike Clock).
+/// Randomness seam. Returns the SlotHashes entry for the newest slot at or
+/// before `target_slot` — a slot the game COMMITTED to before its hash existed,
+/// so neither players nor crankers can grind submission timing for a better
+/// draw. Falls back to the oldest retained entry if the crank stalled past the
+/// sysvar's ~512-slot horizon (liveness over grind-resistance in that rare case).
 ///
-/// NOTE: a block producer can still bias WHICH recent hash lands via tx timing.
-/// For production manipulation-resistance, replace this seam with a real VRF
-/// (Switchboard On-Demand): commit a randomness account pre-reveal and read its
-/// settled value here instead. The call sites mix in game/instance for domain
-/// separation, so only this function changes.
-fn slothash_entropy(slot_hashes_ai: &AccountInfo) -> Result<[u8; 32]> {
+/// NOTE: the leader of the target slot can still bias its hash. For mainnet,
+/// replace this seam with a real VRF (Switchboard On-Demand): commit a
+/// randomness account pre-reveal and read its settled value here instead. The
+/// call sites mix in game/instance for domain separation, so only this
+/// function changes.
+fn slothash_at(slot_hashes_ai: &AccountInfo, target_slot: u64) -> Result<[u8; 32]> {
     require!(
         *slot_hashes_ai.key == anchor_lang::solana_program::sysvar::slot_hashes::id(),
         GameError::BadParam
@@ -691,8 +725,22 @@ fn slothash_entropy(slot_hashes_ai: &AccountInfo) -> Result<[u8; 32]> {
     let data = slot_hashes_ai.try_borrow_data().map_err(|_| GameError::BadParam)?;
     // layout: [num_entries: u64][ (slot: u64, hash: [u8;32]) ... ] most-recent first
     require!(data.len() >= 48, GameError::BadParam);
+    let n = u64::from_le_bytes(data[0..8].try_into().unwrap()) as usize;
+    let mut chosen = 8 + (n.saturating_sub(1)) * 40; // default: oldest entry
+    for i in 0..n {
+        let off = 8 + i * 40;
+        if off + 40 > data.len() {
+            break;
+        }
+        let slot = u64::from_le_bytes(data[off..off + 8].try_into().unwrap());
+        if slot <= target_slot {
+            chosen = off; // newest entry at or before the committed slot
+            break;
+        }
+    }
+    require!(chosen + 40 <= data.len(), GameError::BadParam);
     let mut h = [0u8; 32];
-    h.copy_from_slice(&data[16..48]);
+    h.copy_from_slice(&data[chosen + 8..chosen + 40]);
     Ok(h)
 }
 
@@ -834,6 +882,13 @@ pub struct Game {
     pub total_deposited: u64,
     /// running sum of all skill points awarded (skill-pool denominator).
     pub total_points: u64,
+    /// slot whose SlotHashes entry seeds this instance's death roll. Committed
+    /// in advance (at advance_to_reveal, pointing PAST the reveal window) so a
+    /// cranker cannot grind submission timing for a favorable hash.
+    pub entropy_slot: u64,
+    /// same idea for the one-shot insane roll: armed when the 50% lock is
+    /// crossed, pointing a few slots into the future.
+    pub insane_entropy_slot: u64,
     /// set once the winning circle's creator has claimed κ.
     pub creator_cut_paid: bool,
     /// whether the post-lock insane roll has happened, and its outcome.
@@ -844,7 +899,7 @@ pub struct Game {
 }
 impl Game {
     pub const SPACE: usize =
-        8 + 8 + 32 + 1 + 1 + 2 + 2 + 1 + 8 + 4 + 1 + 1 + 1 + 4 + 8 + 8 + 8 + 8 + 1 + 1 + 1 + 1 + 1;
+        8 + 8 + 32 + 1 + 1 + 2 + 2 + 1 + 8 + 4 + 1 + 1 + 1 + 4 + 8 + 8 + 8 + 8 + 8 + 8 + 1 + 1 + 1 + 1 + 1;
     /// Commit window = 60% of the instance, reveal = 40% (min 1s each).
     pub fn commit_window(&self) -> i64 {
         ((self.instance_seconds as i64) * 3 / 5).max(1)

@@ -681,7 +681,9 @@ describe("last-circle — milestone 6: treasury + insane round", () => {
     assert.deepEqual(gMid.status, { running: {} });
     const leftoverBefore = gMid.leftoverPot.toNumber();
 
-    // forced insane (prob = 100% in test config)
+    // forced insane (prob = 100% in test config); wait for the pre-committed
+    // entropy slot (armed at lock-crossing, +5 slots) to pass
+    await sleep(4000);
     await program.methods.rollInsane()
       .accounts({ config: configPda, game: G.gamePda, vault: G.vaultPda, treasury: treasuryPda, treasuryVault: treasuryVaultPda, recentSlotHashes: SYSVAR_SLOT_HASHES_PUBKEY, cranker: authority.publicKey, systemProgram: SystemProgram.programId })
       .rpc();
@@ -747,5 +749,145 @@ describe("last-circle — hardening: open-join window to the 50% lock", () => {
       rejected = String(e).includes("JoinWindowClosed");
     }
     assert.ok(rejected, "join rejected once the window is closed");
+  });
+});
+
+describe("last-circle — hardening: dead-circle escape + land window", () => {
+  const provider = anchor.AnchorProvider.env();
+  anchor.setProvider(provider);
+  const program = anchor.workspace.LastCircle as Program<LastCircle>;
+  const authority = provider.wallet as anchor.Wallet;
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  const [configPda] = PublicKey.findProgramAddressSync([Buffer.from("config")], program.programId);
+  const gameId = new anchor.BN(Date.now() + 300);
+  const [gamePda] = PublicKey.findProgramAddressSync([Buffer.from("game"), gameId.toArrayLike(Buffer, "le", 8)], program.programId);
+  const [vaultPda] = PublicKey.findProgramAddressSync([Buffer.from("vault"), gamePda.toBuffer()], program.programId);
+  const circlePda = (id: number) => PublicKey.findProgramAddressSync([Buffer.from("circle"), gamePda.toBuffer(), Buffer.from([id])], program.programId)[0];
+  const playerPda = (o: PublicKey) => PublicKey.findProgramAddressSync([Buffer.from("player"), gamePda.toBuffer(), o.toBuffer()], program.programId)[0];
+
+  const p1 = Keypair.generate();
+  const p2 = Keypair.generate();
+  const ownerOf = (id: number) => (id === 0 ? authority.publicKey : id === 1 ? p1.publicKey : p2.publicKey);
+  const signerOf = (id: number): Keypair[] => (id === 0 ? [] : id === 1 ? [p1] : [p2]);
+
+  const runInstanceToDeath = async (aliveIds: number[]) => {
+    await sleep(9000);
+    await program.methods.advanceToReveal().accounts({ game: gamePda, cranker: authority.publicKey }).rpc();
+    await sleep(7000);
+    await program.methods
+      .selectDeath()
+      .accounts({ game: gamePda, recentSlotHashes: SYSVAR_SLOT_HASHES_PUBKEY, cranker: authority.publicKey })
+      .remainingAccounts(aliveIds.map((i) => ({ pubkey: circlePda(i), isSigner: false, isWritable: false })))
+      .rpc();
+    const doomed = (await program.account.game.fetch(gamePda)).doomedCircle;
+    await program.methods.executeDeath(doomed).accounts({ game: gamePda, circle: circlePda(doomed), cranker: authority.publicKey }).rpc();
+    await sleep(7000);
+    await program.methods.advanceInstance().accounts({ game: gamePda, cranker: authority.publicKey }).rpc();
+    return doomed;
+  };
+
+  let doomed1 = 0; // circle killed in instance 1
+
+  it("a dead-circle member cannot reveal_move their full stake out (haircut dodge)", async () => {
+    for (const kp of [p1, p2]) {
+      const sig = await provider.connection.requestAirdrop(kp.publicKey, 2 * LAMPORTS_PER_SOL);
+      await provider.connection.confirmTransaction(sig);
+    }
+    await program.methods.createGame(gameId, 6).accounts({ config: configPda, game: gamePda, vault: vaultPda, authority: authority.publicKey }).rpc();
+    const stake = new anchor.BN(LAMPORTS_PER_SOL);
+    for (const id of [0, 1, 2]) {
+      await program.methods
+        .createCircle(id, stake)
+        .accounts({ config: configPda, game: gamePda, vault: vaultPda, circle: circlePda(id), player: playerPda(ownerOf(id)), owner: ownerOf(id) })
+        .signers(signerOf(id))
+        .rpc();
+    }
+    await program.methods.startGame().accounts({ game: gamePda, authority: authority.publicKey }).rpc();
+
+    // instance 1 -> first death (game continues: 3 -> 2 circles)
+    doomed1 = await runInstanceToDeath([0, 1, 2]);
+    const g = await program.account.game.fetch(gamePda);
+    assert.equal(g.aliveCircles, 2);
+    assert.deepEqual(g.status, { running: {} });
+
+    // instance 2: the dead player commits a move into an alive circle and tries
+    // to reveal it — must be rejected (their exit is land/cash_out, WITH haircut).
+    const deadOwner = ownerOf(doomed1);
+    const target = [0, 1, 2].find((i) => i !== doomed1)!;
+    const instance = g.instance; // 2
+    const nonce = new anchor.BN(777);
+    const hash = Buffer.from(
+      keccak_256.arrayBuffer(
+        Buffer.concat([
+          Buffer.from([target]),
+          nonce.toArrayLike(Buffer, "le", 8),
+          deadOwner.toBuffer(),
+          gamePda.toBuffer(),
+          Buffer.from(new Uint16Array([instance]).buffer),
+        ])
+      )
+    );
+    await program.methods
+      .commitMove(Array.from(hash))
+      .accounts({ game: gamePda, player: playerPda(deadOwner), owner: deadOwner })
+      .signers(signerOf(doomed1))
+      .rpc();
+    await sleep(9000);
+    await program.methods.advanceToReveal().accounts({ game: gamePda, cranker: authority.publicKey }).rpc();
+
+    let rejected = false;
+    try {
+      await program.methods
+        .revealMove(target, nonce)
+        .accounts({ game: gamePda, player: playerPda(deadOwner), fromCircle: circlePda(doomed1), toCircle: circlePda(target), owner: deadOwner })
+        .signers(signerOf(doomed1))
+        .rpc();
+    } catch (e) {
+      rejected = String(e).includes("CircleDead");
+    }
+    assert.ok(rejected, "full-stake escape from a dead circle rejected");
+  });
+
+  it("land is rejected once the game reaches Settling (no post-hoc luck-pool sniping)", async () => {
+    // finish instance 2 (2 -> 1 circles) -> Settling
+    await sleep(7000);
+    const aliveIds = [0, 1, 2].filter((i) => i !== doomed1);
+    await program.methods
+      .selectDeath()
+      .accounts({ game: gamePda, recentSlotHashes: SYSVAR_SLOT_HASHES_PUBKEY, cranker: authority.publicKey })
+      .remainingAccounts(aliveIds.map((i) => ({ pubkey: circlePda(i), isSigner: false, isWritable: false })))
+      .rpc();
+    const doomed2 = (await program.account.game.fetch(gamePda)).doomedCircle;
+    await program.methods.executeDeath(doomed2).accounts({ game: gamePda, circle: circlePda(doomed2), cranker: authority.publicKey }).rpc();
+    await sleep(7000);
+    await program.methods.advanceInstance().accounts({ game: gamePda, cranker: authority.publicKey }).rpc();
+    const g = await program.account.game.fetch(gamePda);
+    assert.deepEqual(g.status, { settling: {} });
+
+    // the instance-1 casualty now tries to land into the winning circle -> rejected
+    const winner = [0, 1, 2].find((i) => i !== doomed1 && i !== doomed2)!;
+    let rejected = false;
+    try {
+      await program.methods
+        .land(winner)
+        .accounts({ game: gamePda, player: playerPda(ownerOf(doomed1)), fromCircle: circlePda(doomed1), toCircle: circlePda(winner), owner: ownerOf(doomed1) })
+        .signers(signerOf(doomed1))
+        .rpc();
+    } catch (e) {
+      rejected = String(e).includes("WrongPhase");
+    }
+    assert.ok(rejected, "post-settlement landing rejected");
+
+    // but cash_out (WITH haircut) still works for them
+    const owner = ownerOf(doomed1);
+    const before = await provider.connection.getBalance(owner);
+    await program.methods
+      .cashOut()
+      .accounts({ game: gamePda, vault: vaultPda, circle: circlePda(doomed1), player: playerPda(owner), owner, systemProgram: SystemProgram.programId })
+      .signers(signerOf(doomed1))
+      .rpc();
+    const after = await provider.connection.getBalance(owner);
+    assert.ok(after - before > 0.4 * LAMPORTS_PER_SOL, "haircut refund still claimable");
   });
 });

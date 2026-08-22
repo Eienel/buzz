@@ -17,12 +17,15 @@ and **[ARCHITECTURE.md](ARCHITECTURE.md)** for the on-chain design.
 - [x] Milestone 4: prediction skill-pool
 - [x] Milestone 5: settlement (creator cut + luck pool + skill pool)
 - [x] Milestone 6: treasury (house revenue) + insane-round jackpot
-- [ ] Hardening: real VRF (replace placeholder RNG); open-join window to the
-      50% lock; in-program conservation asserts; close_game/dust sweep
+- [x] Hardening: open-join window to the 50% lock; anti-grind entropy
+      (pre-committed slot hash); dead-circle escape + post-settlement land fixes
+- [ ] Hardening: real VRF (Switchboard) behind the `slothash_at` seam;
+      in-program conservation asserts; close_game/dust sweep; lobby-abort refund
 - [ ] Audit → mainnet
 
-All 12 integration tests green on CI (real validator). Placeholder RNG in
+All integration tests green on CI (real validator). The slot-hash entropy in
 `select_death` / `roll_insane` MUST be replaced with a VRF before mainnet.
+Hackathon plan: see [HACKATHON.md](HACKATHON.md).
 
 ## Layout
 ```
