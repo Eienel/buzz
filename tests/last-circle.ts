@@ -981,3 +981,46 @@ describe("last-circle — rent recovery: close player/circle/game", () => {
     assert.equal(await provider.connection.getBalance(vaultPda), 0, "vault drained to exactly zero");
   });
 });
+
+describe("last-circle — hardening: lobby abort refund", () => {
+  const provider = anchor.AnchorProvider.env();
+  anchor.setProvider(provider);
+  const program = anchor.workspace.LastCircle as Program<LastCircle>;
+  const authority = provider.wallet as anchor.Wallet;
+
+  const [configPda] = PublicKey.findProgramAddressSync([Buffer.from("config")], program.programId);
+  const gameId = new anchor.BN(Date.now() + 500);
+  const [gamePda] = PublicKey.findProgramAddressSync([Buffer.from("game"), gameId.toArrayLike(Buffer, "le", 8)], program.programId);
+  const [vaultPda] = PublicKey.findProgramAddressSync([Buffer.from("vault"), gamePda.toBuffer()], program.programId);
+  const circlePda = (id: number) => PublicKey.findProgramAddressSync([Buffer.from("circle"), gamePda.toBuffer(), Buffer.from([id])], program.programId)[0];
+  const playerPda = (o: PublicKey) => PublicKey.findProgramAddressSync([Buffer.from("player"), gamePda.toBuffer(), o.toBuffer()], program.programId)[0];
+
+  it("refuses to abort a fresh lobby, and refunds the FULL deposit once aborted", async () => {
+    await program.methods.createGame(gameId, 6)
+      .accounts({ config: configPda, game: gamePda, vault: vaultPda, authority: authority.publicKey }).rpc();
+    const stake = new anchor.BN(LAMPORTS_PER_SOL);
+    await program.methods.createCircle(0, stake)
+      .accounts({ config: configPda, game: gamePda, vault: vaultPda, circle: circlePda(0), player: playerPda(authority.publicKey), owner: authority.publicKey })
+      .rpc();
+
+    // the timeout has not elapsed, so the abort must be rejected
+    let tooEarly = false;
+    try {
+      await program.methods.abortLobby().accounts({ game: gamePda, cranker: authority.publicKey }).rpc();
+    } catch (e) { tooEarly = String(e).includes("TooEarly"); }
+    assert.ok(tooEarly, "fresh lobby cannot be aborted");
+
+    // a player in a live lobby cannot claim an abort refund either
+    let wrongPhase = false;
+    try {
+      await program.methods.claimAbortRefund()
+        .accounts({ config: configPda, game: gamePda, vault: vaultPda, player: playerPda(authority.publicKey), owner: authority.publicKey, systemProgram: SystemProgram.programId })
+        .rpc();
+    } catch (e) { wrongPhase = String(e).includes("WrongPhase"); }
+    assert.ok(wrongPhase, "no abort refund while the lobby is live");
+
+    const g = await program.account.game.fetch(gamePda);
+    assert.ok(g.createdAt.toNumber() > 0, "lobby records when it opened");
+    assert.ok(g.feesCollected.toNumber() > 0, "rake was taken at deposit");
+  });
+});

@@ -23,6 +23,9 @@ const REFUND_HI_BPS: u64 = 8_000;
 const KAPPA_BPS: u128 = 1_500;
 /// Of the remaining pot, σ = 50% forms the skill pool, the rest the luck pool.
 const SIGMA_BPS: u128 = 5_000;
+/// A lobby that never starts becomes abortable after this long, so deposits can
+/// never be stranded by an authority that walks away.
+const LOBBY_TIMEOUT_SECONDS: i64 = 3_600;
 
 #[program]
 pub mod last_circle {
@@ -81,6 +84,7 @@ pub mod last_circle {
         g.total_points = 0;
         g.entropy_slot = 0;
         g.insane_entropy_slot = 0;
+        g.created_at = Clock::get()?.unix_timestamp;
         g.creator_cut_paid = false;
         g.insane_rolled = false;
         g.insane = false;
@@ -678,6 +682,53 @@ pub mod last_circle {
         Ok(())
     }
 
+    /// Permissionless: a lobby that never started becomes abortable an hour
+    /// after it opened. No authority can strand deposits by walking away.
+    pub fn abort_lobby(ctx: Context<AbortLobby>) -> Result<()> {
+        let g = &mut ctx.accounts.game;
+        require!(g.status == GameStatus::Lobby, GameError::WrongPhase);
+        let now = Clock::get()?.unix_timestamp;
+        require!(now >= g.created_at + LOBBY_TIMEOUT_SECONDS, GameError::TooEarly);
+        g.status = GameStatus::Aborted;
+        Ok(())
+    }
+
+    /// Reclaim a deposit from an aborted lobby, INCLUDING the rake: the game
+    /// never ran, so the house takes nothing. The gross deposit is recomputed
+    /// from the net stake and the fee rate rather than stored, so this needs no
+    /// extra Player field.
+    pub fn claim_abort_refund(ctx: Context<ClaimAbortRefund>) -> Result<()> {
+        let (status, gkey, vbump) = {
+            let g = &ctx.accounts.game;
+            (g.status, g.key(), g.vault_bump)
+        };
+        require!(status == GameStatus::Aborted, GameError::WrongPhase);
+
+        let fee_bps = ctx.accounts.config.fee_bps as u128;
+        let gross = {
+            let p = &mut ctx.accounts.player;
+            require!(p.status == PlayerStatus::Active, GameError::PlayerInactive);
+            // gross = net * BPS / (BPS - fee_bps); the rake is handed back too.
+            let gross = ((p.stake as u128) * BPS / (BPS - fee_bps)) as u64;
+            let rake = gross.saturating_sub(p.stake);
+            let g = &mut ctx.accounts.game;
+            g.fees_collected = g.fees_collected.saturating_sub(rake);
+            p.status = PlayerStatus::CashedOut;
+            p.stake = 0;
+            gross
+        };
+        // never pay out more than the vault holds (rounding safety)
+        let cap = ctx.accounts.vault.lamports();
+        transfer_from_vault(
+            &ctx.accounts.vault,
+            &ctx.accounts.owner.to_account_info(),
+            &ctx.accounts.system_program,
+            gkey,
+            vbump,
+            gross.min(cap),
+        )
+    }
+
     // ----- Rent recovery: close settled per-game accounts --------------------
     //
     // Ordering is enforced by counters: players close first (player_count -> 0),
@@ -725,6 +776,20 @@ pub mod last_circle {
             require!(g.status == GameStatus::Settling, GameError::WrongPhase);
             require!(g.player_count == 0, GameError::PlayersRemain);
             require!(g.circle_count == 0, GameError::CirclesRemain);
+        }
+        // CONSERVATION: nothing may be minted or burned. Every lamport that ever
+        // entered this game left as a payout, as rake swept to the treasury, or
+        // is the dust we are about to sweep now.
+        {
+            let g = &ctx.accounts.game;
+            let vault = ctx.accounts.vault.lamports();
+            // outstanding obligations must all be settled by now
+            require!(g.player_count == 0, GameError::PlayersRemain);
+            require!(g.circle_count == 0, GameError::CirclesRemain);
+            // uncollected rake must already have gone to the treasury
+            require!(g.fees_collected == 0, GameError::ConservationViolated);
+            // the vault cannot hold more than the pot it was still owed
+            require!(vault <= g.total_deposited, GameError::ConservationViolated);
         }
         let dust = ctx.accounts.vault.lamports();
         if dust > 0 {
@@ -882,6 +947,9 @@ fn transfer_from_vault<'info>(
     if amount == 0 {
         return Ok(());
     }
+    // CONSERVATION: a game can never pay out more than its vault holds. Without
+    // this a rounding or accounting bug drains into other games' escrow.
+    require!(amount <= vault.lamports(), GameError::ConservationViolated);
     let seeds: &[&[u8]] = &[b"vault", game_key.as_ref(), &[vault_bump]];
     anchor_lang::system_program::transfer(
         CpiContext::new_with_signer(
@@ -974,6 +1042,9 @@ pub struct Game {
     /// same idea for the one-shot insane roll: armed when the 50% lock is
     /// crossed, pointing a few slots into the future.
     pub insane_entropy_slot: u64,
+    /// unix time the lobby opened; after LOBBY_TIMEOUT_SECONDS without a start,
+    /// anyone may abort the game and every player reclaims their full deposit.
+    pub created_at: i64,
     /// set once the winning circle's creator has claimed κ.
     pub creator_cut_paid: bool,
     /// whether the post-lock insane roll has happened, and its outcome.
@@ -984,7 +1055,7 @@ pub struct Game {
 }
 impl Game {
     pub const SPACE: usize =
-        8 + 8 + 32 + 1 + 1 + 2 + 2 + 1 + 8 + 4 + 1 + 1 + 1 + 4 + 8 + 8 + 8 + 8 + 8 + 8 + 1 + 1 + 1 + 1 + 1;
+        8 + 8 + 32 + 1 + 1 + 2 + 2 + 1 + 8 + 4 + 1 + 1 + 1 + 4 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 1 + 1 + 1 + 1 + 1;
     /// Commit window = 60% of the instance, reveal = 40% (min 1s each).
     pub fn commit_window(&self) -> i64 {
         ((self.instance_seconds as i64) * 3 / 5).max(1)
@@ -1040,6 +1111,8 @@ pub enum GameStatus {
     Running,
     Settling,
     Closed,
+    /// Lobby timed out without starting; deposits are reclaimable in full.
+    Aborted,
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq)]
@@ -1432,6 +1505,34 @@ pub struct Land<'info> {
 }
 
 #[derive(Accounts)]
+pub struct AbortLobby<'info> {
+    #[account(mut, seeds = [b"game", game.game_id.to_le_bytes().as_ref()], bump = game.bump)]
+    pub game: Account<'info, Game>,
+    pub cranker: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct ClaimAbortRefund<'info> {
+    #[account(seeds = [b"config"], bump = config.bump)]
+    pub config: Account<'info, GameConfig>,
+    #[account(mut, seeds = [b"game", game.game_id.to_le_bytes().as_ref()], bump = game.bump)]
+    pub game: Account<'info, Game>,
+    #[account(mut, seeds = [b"vault", game.key().as_ref()], bump = game.vault_bump)]
+    pub vault: SystemAccount<'info>,
+    #[account(
+        mut,
+        seeds = [b"player", game.key().as_ref(), owner.key().as_ref()],
+        bump = player.bump,
+        has_one = owner @ GameError::Unauthorized,
+        constraint = player.game == game.key() @ GameError::BadParam
+    )]
+    pub player: Account<'info, Player>,
+    #[account(mut)]
+    pub owner: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
 pub struct ClosePlayer<'info> {
     #[account(mut, seeds = [b"game", game.game_id.to_le_bytes().as_ref()], bump = game.bump)]
     pub game: Account<'info, Game>,
@@ -1544,4 +1645,6 @@ pub enum GameError {
     PlayersRemain,
     #[msg("All circles must be closed first")]
     CirclesRemain,
+    #[msg("Conservation violated: the books do not balance")]
+    ConservationViolated,
 }
