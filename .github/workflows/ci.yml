@@ -60,10 +60,18 @@ jobs:
           solana-keygen new --no-bip39-passphrase --force -o "$HOME/.config/solana/id.json"
           solana config set --keypair "$HOME/.config/solana/id.json"
 
-      - name: Sync program key into Anchor.toml / declare_id
-        run: anchor keys sync || true
+      # The real program id (declare_id! / Anchor.toml) belongs to the devnet
+      # deploy keypair, which is intentionally NOT in the repo. For CI we test
+      # under an ephemeral id instead: build once to generate a fresh deploy
+      # keypair, sync declare_id + Anchor.toml to it, then rebuild so the .so
+      # embeds the matching id before `anchor test` deploys it.
+      - name: Anchor build (generate deploy keypair)
+        run: anchor build
 
-      - name: Anchor build
+      - name: Sync ephemeral program key into Anchor.toml / declare_id
+        run: anchor keys sync
+
+      - name: Anchor rebuild (embed synced declare_id)
         run: anchor build
 
       - name: Node setup
