@@ -294,10 +294,36 @@ async function playGame(gameNo) {
         log(`  house cut reclaimed: ${t.houseBalance.toNumber() / LAMPORTS_PER_SOL} SOL`);
       }
     } catch {}
+    // RENT RECOVERY: close every per-game PDA so its rent-exempt lamports come
+    // back (player -> agent wallet, circle -> creator agent, game -> payer),
+    // then sweep the agents. Order matters: players, then circles, then game.
+    try {
+      for (const a of agents) {
+        try {
+          await program.methods.closePlayer()
+            .accounts({ game: gamePda, player: playerPda(a.kp.publicKey), owner: a.kp.publicKey, cranker: payer.publicKey })
+            .signers([a.kp]).rpc();
+        } catch (e) { log(`  close player ${a.name}: ${String(e.message).slice(0, 50)}`); }
+      }
+      for (const id of taken) {
+        const creator = agents.find((a) => a.createdCircle === id);
+        if (!creator) continue;
+        try {
+          await program.methods.closeCircle()
+            .accounts({ game: gamePda, circle: circlePda(id), creator: creator.kp.publicKey, cranker: payer.publicKey })
+            .signers([creator.kp]).rpc();
+        } catch (e) { log(`  close circle ${id}: ${String(e.message).slice(0, 50)}`); }
+      }
+      const treasuryPda2 = pda(Buffer.from("treasury"));
+      await program.methods.closeGame()
+        .accounts({ game: gamePda, vault: vaultPda, treasury: treasuryPda2, treasuryVault: pda(Buffer.from("treasury_vault")), authority: payer.publicKey, cranker: payer.publicKey, systemProgram: SystemProgram.programId })
+        .rpc();
+      log(`  rent reclaimed (all per-game accounts closed)`);
+    } catch (e) { log(`  close sweep: ${String(e.message).slice(0, 60)}`); }
   } finally {
     await sweepBack(agents);
   }
-  log(`game ${gid}: done — funds swept back to swarm payer`);
+  log(`game ${gid}: done — funds + rent swept back to swarm payer`);
 }
 
 // one-time setup if this cluster has no config/treasury yet

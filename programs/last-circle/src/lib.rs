@@ -677,6 +677,70 @@ pub mod last_circle {
         let _ = gvbump;
         Ok(())
     }
+
+    // ----- Rent recovery: close settled per-game accounts --------------------
+    //
+    // Ordering is enforced by counters: players close first (player_count -> 0),
+    // then circles (circle_count -> 0), then the game itself (vault dust swept
+    // to the treasury jackpot). Guards make it impossible to close away an
+    // unclaimed entitlement unless its owner signs (an explicit forfeit).
+
+    /// Close a Player account; its rent returns to the player's wallet.
+    /// Permissionless once the player has nothing left to claim. If they still
+    /// have an unclaimed win (status Active) or an unclaimed skill share, only
+    /// the owner may close — their signature is an explicit forfeit.
+    pub fn close_player(ctx: Context<ClosePlayer>) -> Result<()> {
+        let g = &mut ctx.accounts.game;
+        require!(g.status == GameStatus::Settling, GameError::WrongPhase);
+        let p = &ctx.accounts.player;
+        let fully_settled = p.status != PlayerStatus::Active && (p.skill_claimed || p.points == 0);
+        if !fully_settled {
+            require!(ctx.accounts.owner.is_signer, GameError::Unauthorized);
+        }
+        g.player_count = g.player_count.saturating_sub(1);
+        Ok(())
+    }
+
+    /// Close a Circle account once every player is closed; rent returns to the
+    /// circle's creator. Closing the WINNING circle before its creator claimed
+    /// κ requires the creator's signature (an explicit forfeit of the cut).
+    pub fn close_circle(ctx: Context<CloseCircle>) -> Result<()> {
+        let g = &mut ctx.accounts.game;
+        require!(g.status == GameStatus::Settling, GameError::WrongPhase);
+        require!(g.player_count == 0, GameError::PlayersRemain);
+        let c = &ctx.accounts.circle;
+        if c.alive && !g.creator_cut_paid {
+            require!(ctx.accounts.creator.is_signer, GameError::Unauthorized);
+        }
+        g.circle_count = g.circle_count.saturating_sub(1);
+        Ok(())
+    }
+
+    /// Close the Game account last: sweep any vault dust (rounding remainders,
+    /// forfeited claims) into the treasury jackpot pool, then return the game
+    /// account's rent to the game authority. Vault drains to exactly zero.
+    pub fn close_game(ctx: Context<CloseGame>) -> Result<()> {
+        {
+            let g = &ctx.accounts.game;
+            require!(g.status == GameStatus::Settling, GameError::WrongPhase);
+            require!(g.player_count == 0, GameError::PlayersRemain);
+            require!(g.circle_count == 0, GameError::CirclesRemain);
+        }
+        let dust = ctx.accounts.vault.lamports();
+        if dust > 0 {
+            transfer_from_vault(
+                &ctx.accounts.vault,
+                &ctx.accounts.treasury_vault.to_account_info(),
+                &ctx.accounts.system_program,
+                ctx.accounts.game.key(),
+                ctx.accounts.game.vault_bump,
+                dust,
+            )?;
+            let t = &mut ctx.accounts.treasury;
+            t.jackpot_pool = t.jackpot_pool.checked_add(dust).ok_or(GameError::MathOverflow)?;
+        }
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1367,6 +1431,69 @@ pub struct Land<'info> {
     pub owner: Signer<'info>,
 }
 
+#[derive(Accounts)]
+pub struct ClosePlayer<'info> {
+    #[account(mut, seeds = [b"game", game.game_id.to_le_bytes().as_ref()], bump = game.bump)]
+    pub game: Account<'info, Game>,
+    #[account(
+        mut,
+        close = owner,
+        seeds = [b"player", game.key().as_ref(), player.owner.as_ref()],
+        bump = player.bump,
+        has_one = owner @ GameError::Unauthorized,
+        constraint = player.game == game.key() @ GameError::BadParam
+    )]
+    pub player: Account<'info, Player>,
+    /// CHECK: rent recipient; has_one enforces it equals player.owner. Its
+    /// signature is only required for the forfeit path (checked in handler).
+    #[account(mut)]
+    pub owner: UncheckedAccount<'info>,
+    pub cranker: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct CloseCircle<'info> {
+    #[account(mut, seeds = [b"game", game.game_id.to_le_bytes().as_ref()], bump = game.bump)]
+    pub game: Account<'info, Game>,
+    #[account(
+        mut,
+        close = creator,
+        seeds = [b"circle", game.key().as_ref(), &[circle.circle_id]],
+        bump = circle.bump,
+        has_one = creator @ GameError::Unauthorized,
+        constraint = circle.game == game.key() @ GameError::BadParam
+    )]
+    pub circle: Account<'info, Circle>,
+    /// CHECK: rent recipient; has_one enforces it equals circle.creator. Its
+    /// signature is only required to close an unclaimed winning circle.
+    #[account(mut)]
+    pub creator: UncheckedAccount<'info>,
+    pub cranker: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct CloseGame<'info> {
+    #[account(
+        mut,
+        close = authority,
+        seeds = [b"game", game.game_id.to_le_bytes().as_ref()],
+        bump = game.bump,
+        has_one = authority @ GameError::Unauthorized
+    )]
+    pub game: Account<'info, Game>,
+    #[account(mut, seeds = [b"vault", game.key().as_ref()], bump = game.vault_bump)]
+    pub vault: SystemAccount<'info>,
+    #[account(mut, seeds = [b"treasury"], bump = treasury.bump)]
+    pub treasury: Account<'info, Treasury>,
+    #[account(mut, seeds = [b"treasury_vault"], bump = treasury.vault_bump)]
+    pub treasury_vault: SystemAccount<'info>,
+    /// CHECK: rent recipient; has_one enforces it equals game.authority.
+    #[account(mut)]
+    pub authority: UncheckedAccount<'info>,
+    pub cranker: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
 // ---------------------------------------------------------------------------
 // errors
 // ---------------------------------------------------------------------------
@@ -1413,4 +1540,8 @@ pub enum GameError {
     TooEarly,
     #[msg("The join window is closed (past the 50% lock or wrong phase)")]
     JoinWindowClosed,
+    #[msg("All players must be closed first")]
+    PlayersRemain,
+    #[msg("All circles must be closed first")]
+    CirclesRemain,
 }

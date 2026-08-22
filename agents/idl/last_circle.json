@@ -172,8 +172,11 @@
       "name": "join_circle",
       "docs": [
         "Join an existing circle and stake into it. Allowed during the Lobby, and",
-        "for newcomers during the Commit phase of running instances up to the 50%",
-        "lock (`instance <= lock_instance`); frozen thereafter (anti-manipulation)."
+        "for newcomers during the Commit phase of running instances STRICTLY before",
+        "the 50% lock (`instance < lock_instance`); frozen from the lock instance",
+        "onward. The strict bound leaves no instance where joins are open at the",
+        "same time the post-lock insane roll (armed at `instance >= lock_instance`)",
+        "is computable \u2014 so the jackpot outcome can never be targeted at deposit."
       ],
       "discriminator": [
         231,
@@ -914,6 +917,135 @@
         },
         {
           "name": "recent_slot_hashes"
+        },
+        {
+          "name": "cranker",
+          "signer": true
+        },
+        {
+          "name": "system_program"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "close_player",
+      "docs": [
+        "Close a Player account; its rent returns to the player's wallet.",
+        "Permissionless once the player has nothing left to claim. If they still",
+        "have an unclaimed win (status Active) or an unclaimed skill share, only",
+        "the owner may close \u2014 their signature is an explicit forfeit."
+      ],
+      "discriminator": [
+        225,
+        227,
+        204,
+        63,
+        32,
+        122,
+        58,
+        227
+      ],
+      "accounts": [
+        {
+          "name": "game",
+          "writable": true
+        },
+        {
+          "name": "player",
+          "writable": true
+        },
+        {
+          "name": "owner",
+          "docs": [
+            "signature is only required for the forfeit path (checked in handler)."
+          ],
+          "writable": true
+        },
+        {
+          "name": "cranker",
+          "signer": true
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "close_circle",
+      "docs": [
+        "Close a Circle account once every player is closed; rent returns to the",
+        "circle's creator. Closing the WINNING circle before its creator claimed",
+        "\u03ba requires the creator's signature (an explicit forfeit of the cut)."
+      ],
+      "discriminator": [
+        249,
+        63,
+        161,
+        46,
+        147,
+        239,
+        34,
+        37
+      ],
+      "accounts": [
+        {
+          "name": "game",
+          "writable": true
+        },
+        {
+          "name": "circle",
+          "writable": true
+        },
+        {
+          "name": "creator",
+          "docs": [
+            "signature is only required to close an unclaimed winning circle."
+          ],
+          "writable": true
+        },
+        {
+          "name": "cranker",
+          "signer": true
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "close_game",
+      "docs": [
+        "Close the Game account last: sweep any vault dust (rounding remainders,",
+        "forfeited claims) into the treasury jackpot pool, then return the game",
+        "account's rent to the game authority. Vault drains to exactly zero."
+      ],
+      "discriminator": [
+        237,
+        236,
+        157,
+        201,
+        253,
+        20,
+        248,
+        67
+      ],
+      "accounts": [
+        {
+          "name": "game",
+          "writable": true
+        },
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "treasury",
+          "writable": true
+        },
+        {
+          "name": "treasury_vault",
+          "writable": true
+        },
+        {
+          "name": "authority",
+          "writable": true
         },
         {
           "name": "cranker",

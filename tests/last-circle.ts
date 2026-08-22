@@ -891,3 +891,93 @@ describe("last-circle — hardening: dead-circle escape + land window", () => {
     assert.ok(after - before > 0.4 * LAMPORTS_PER_SOL, "haircut refund still claimable");
   });
 });
+
+describe("last-circle — rent recovery: close player/circle/game", () => {
+  const provider = anchor.AnchorProvider.env();
+  anchor.setProvider(provider);
+  const program = anchor.workspace.LastCircle as Program<LastCircle>;
+  const authority = provider.wallet as anchor.Wallet;
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  const [configPda] = PublicKey.findProgramAddressSync([Buffer.from("config")], program.programId);
+  const [treasuryPda] = PublicKey.findProgramAddressSync([Buffer.from("treasury")], program.programId);
+  const [treasuryVaultPda] = PublicKey.findProgramAddressSync([Buffer.from("treasury_vault")], program.programId);
+  const gameId = new anchor.BN(Date.now() + 400);
+  const [gamePda] = PublicKey.findProgramAddressSync([Buffer.from("game"), gameId.toArrayLike(Buffer, "le", 8)], program.programId);
+  const [vaultPda] = PublicKey.findProgramAddressSync([Buffer.from("vault"), gamePda.toBuffer()], program.programId);
+  const circlePda = (id: number) => PublicKey.findProgramAddressSync([Buffer.from("circle"), gamePda.toBuffer(), Buffer.from([id])], program.programId)[0];
+  const playerPda = (o: PublicKey) => PublicKey.findProgramAddressSync([Buffer.from("player"), gamePda.toBuffer(), o.toBuffer()], program.programId)[0];
+
+  const p1 = Keypair.generate();
+  const ownerOf = (id: number) => (id === 0 ? authority.publicKey : p1.publicKey);
+  const signerOf = (id: number): Keypair[] => (id === 0 ? [] : [p1]);
+
+  it("settles a game, closes everything, vault drains to zero", async () => {
+    try {
+      await program.methods.initTreasury().accounts({ treasury: treasuryPda, treasuryVault: treasuryVaultPda, authority: authority.publicKey }).rpc();
+    } catch (_) {}
+    const sig = await provider.connection.requestAirdrop(p1.publicKey, 2 * LAMPORTS_PER_SOL);
+    await provider.connection.confirmTransaction(sig);
+
+    await program.methods.createGame(gameId, 6).accounts({ config: configPda, game: gamePda, vault: vaultPda, authority: authority.publicKey }).rpc();
+    const stake = new anchor.BN(LAMPORTS_PER_SOL);
+    for (const id of [0, 1]) {
+      await program.methods.createCircle(id, stake)
+        .accounts({ config: configPda, game: gamePda, vault: vaultPda, circle: circlePda(id), player: playerPda(ownerOf(id)), owner: ownerOf(id) })
+        .signers(signerOf(id)).rpc();
+    }
+    await program.methods.startGame().accounts({ game: gamePda, authority: authority.publicKey }).rpc();
+
+    // one instance -> one death -> Settling (no predictions: points stay 0)
+    await sleep(9000);
+    await program.methods.advanceToReveal().accounts({ game: gamePda, cranker: authority.publicKey }).rpc();
+    await sleep(10000);
+    await program.methods.selectDeath()
+      .accounts({ game: gamePda, recentSlotHashes: SYSVAR_SLOT_HASHES_PUBKEY, cranker: authority.publicKey })
+      .remainingAccounts([0, 1].map((i) => ({ pubkey: circlePda(i), isSigner: false, isWritable: false }))).rpc();
+    const doomed = (await program.account.game.fetch(gamePda)).doomedCircle;
+    await program.methods.executeDeath(doomed).accounts({ game: gamePda, circle: circlePda(doomed), cranker: authority.publicKey }).rpc();
+    await sleep(7000);
+    await program.methods.advanceInstance().accounts({ game: gamePda, cranker: authority.publicKey }).rpc();
+    const winner = doomed === 0 ? 1 : 0;
+
+    // full settlement: loser cashes out, winner claims, creator claims kappa
+    await program.methods.cashOut()
+      .accounts({ game: gamePda, vault: vaultPda, circle: circlePda(doomed), player: playerPda(ownerOf(doomed)), owner: ownerOf(doomed), systemProgram: SystemProgram.programId })
+      .signers(signerOf(doomed)).rpc();
+    await program.methods.claimWinnings()
+      .accounts({ game: gamePda, vault: vaultPda, winningCircle: circlePda(winner), player: playerPda(ownerOf(winner)), owner: ownerOf(winner), systemProgram: SystemProgram.programId })
+      .signers(signerOf(winner)).rpc();
+    await program.methods.claimCreatorCut()
+      .accounts({ game: gamePda, vault: vaultPda, winningCircle: circlePda(winner), owner: ownerOf(winner), systemProgram: SystemProgram.programId })
+      .signers(signerOf(winner)).rpc();
+    await program.methods.collectFees()
+      .accounts({ config: configPda, game: gamePda, vault: vaultPda, treasury: treasuryPda, treasuryVault: treasuryVaultPda, cranker: authority.publicKey, systemProgram: SystemProgram.programId }).rpc();
+
+    // close_circle must be rejected while players remain
+    let early = false;
+    try {
+      await program.methods.closeCircle().accounts({ game: gamePda, circle: circlePda(doomed), creator: ownerOf(doomed), cranker: authority.publicKey }).rpc();
+    } catch (e) { early = String(e).includes("PlayersRemain"); }
+    assert.ok(early, "close_circle rejected while players remain");
+
+    // close players (both fully settled, 0 points -> permissionless), rent returns to owners
+    const p1Before = await provider.connection.getBalance(p1.publicKey);
+    for (const id of [0, 1]) {
+      await program.methods.closePlayer().accounts({ game: gamePda, player: playerPda(ownerOf(id)), owner: ownerOf(id), cranker: authority.publicKey }).rpc();
+    }
+    const p1After = await provider.connection.getBalance(p1.publicKey);
+    assert.ok(p1After > p1Before, "player rent refunded to owner");
+    assert.equal(await provider.connection.getAccountInfo(playerPda(p1.publicKey)), null, "player account closed");
+
+    // close circles (winner's kappa already paid -> permissionless), then the game
+    for (const id of [0, 1]) {
+      await program.methods.closeCircle().accounts({ game: gamePda, circle: circlePda(id), creator: ownerOf(id), cranker: authority.publicKey }).rpc();
+    }
+    await program.methods.closeGame()
+      .accounts({ game: gamePda, vault: vaultPda, treasury: treasuryPda, treasuryVault: treasuryVaultPda, authority: authority.publicKey, cranker: authority.publicKey, systemProgram: SystemProgram.programId }).rpc();
+
+    assert.equal(await provider.connection.getAccountInfo(gamePda), null, "game account closed");
+    assert.equal(await provider.connection.getBalance(vaultPda), 0, "vault drained to exactly zero");
+  });
+});
