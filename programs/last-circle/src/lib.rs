@@ -9,6 +9,9 @@
 //!   Σ deposits == Σ payouts + house_profit + Δ(jackpot_pool)   (exact to the lamport)
 
 use anchor_lang::prelude::*;
+use anchor_spl::token_interface::{
+    self, Mint, TokenAccount, TokenInterface, TransferChecked,
+};
 
 declare_id!("4TNbztSMd3zxG57M25y8WhpcKrQMJQVYEK6EnnkQy1Hw");
 
@@ -91,6 +94,7 @@ pub mod last_circle {
         g.entropy_slot = 0;
         g.insane_entropy_slot = 0;
         g.created_at = Clock::get()?.unix_timestamp;
+        g.stake_mint = ctx.accounts.stake_mint.key();
         g.creator_cut_paid = false;
         g.insane_rolled = false;
         g.insane = false;
@@ -108,9 +112,11 @@ pub mod last_circle {
         let net = take_deposit(
             &ctx.accounts.config,
             stake,
-            &ctx.accounts.owner,
+            &ctx.accounts.owner_token,
             &ctx.accounts.vault,
-            &ctx.accounts.system_program,
+            &ctx.accounts.stake_mint,
+            &ctx.accounts.owner,
+            &ctx.accounts.token_program,
         )?;
         record_deposit(g, stake, net)?;
 
@@ -151,9 +157,11 @@ pub mod last_circle {
         let net = take_deposit(
             &ctx.accounts.config,
             stake,
-            &ctx.accounts.owner,
+            &ctx.accounts.owner_token,
             &ctx.accounts.vault,
-            &ctx.accounts.system_program,
+            &ctx.accounts.stake_mint,
+            &ctx.accounts.owner,
+            &ctx.accounts.token_program,
         )?;
         record_deposit(g, stake, net)?;
 
@@ -448,8 +456,9 @@ pub mod last_circle {
         let refund = (p.stake as u128 * c.refund_bps as u128 / BPS) as u64;
         transfer_from_vault(
             &ctx.accounts.vault,
-            &ctx.accounts.owner.to_account_info(),
-            &ctx.accounts.system_program,
+            &ctx.accounts.owner_token,
+            &ctx.accounts.stake_mint,
+            &ctx.accounts.token_program,
             g.key(),
             g.vault_bump,
             refund,
@@ -503,8 +512,9 @@ pub mod last_circle {
         ctx.accounts.game.creator_cut_paid = true;
         transfer_from_vault(
             &ctx.accounts.vault,
-            &ctx.accounts.owner.to_account_info(),
-            &ctx.accounts.system_program,
+            &ctx.accounts.owner_token,
+            &ctx.accounts.stake_mint,
+            &ctx.accounts.token_program,
             gkey,
             vbump,
             creator_cut,
@@ -542,8 +552,9 @@ pub mod last_circle {
         };
         transfer_from_vault(
             &ctx.accounts.vault,
-            &ctx.accounts.owner.to_account_info(),
-            &ctx.accounts.system_program,
+            &ctx.accounts.owner_token,
+            &ctx.accounts.stake_mint,
+            &ctx.accounts.token_program,
             gkey,
             vbump,
             payout,
@@ -570,8 +581,9 @@ pub mod last_circle {
         };
         transfer_from_vault(
             &ctx.accounts.vault,
-            &ctx.accounts.owner.to_account_info(),
-            &ctx.accounts.system_program,
+            &ctx.accounts.owner_token,
+            &ctx.accounts.stake_mint,
+            &ctx.accounts.token_program,
             gkey,
             vbump,
             share,
@@ -606,8 +618,9 @@ pub mod last_circle {
 
         transfer_from_vault(
             &ctx.accounts.vault,
-            &ctx.accounts.treasury_vault.to_account_info(),
-            &ctx.accounts.system_program,
+            &ctx.accounts.treasury_vault,
+            &ctx.accounts.stake_mint,
+            &ctx.accounts.token_program,
             gkey,
             gvbump,
             fees,
@@ -630,8 +643,9 @@ pub mod last_circle {
         ctx.accounts.treasury.house_balance -= amount;
         transfer_from_treasury(
             &ctx.accounts.treasury_vault,
-            &ctx.accounts.authority.to_account_info(),
-            &ctx.accounts.system_program,
+            &ctx.accounts.authority_token,
+            &ctx.accounts.stake_mint,
+            &ctx.accounts.token_program,
             vbump,
             amount,
         )
@@ -673,8 +687,9 @@ pub mod last_circle {
             if jackpot > 0 {
                 transfer_from_treasury(
                     &ctx.accounts.treasury_vault,
-                    &ctx.accounts.vault.to_account_info(),
-                    &ctx.accounts.system_program,
+                    &ctx.accounts.vault,
+                    &ctx.accounts.stake_mint,
+                    &ctx.accounts.token_program,
                     ctx.accounts.treasury.vault_bump,
                     jackpot,
                 )?;
@@ -685,6 +700,21 @@ pub mod last_circle {
             ctx.accounts.game.insane = true;
         }
         let _ = gvbump;
+        Ok(())
+    }
+
+    /// Authority-only: mark an SPL mint playable. Combs can only ever be opened
+    /// in a mint that has one of these, so $BUZZ and $ANSEM are enabled
+    /// deliberately and anything else is refused.
+    pub fn allow_mint(ctx: Context<AllowMint>, enabled: bool) -> Result<()> {
+        require!(
+            ctx.accounts.config.authority == ctx.accounts.authority.key(),
+            GameError::Unauthorized
+        );
+        let a = &mut ctx.accounts.allowed;
+        a.mint = ctx.accounts.mint.key();
+        a.enabled = enabled;
+        a.bump = ctx.bumps.allowed;
         Ok(())
     }
 
@@ -724,11 +754,12 @@ pub mod last_circle {
             gross
         };
         // never pay out more than the vault holds (rounding safety)
-        let cap = ctx.accounts.vault.lamports();
+        let cap = ctx.accounts.vault.amount;
         transfer_from_vault(
             &ctx.accounts.vault,
-            &ctx.accounts.owner.to_account_info(),
-            &ctx.accounts.system_program,
+            &ctx.accounts.owner_token,
+            &ctx.accounts.stake_mint,
+            &ctx.accounts.token_program,
             gkey,
             vbump,
             gross.min(cap),
@@ -788,7 +819,7 @@ pub mod last_circle {
         // is the dust we are about to sweep now.
         {
             let g = &ctx.accounts.game;
-            let vault = ctx.accounts.vault.lamports();
+            let vault = ctx.accounts.vault.amount;
             // outstanding obligations must all be settled by now
             require!(g.player_count == 0, GameError::PlayersRemain);
             require!(g.circle_count == 0, GameError::CirclesRemain);
@@ -797,12 +828,13 @@ pub mod last_circle {
             // the vault cannot hold more than the pot it was still owed
             require!(vault <= g.total_deposited, GameError::ConservationViolated);
         }
-        let dust = ctx.accounts.vault.lamports();
+        let dust = ctx.accounts.vault.amount;
         if dust > 0 {
             transfer_from_vault(
                 &ctx.accounts.vault,
-                &ctx.accounts.treasury_vault.to_account_info(),
-                &ctx.accounts.system_program,
+                &ctx.accounts.treasury_vault,
+                &ctx.accounts.stake_mint,
+                &ctx.accounts.token_program,
                 ctx.accounts.game.key(),
                 ctx.accounts.game.vault_bump,
                 dust,
@@ -823,21 +855,26 @@ pub mod last_circle {
 fn take_deposit<'info>(
     config: &Account<'info, GameConfig>,
     stake: u64,
+    from: &InterfaceAccount<'info, TokenAccount>,
+    vault: &InterfaceAccount<'info, TokenAccount>,
+    mint: &InterfaceAccount<'info, Mint>,
     owner: &Signer<'info>,
-    vault: &SystemAccount<'info>,
-    system_program: &Program<'info, System>,
+    token_program: &Interface<'info, TokenInterface>,
 ) -> Result<u64> {
     require!(stake >= config.min_stake && stake <= config.max_stake, GameError::StakeOutOfRange);
 
-    anchor_lang::system_program::transfer(
+    token_interface::transfer_checked(
         CpiContext::new(
-            system_program.to_account_info(),
-            anchor_lang::system_program::Transfer {
-                from: owner.to_account_info(),
+            token_program.to_account_info(),
+            TransferChecked {
+                from: from.to_account_info(),
+                mint: mint.to_account_info(),
                 to: vault.to_account_info(),
+                authority: owner.to_account_info(),
             },
         ),
         stake,
+        mint.decimals,
     )?;
 
     let rake = ((stake as u128 * config.fee_bps as u128) / BPS) as u64;
@@ -917,37 +954,44 @@ fn pot_split(leftover: u64, total_points: u64) -> (u64, u64, u64) {
     (creator_cut, luck_pool, skill_pool)
 }
 
-/// Transfer `amount` lamports out of the treasury vault PDA (signed).
+/// Move `amount` out of the per-mint treasury vault (it signs for itself).
 fn transfer_from_treasury<'info>(
-    treasury_vault: &SystemAccount<'info>,
-    to: &AccountInfo<'info>,
-    system_program: &Program<'info, System>,
+    treasury_vault: &InterfaceAccount<'info, TokenAccount>,
+    to: &InterfaceAccount<'info, TokenAccount>,
+    mint: &InterfaceAccount<'info, Mint>,
+    token_program: &Interface<'info, TokenInterface>,
     vault_bump: u8,
     amount: u64,
 ) -> Result<()> {
     if amount == 0 {
         return Ok(());
     }
-    let seeds: &[&[u8]] = &[b"treasury_vault", &[vault_bump]];
-    anchor_lang::system_program::transfer(
+    require!(amount <= treasury_vault.amount, GameError::ConservationViolated);
+    let mint_key = mint.key();
+    let seeds: &[&[u8]] = &[b"tvault", mint_key.as_ref(), &[vault_bump]];
+    token_interface::transfer_checked(
         CpiContext::new_with_signer(
-            system_program.to_account_info(),
-            anchor_lang::system_program::Transfer {
+            token_program.to_account_info(),
+            TransferChecked {
                 from: treasury_vault.to_account_info(),
-                to: to.clone(),
+                mint: mint.to_account_info(),
+                to: to.to_account_info(),
+                authority: treasury_vault.to_account_info(),
             },
             &[seeds],
         ),
         amount,
-    )?;
-    Ok(())
+        mint.decimals,
+    )
 }
 
-/// Transfer `amount` lamports out of the program-owned vault PDA (signed).
+/// Move `amount` of the stake mint out of a game's vault (the vault PDA signs
+/// for itself). Conservation: never more than the vault actually holds.
 fn transfer_from_vault<'info>(
-    vault: &SystemAccount<'info>,
-    to: &AccountInfo<'info>,
-    system_program: &Program<'info, System>,
+    vault: &InterfaceAccount<'info, TokenAccount>,
+    to: &InterfaceAccount<'info, TokenAccount>,
+    mint: &InterfaceAccount<'info, Mint>,
+    token_program: &Interface<'info, TokenInterface>,
     game_key: Pubkey,
     vault_bump: u8,
     amount: u64,
@@ -955,22 +999,22 @@ fn transfer_from_vault<'info>(
     if amount == 0 {
         return Ok(());
     }
-    // CONSERVATION: a game can never pay out more than its vault holds. Without
-    // this a rounding or accounting bug drains into other games' escrow.
-    require!(amount <= vault.lamports(), GameError::ConservationViolated);
+    require!(amount <= vault.amount, GameError::ConservationViolated);
     let seeds: &[&[u8]] = &[b"vault", game_key.as_ref(), &[vault_bump]];
-    anchor_lang::system_program::transfer(
+    token_interface::transfer_checked(
         CpiContext::new_with_signer(
-            system_program.to_account_info(),
-            anchor_lang::system_program::Transfer {
+            token_program.to_account_info(),
+            TransferChecked {
                 from: vault.to_account_info(),
-                to: to.clone(),
+                mint: mint.to_account_info(),
+                to: to.to_account_info(),
+                authority: vault.to_account_info(),
             },
             &[seeds],
         ),
         amount,
-    )?;
-    Ok(())
+        mint.decimals,
+    )
 }
 
 fn init_player(player: &mut Account<Player>, game: Pubkey, owner: Pubkey, stake: u64, circle_id: u8, bump: u8) {
@@ -1010,6 +1054,17 @@ impl GameConfig {
 
 /// Cross-game treasury: accumulates house profit (withdrawable) and the jackpot
 /// pool that feeds insane rounds. Lamports live in a separate treasury vault PDA.
+/// Presence of this account (with enabled = true) is what makes a mint playable.
+#[account]
+pub struct AllowedMint {
+    pub mint: Pubkey,
+    pub enabled: bool,
+    pub bump: u8,
+}
+impl AllowedMint {
+    pub const SPACE: usize = 8 + 32 + 1 + 1;
+}
+
 #[account]
 pub struct Treasury {
     pub authority: Pubkey,
@@ -1053,6 +1108,9 @@ pub struct Game {
     /// unix time the lobby opened; after LOBBY_TIMEOUT_SECONDS without a start,
     /// anyone may abort the game and every player reclaims their full deposit.
     pub created_at: i64,
+    /// the SPL mint every stake in this game is denominated in. One mint per
+    /// game: a pot is never mixed. Wrapped SOL is just another allowed mint.
+    pub stake_mint: Pubkey,
     /// set once the winning circle's creator has claimed κ.
     pub creator_cut_paid: bool,
     /// whether the post-lock insane roll has happened, and its outcome.
@@ -1063,7 +1121,7 @@ pub struct Game {
 }
 impl Game {
     pub const SPACE: usize =
-        8 + 8 + 32 + 1 + 1 + 2 + 2 + 1 + 8 + 4 + 1 + 1 + 1 + 4 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 1 + 1 + 1 + 1 + 1;
+        8 + 8 + 32 + 1 + 1 + 2 + 2 + 1 + 8 + 4 + 1 + 1 + 1 + 4 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 32 + 1 + 1 + 1 + 1 + 1;
     /// Commit window = 60% of the instance, reveal = 40% (min 1s each).
     pub fn commit_window(&self) -> i64 {
         ((self.instance_seconds as i64) * 3 / 5).max(1)
@@ -1166,6 +1224,15 @@ pub struct InitializeConfig<'info> {
 pub struct CreateGame<'info> {
     #[account(seeds = [b"config"], bump = config.bump)]
     pub config: Account<'info, GameConfig>,
+    /// the mint every stake in this game is denominated in
+    pub stake_mint: InterfaceAccount<'info, Mint>,
+    /// gate: only mints the authority has allowed can open combs
+    #[account(
+        seeds = [b"allowed", stake_mint.key().as_ref()],
+        bump = allowed.bump,
+        constraint = allowed.enabled @ GameError::MintNotAllowed
+    )]
+    pub allowed: Account<'info, AllowedMint>,
     #[account(
         init,
         payer = authority,
@@ -1174,15 +1241,20 @@ pub struct CreateGame<'info> {
         bump
     )]
     pub game: Account<'info, Game>,
-    /// SOL escrow PDA for this game. System-owned; holds all staked lamports.
+    /// token escrow for this game; the PDA is its own authority
     #[account(
-        mut,
+        init,
+        payer = authority,
         seeds = [b"vault", game.key().as_ref()],
-        bump
+        bump,
+        token::mint = stake_mint,
+        token::authority = vault,
+        token::token_program = token_program
     )]
-    pub vault: SystemAccount<'info>,
+    pub vault: InterfaceAccount<'info, TokenAccount>,
     #[account(mut)]
     pub authority: Signer<'info>,
+    pub token_program: Interface<'info, TokenInterface>,
     pub system_program: Program<'info, System>,
 }
 
@@ -1194,7 +1266,7 @@ pub struct CreateCircle<'info> {
     #[account(mut, seeds = [b"game", game.game_id.to_le_bytes().as_ref()], bump = game.bump)]
     pub game: Account<'info, Game>,
     #[account(mut, seeds = [b"vault", game.key().as_ref()], bump = game.vault_bump)]
-    pub vault: SystemAccount<'info>,
+    pub vault: InterfaceAccount<'info, TokenAccount>,
     #[account(
         init,
         payer = owner,
@@ -1213,6 +1285,13 @@ pub struct CreateCircle<'info> {
     pub player: Account<'info, Player>,
     #[account(mut)]
     pub owner: Signer<'info>,
+    /// stake mint for this game
+    #[account(address = game.stake_mint @ GameError::BadParam)]
+    pub stake_mint: InterfaceAccount<'info, Mint>,
+    /// the caller's token account for that mint
+    #[account(mut, token::mint = stake_mint, token::authority = owner)]
+    pub owner_token: InterfaceAccount<'info, TokenAccount>,
+    pub token_program: Interface<'info, TokenInterface>,
     pub system_program: Program<'info, System>,
 }
 
@@ -1223,7 +1302,7 @@ pub struct JoinCircle<'info> {
     #[account(mut, seeds = [b"game", game.game_id.to_le_bytes().as_ref()], bump = game.bump)]
     pub game: Account<'info, Game>,
     #[account(mut, seeds = [b"vault", game.key().as_ref()], bump = game.vault_bump)]
-    pub vault: SystemAccount<'info>,
+    pub vault: InterfaceAccount<'info, TokenAccount>,
     #[account(
         mut,
         seeds = [b"circle", game.key().as_ref(), &[circle.circle_id]],
@@ -1240,6 +1319,13 @@ pub struct JoinCircle<'info> {
     pub player: Account<'info, Player>,
     #[account(mut)]
     pub owner: Signer<'info>,
+    /// stake mint for this game
+    #[account(address = game.stake_mint @ GameError::BadParam)]
+    pub stake_mint: InterfaceAccount<'info, Mint>,
+    /// the caller's token account for that mint
+    #[account(mut, token::mint = stake_mint, token::authority = owner)]
+    pub owner_token: InterfaceAccount<'info, TokenAccount>,
+    pub token_program: Interface<'info, TokenInterface>,
     pub system_program: Program<'info, System>,
 }
 
@@ -1350,7 +1436,7 @@ pub struct CashOut<'info> {
     #[account(seeds = [b"game", game.game_id.to_le_bytes().as_ref()], bump = game.bump)]
     pub game: Account<'info, Game>,
     #[account(mut, seeds = [b"vault", game.key().as_ref()], bump = game.vault_bump)]
-    pub vault: SystemAccount<'info>,
+    pub vault: InterfaceAccount<'info, TokenAccount>,
     #[account(
         seeds = [b"circle", game.key().as_ref(), &[circle.circle_id]],
         bump = circle.bump
@@ -1366,6 +1452,13 @@ pub struct CashOut<'info> {
     pub player: Account<'info, Player>,
     #[account(mut)]
     pub owner: Signer<'info>,
+    /// stake mint for this game
+    #[account(address = game.stake_mint @ GameError::BadParam)]
+    pub stake_mint: InterfaceAccount<'info, Mint>,
+    /// the caller's token account for that mint
+    #[account(mut, token::mint = stake_mint, token::authority = owner)]
+    pub owner_token: InterfaceAccount<'info, TokenAccount>,
+    pub token_program: Interface<'info, TokenInterface>,
     pub system_program: Program<'info, System>,
 }
 
@@ -1374,7 +1467,7 @@ pub struct ClaimCreatorCut<'info> {
     #[account(mut, seeds = [b"game", game.game_id.to_le_bytes().as_ref()], bump = game.bump)]
     pub game: Account<'info, Game>,
     #[account(mut, seeds = [b"vault", game.key().as_ref()], bump = game.vault_bump)]
-    pub vault: SystemAccount<'info>,
+    pub vault: InterfaceAccount<'info, TokenAccount>,
     #[account(
         seeds = [b"circle", game.key().as_ref(), &[winning_circle.circle_id]],
         bump = winning_circle.bump
@@ -1382,6 +1475,13 @@ pub struct ClaimCreatorCut<'info> {
     pub winning_circle: Account<'info, Circle>,
     #[account(mut)]
     pub owner: Signer<'info>,
+    /// stake mint for this game
+    #[account(address = game.stake_mint @ GameError::BadParam)]
+    pub stake_mint: InterfaceAccount<'info, Mint>,
+    /// the caller's token account for that mint
+    #[account(mut, token::mint = stake_mint, token::authority = owner)]
+    pub owner_token: InterfaceAccount<'info, TokenAccount>,
+    pub token_program: Interface<'info, TokenInterface>,
     pub system_program: Program<'info, System>,
 }
 
@@ -1390,7 +1490,7 @@ pub struct ClaimWinnings<'info> {
     #[account(seeds = [b"game", game.game_id.to_le_bytes().as_ref()], bump = game.bump)]
     pub game: Account<'info, Game>,
     #[account(mut, seeds = [b"vault", game.key().as_ref()], bump = game.vault_bump)]
-    pub vault: SystemAccount<'info>,
+    pub vault: InterfaceAccount<'info, TokenAccount>,
     #[account(
         seeds = [b"circle", game.key().as_ref(), &[winning_circle.circle_id]],
         bump = winning_circle.bump
@@ -1406,6 +1506,13 @@ pub struct ClaimWinnings<'info> {
     pub player: Account<'info, Player>,
     #[account(mut)]
     pub owner: Signer<'info>,
+    /// stake mint for this game
+    #[account(address = game.stake_mint @ GameError::BadParam)]
+    pub stake_mint: InterfaceAccount<'info, Mint>,
+    /// the caller's token account for that mint
+    #[account(mut, token::mint = stake_mint, token::authority = owner)]
+    pub owner_token: InterfaceAccount<'info, TokenAccount>,
+    pub token_program: Interface<'info, TokenInterface>,
     pub system_program: Program<'info, System>,
 }
 
@@ -1414,7 +1521,7 @@ pub struct ClaimSkill<'info> {
     #[account(seeds = [b"game", game.game_id.to_le_bytes().as_ref()], bump = game.bump)]
     pub game: Account<'info, Game>,
     #[account(mut, seeds = [b"vault", game.key().as_ref()], bump = game.vault_bump)]
-    pub vault: SystemAccount<'info>,
+    pub vault: InterfaceAccount<'info, TokenAccount>,
     #[account(
         mut,
         seeds = [b"player", game.key().as_ref(), owner.key().as_ref()],
@@ -1425,17 +1532,30 @@ pub struct ClaimSkill<'info> {
     pub player: Account<'info, Player>,
     #[account(mut)]
     pub owner: Signer<'info>,
+    /// stake mint for this game
+    #[account(address = game.stake_mint @ GameError::BadParam)]
+    pub stake_mint: InterfaceAccount<'info, Mint>,
+    /// the caller's token account for that mint
+    #[account(mut, token::mint = stake_mint, token::authority = owner)]
+    pub owner_token: InterfaceAccount<'info, TokenAccount>,
+    pub token_program: Interface<'info, TokenInterface>,
     pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
 pub struct InitTreasury<'info> {
-    #[account(init, payer = authority, space = Treasury::SPACE, seeds = [b"treasury"], bump)]
+    pub stake_mint: InterfaceAccount<'info, Mint>,
+    #[account(init, payer = authority, space = Treasury::SPACE,
+        seeds = [b"treasury", stake_mint.key().as_ref()], bump)]
     pub treasury: Account<'info, Treasury>,
-    #[account(seeds = [b"treasury_vault"], bump)]
-    pub treasury_vault: SystemAccount<'info>,
+    #[account(init, payer = authority,
+        seeds = [b"tvault", stake_mint.key().as_ref()], bump,
+        token::mint = stake_mint, token::authority = treasury_vault,
+        token::token_program = token_program)]
+    pub treasury_vault: InterfaceAccount<'info, TokenAccount>,
     #[account(mut)]
     pub authority: Signer<'info>,
+    pub token_program: Interface<'info, TokenInterface>,
     pub system_program: Program<'info, System>,
 }
 
@@ -1446,23 +1566,30 @@ pub struct CollectFees<'info> {
     #[account(mut, seeds = [b"game", game.game_id.to_le_bytes().as_ref()], bump = game.bump)]
     pub game: Account<'info, Game>,
     #[account(mut, seeds = [b"vault", game.key().as_ref()], bump = game.vault_bump)]
-    pub vault: SystemAccount<'info>,
-    #[account(mut, seeds = [b"treasury"], bump = treasury.bump)]
+    pub vault: InterfaceAccount<'info, TokenAccount>,
+    #[account(mut, seeds = [b"treasury", stake_mint.key().as_ref()], bump = treasury.bump)]
     pub treasury: Account<'info, Treasury>,
-    #[account(mut, seeds = [b"treasury_vault"], bump = treasury.vault_bump)]
-    pub treasury_vault: SystemAccount<'info>,
+    #[account(mut, seeds = [b"tvault", stake_mint.key().as_ref()], bump = treasury.vault_bump)]
+    pub treasury_vault: InterfaceAccount<'info, TokenAccount>,
+    #[account(address = game.stake_mint @ GameError::BadParam)]
+    pub stake_mint: InterfaceAccount<'info, Mint>,
+    pub token_program: Interface<'info, TokenInterface>,
     pub cranker: Signer<'info>,
     pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
 pub struct WithdrawHouse<'info> {
-    #[account(mut, seeds = [b"treasury"], bump = treasury.bump)]
+    #[account(mut, seeds = [b"treasury", stake_mint.key().as_ref()], bump = treasury.bump)]
     pub treasury: Account<'info, Treasury>,
-    #[account(mut, seeds = [b"treasury_vault"], bump = treasury.vault_bump)]
-    pub treasury_vault: SystemAccount<'info>,
+    #[account(mut, seeds = [b"tvault", stake_mint.key().as_ref()], bump = treasury.vault_bump)]
+    pub treasury_vault: InterfaceAccount<'info, TokenAccount>,
+    pub stake_mint: InterfaceAccount<'info, Mint>,
+    #[account(mut, token::mint = stake_mint, token::authority = authority)]
+    pub authority_token: InterfaceAccount<'info, TokenAccount>,
     #[account(mut)]
     pub authority: Signer<'info>,
+    pub token_program: Interface<'info, TokenInterface>,
     pub system_program: Program<'info, System>,
 }
 
@@ -1473,13 +1600,16 @@ pub struct RollInsane<'info> {
     #[account(mut, seeds = [b"game", game.game_id.to_le_bytes().as_ref()], bump = game.bump)]
     pub game: Account<'info, Game>,
     #[account(mut, seeds = [b"vault", game.key().as_ref()], bump = game.vault_bump)]
-    pub vault: SystemAccount<'info>,
-    #[account(mut, seeds = [b"treasury"], bump = treasury.bump)]
+    pub vault: InterfaceAccount<'info, TokenAccount>,
+    #[account(mut, seeds = [b"treasury", stake_mint.key().as_ref()], bump = treasury.bump)]
     pub treasury: Account<'info, Treasury>,
-    #[account(mut, seeds = [b"treasury_vault"], bump = treasury.vault_bump)]
-    pub treasury_vault: SystemAccount<'info>,
+    #[account(mut, seeds = [b"tvault", stake_mint.key().as_ref()], bump = treasury.vault_bump)]
+    pub treasury_vault: InterfaceAccount<'info, TokenAccount>,
     /// CHECK: validated against the SlotHashes sysvar id in slothash_at.
     pub recent_slot_hashes: UncheckedAccount<'info>,
+    #[account(address = game.stake_mint @ GameError::BadParam)]
+    pub stake_mint: InterfaceAccount<'info, Mint>,
+    pub token_program: Interface<'info, TokenInterface>,
     pub cranker: Signer<'info>,
     pub system_program: Program<'info, System>,
 }
@@ -1513,6 +1643,24 @@ pub struct Land<'info> {
 }
 
 #[derive(Accounts)]
+pub struct AllowMint<'info> {
+    #[account(seeds = [b"config"], bump = config.bump)]
+    pub config: Account<'info, GameConfig>,
+    pub mint: InterfaceAccount<'info, Mint>,
+    #[account(
+        init_if_needed,
+        payer = authority,
+        space = AllowedMint::SPACE,
+        seeds = [b"allowed", mint.key().as_ref()],
+        bump
+    )]
+    pub allowed: Account<'info, AllowedMint>,
+    #[account(mut)]
+    pub authority: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
 pub struct AbortLobby<'info> {
     #[account(mut, seeds = [b"game", game.game_id.to_le_bytes().as_ref()], bump = game.bump)]
     pub game: Account<'info, Game>,
@@ -1526,7 +1674,7 @@ pub struct ClaimAbortRefund<'info> {
     #[account(mut, seeds = [b"game", game.game_id.to_le_bytes().as_ref()], bump = game.bump)]
     pub game: Account<'info, Game>,
     #[account(mut, seeds = [b"vault", game.key().as_ref()], bump = game.vault_bump)]
-    pub vault: SystemAccount<'info>,
+    pub vault: InterfaceAccount<'info, TokenAccount>,
     #[account(
         mut,
         seeds = [b"player", game.key().as_ref(), owner.key().as_ref()],
@@ -1537,6 +1685,13 @@ pub struct ClaimAbortRefund<'info> {
     pub player: Account<'info, Player>,
     #[account(mut)]
     pub owner: Signer<'info>,
+    /// stake mint for this game
+    #[account(address = game.stake_mint @ GameError::BadParam)]
+    pub stake_mint: InterfaceAccount<'info, Mint>,
+    /// the caller's token account for that mint
+    #[account(mut, token::mint = stake_mint, token::authority = owner)]
+    pub owner_token: InterfaceAccount<'info, TokenAccount>,
+    pub token_program: Interface<'info, TokenInterface>,
     pub system_program: Program<'info, System>,
 }
 
@@ -1591,14 +1746,17 @@ pub struct CloseGame<'info> {
     )]
     pub game: Account<'info, Game>,
     #[account(mut, seeds = [b"vault", game.key().as_ref()], bump = game.vault_bump)]
-    pub vault: SystemAccount<'info>,
-    #[account(mut, seeds = [b"treasury"], bump = treasury.bump)]
+    pub vault: InterfaceAccount<'info, TokenAccount>,
+    #[account(mut, seeds = [b"treasury", stake_mint.key().as_ref()], bump = treasury.bump)]
     pub treasury: Account<'info, Treasury>,
-    #[account(mut, seeds = [b"treasury_vault"], bump = treasury.vault_bump)]
-    pub treasury_vault: SystemAccount<'info>,
+    #[account(mut, seeds = [b"tvault", stake_mint.key().as_ref()], bump = treasury.vault_bump)]
+    pub treasury_vault: InterfaceAccount<'info, TokenAccount>,
     /// CHECK: rent recipient; has_one enforces it equals game.authority.
     #[account(mut)]
     pub authority: UncheckedAccount<'info>,
+    #[account(address = game.stake_mint @ GameError::BadParam)]
+    pub stake_mint: InterfaceAccount<'info, Mint>,
+    pub token_program: Interface<'info, TokenInterface>,
     pub cranker: Signer<'info>,
     pub system_program: Program<'info, System>,
 }
@@ -1657,4 +1815,6 @@ pub enum GameError {
     ConservationViolated,
     #[msg("This game has reached its deposit cap")]
     GameCapReached,
+    #[msg("That mint is not allowed to open combs")]
+    MintNotAllowed,
 }
