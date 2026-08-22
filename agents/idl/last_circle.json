@@ -928,7 +928,7 @@
   ],
   "accounts": [
     {
-      "name": "last_circle::Circle",
+      "name": "Circle",
       "discriminator": [
         27,
         59,
@@ -941,7 +941,7 @@
       ]
     },
     {
-      "name": "last_circle::Game",
+      "name": "Game",
       "discriminator": [
         27,
         90,
@@ -954,7 +954,7 @@
       ]
     },
     {
-      "name": "last_circle::GameConfig",
+      "name": "GameConfig",
       "discriminator": [
         45,
         146,
@@ -967,7 +967,7 @@
       ]
     },
     {
-      "name": "last_circle::Player",
+      "name": "Player",
       "discriminator": [
         205,
         222,
@@ -980,7 +980,7 @@
       ]
     },
     {
-      "name": "last_circle::Treasury",
+      "name": "Treasury",
       "discriminator": [
         238,
         239,
@@ -995,7 +995,7 @@
   ],
   "types": [
     {
-      "name": "last_circle::Circle",
+      "name": "Circle",
       "type": {
         "kind": "struct",
         "fields": [
@@ -1038,7 +1038,7 @@
       }
     },
     {
-      "name": "last_circle::Game",
+      "name": "Game",
       "type": {
         "kind": "struct",
         "fields": [
@@ -1054,7 +1054,7 @@
             "name": "status",
             "type": {
               "defined": {
-                "name": "last_circle::GameStatus"
+                "name": "GameStatus"
               }
             }
           },
@@ -1074,7 +1074,7 @@
             "name": "phase",
             "type": {
               "defined": {
-                "name": "last_circle::InstancePhase"
+                "name": "InstancePhase"
               }
             }
           },
@@ -1171,7 +1171,7 @@
       }
     },
     {
-      "name": "last_circle::GameConfig",
+      "name": "GameConfig",
       "type": {
         "kind": "struct",
         "fields": [
@@ -1214,7 +1214,7 @@
       }
     },
     {
-      "name": "last_circle::GameStatus",
+      "name": "GameStatus",
       "type": {
         "kind": "enum",
         "variants": [
@@ -1234,7 +1234,7 @@
       }
     },
     {
-      "name": "last_circle::InstancePhase",
+      "name": "InstancePhase",
       "type": {
         "kind": "enum",
         "variants": [
@@ -1254,7 +1254,7 @@
       }
     },
     {
-      "name": "last_circle::Player",
+      "name": "Player",
       "type": {
         "kind": "struct",
         "fields": [
@@ -1282,7 +1282,7 @@
             "name": "status",
             "type": {
               "defined": {
-                "name": "last_circle::PlayerStatus"
+                "name": "PlayerStatus"
               }
             }
           },
@@ -1339,7 +1339,7 @@
       }
     },
     {
-      "name": "last_circle::PlayerStatus",
+      "name": "PlayerStatus",
       "type": {
         "kind": "enum",
         "variants": [
@@ -1359,7 +1359,7 @@
       }
     },
     {
-      "name": "last_circle::Treasury",
+      "name": "Treasury",
       "docs": [
         "Cross-game treasury: accumulates house profit (withdrawable) and the jackpot",
         "pool that feeds insane rounds. Lamports live in a separate treasury vault PDA."

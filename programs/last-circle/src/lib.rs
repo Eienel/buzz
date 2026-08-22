@@ -123,14 +123,17 @@ pub mod last_circle {
     }
 
     /// Join an existing circle and stake into it. Allowed during the Lobby, and
-    /// for newcomers during the Commit phase of running instances up to the 50%
-    /// lock (`instance <= lock_instance`); frozen thereafter (anti-manipulation).
+    /// for newcomers during the Commit phase of running instances STRICTLY before
+    /// the 50% lock (`instance < lock_instance`); frozen from the lock instance
+    /// onward. The strict bound leaves no instance where joins are open at the
+    /// same time the post-lock insane roll (armed at `instance >= lock_instance`)
+    /// is computable — so the jackpot outcome can never be targeted at deposit.
     pub fn join_circle(ctx: Context<JoinCircle>, stake: u64) -> Result<()> {
         let g = &mut ctx.accounts.game;
         let open = g.status == GameStatus::Lobby
             || (g.status == GameStatus::Running
                 && g.phase == InstancePhase::Commit
-                && g.instance <= g.lock_instance
+                && g.instance < g.lock_instance
                 && Clock::get()?.unix_timestamp < g.phase_ends_at);
         require!(open, GameError::JoinWindowClosed);
         require!(ctx.accounts.circle.alive, GameError::CircleDead);
@@ -192,10 +195,12 @@ pub mod last_circle {
         g.phase = InstancePhase::Reveal;
         g.phase_ends_at = now + g.reveal_window();
         // Commit NOW to the future slot whose hash will seed this instance's
-        // death roll (~2 slots/sec keeps it inside the reveal window). Fixing
-        // the slot before its hash exists makes select_death submission-time
-        // grinding useless.
-        g.entropy_slot = clock.slot + (g.reveal_window() as u64) * 2;
+        // death roll. It must land PAST the reveal deadline so the seed can't be
+        // computed while players can still choose to reveal/withhold: at up to
+        // ~2.5 slots/sec, reveal_window*3 slots always exceeds reveal_window
+        // seconds. Fixing the slot before its hash exists makes select_death
+        // submission-time grinding useless.
+        g.entropy_slot = clock.slot + (g.reveal_window() as u64) * 3 + 4;
         Ok(())
     }
 
@@ -259,7 +264,10 @@ pub mod last_circle {
         require!(clock.unix_timestamp >= g.phase_ends_at, GameError::PhaseNotOver);
         // The pre-committed entropy slot must have passed, so its hash is fixed
         // on-chain and the cranker cannot pick a favorable submission slot.
-        require!(g.entropy_slot > 0 && clock.slot >= g.entropy_slot, GameError::PhaseNotOver);
+        // strict >: at slot == entropy_slot the SlotHashes sysvar's newest entry
+        // is still entropy_slot-1, so we must wait until entropy_slot itself is
+        // recorded — otherwise the seed varies by one slot of submission timing.
+        require!(g.entropy_slot > 0 && clock.slot > g.entropy_slot, GameError::PhaseNotOver);
 
         // Collect all alive circles from the remaining accounts.
         let mut alive: Vec<(u8, u32, u64)> = Vec::with_capacity(g.alive_circles as usize);
@@ -269,6 +277,16 @@ pub mod last_circle {
             if c.alive {
                 alive.push((c.circle_id, c.member_count, c.total_stake));
             }
+        }
+        // Canonicalize by circle_id: the selection must NOT depend on the order
+        // the cranker passed the accounts in (with fixed entropy that would let
+        // them deterministically choose the victim). Sorting + a strict
+        // no-duplicates check also guarantees the set is exactly the alive
+        // circles — a dup like [A,A,B] can no longer pass the count check while
+        // silently excluding C.
+        alive.sort_by_key(|x| x.0);
+        for w in alive.windows(2) {
+            require!(w[0].0 != w[1].0, GameError::BadParam);
         }
         // Caller must present EVERY alive circle, else the min could be gamed.
         require!(alive.len() as u8 == g.alive_circles, GameError::IncompleteCircleSet);
@@ -433,10 +451,13 @@ pub mod last_circle {
 
     /// An eliminated player carries their refund forward into a surviving circle.
     pub fn land(ctx: Context<Land>, target_circle: u8) -> Result<()> {
-        // Landing is only a live-game action: once the game reaches Settling the
-        // final-circle membership is fixed, otherwise every eliminated player
-        // would land into the winner post-hoc and dilute the luck pool risk-free.
+        // Landing is only a live-game action AND only while the outcome is still
+        // undecided (>1 circle alive). After the final death the game is still
+        // Running through the Scoring window with exactly one circle left; a
+        // casualty landing into that known winner would snipe the luck pool
+        // risk-free. Once decided, eliminated players may only cash_out.
         require!(ctx.accounts.game.status == GameStatus::Running, GameError::WrongPhase);
+        require!(ctx.accounts.game.alive_circles > 1, GameError::WrongPhase);
         let p = &mut ctx.accounts.player;
         let from = &ctx.accounts.from_circle;
         let to = &mut ctx.accounts.to_circle;
@@ -624,7 +645,7 @@ pub mod last_circle {
         // Roll only once the pre-committed slot has passed; seed from that
         // fixed slot's hash (no clock.slot) so the outcome cannot be ground
         // by choosing when to submit the crank.
-        require!(entropy_slot > 0 && clock.slot >= entropy_slot, GameError::TooEarly);
+        require!(entropy_slot > 0 && clock.slot > entropy_slot, GameError::TooEarly);
         let entropy = slothash_at(&ctx.accounts.recent_slot_hashes, entropy_slot)?;
         let seed = anchor_lang::solana_program::keccak::hashv(&[
             &entropy,
@@ -1160,7 +1181,7 @@ pub struct RevealMove<'info> {
 pub struct SelectDeath<'info> {
     #[account(mut, seeds = [b"game", game.game_id.to_le_bytes().as_ref()], bump = game.bump)]
     pub game: Account<'info, Game>,
-    /// CHECK: validated against the SlotHashes sysvar id in slothash_entropy.
+    /// CHECK: validated against the SlotHashes sysvar id in slothash_at.
     pub recent_slot_hashes: UncheckedAccount<'info>,
     pub cranker: Signer<'info>,
 }
@@ -1312,7 +1333,7 @@ pub struct RollInsane<'info> {
     pub treasury: Account<'info, Treasury>,
     #[account(mut, seeds = [b"treasury_vault"], bump = treasury.vault_bump)]
     pub treasury_vault: SystemAccount<'info>,
-    /// CHECK: validated against the SlotHashes sysvar id in slothash_entropy.
+    /// CHECK: validated against the SlotHashes sysvar id in slothash_at.
     pub recent_slot_hashes: UncheckedAccount<'info>,
     pub cranker: Signer<'info>,
     pub system_program: Program<'info, System>,

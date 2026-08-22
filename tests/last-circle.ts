@@ -210,7 +210,7 @@ describe("last-circle — milestone 2: instance loop (commit-reveal move)", () =
   });
 
   it("selects and executes a death; 2 circles -> 1 leaves Settling", async () => {
-    await sleep(7000); // reveal window (4s) + generous margin for validator clock lag
+    await sleep(10000); // reveal window (4s) + generous margin for validator clock lag // widened: entropy slot now reveal_window*3+4 slots out
     // select the dying circle (pass every alive circle)
     await program.methods
       .selectDeath()
@@ -310,7 +310,7 @@ describe("last-circle — milestone 3: death + refund (cash out)", () => {
     // no moves this instance — just crank through the phases to a death
     await sleep(9000);
     await program.methods.advanceToReveal().accounts({ game: gamePda, cranker: authority.publicKey }).rpc();
-    await sleep(7000); // reveal window (4s) + generous margin for validator clock lag
+    await sleep(10000); // reveal window (4s) + generous margin for validator clock lag // widened: entropy slot now reveal_window*3+4 slots out
     await program.methods
       .selectDeath()
       .accounts({ game: gamePda, recentSlotHashes: SYSVAR_SLOT_HASHES_PUBKEY, cranker: authority.publicKey })
@@ -421,7 +421,7 @@ describe("last-circle — milestone 4: prediction skill points", () => {
     // crank through to a death
     await sleep(9000);
     await program.methods.advanceToReveal().accounts({ game: gamePda, cranker: authority.publicKey }).rpc();
-    await sleep(7000);
+    await sleep(10000); // widened: entropy slot now reveal_window*3+4 slots out
     await program.methods
       .selectDeath()
       .accounts({ game: gamePda, recentSlotHashes: SYSVAR_SLOT_HASHES_PUBKEY, cranker: authority.publicKey })
@@ -516,7 +516,7 @@ describe("last-circle — milestone 5: settlement (pot distribution)", () => {
 
     await sleep(9000);
     await program.methods.advanceToReveal().accounts({ game: gamePda, cranker: authority.publicKey }).rpc();
-    await sleep(7000);
+    await sleep(10000); // widened: entropy slot now reveal_window*3+4 slots out
     await program.methods
       .selectDeath()
       .accounts({ game: gamePda, recentSlotHashes: SYSVAR_SLOT_HASHES_PUBKEY, cranker: authority.publicKey })
@@ -614,7 +614,7 @@ describe("last-circle — milestone 6: treasury + insane round", () => {
     await program.methods.startGame().accounts({ game: G.gamePda, authority: authority.publicKey }).rpc();
     await sleep(9000);
     await program.methods.advanceToReveal().accounts({ game: G.gamePda, cranker: authority.publicKey }).rpc();
-    await sleep(7000);
+    await sleep(10000); // widened: entropy slot now reveal_window*3+4 slots out
     await program.methods.selectDeath().accounts({ game: G.gamePda, recentSlotHashes: SYSVAR_SLOT_HASHES_PUBKEY, cranker: authority.publicKey })
       .remainingAccounts(owners.map((o) => ({ pubkey: G.circlePda(o.id), isSigner: false, isWritable: false }))).rpc();
     const doomed = (await program.account.game.fetch(G.gamePda)).doomedCircle;
@@ -683,7 +683,7 @@ describe("last-circle — milestone 6: treasury + insane round", () => {
 
     // forced insane (prob = 100% in test config); wait for the pre-committed
     // entropy slot (armed at lock-crossing, +5 slots) to pass
-    await sleep(4000);
+    await sleep(5000);
     await program.methods.rollInsane()
       .accounts({ config: configPda, game: G.gamePda, vault: G.vaultPda, treasury: treasuryPda, treasuryVault: treasuryVaultPda, recentSlotHashes: SYSVAR_SLOT_HASHES_PUBKEY, cranker: authority.publicKey, systemProgram: SystemProgram.programId })
       .rpc();
@@ -774,7 +774,7 @@ describe("last-circle — hardening: dead-circle escape + land window", () => {
   const runInstanceToDeath = async (aliveIds: number[]) => {
     await sleep(9000);
     await program.methods.advanceToReveal().accounts({ game: gamePda, cranker: authority.publicKey }).rpc();
-    await sleep(7000);
+    await sleep(10000); // widened: entropy slot now reveal_window*3+4 slots out
     await program.methods
       .selectDeath()
       .accounts({ game: gamePda, recentSlotHashes: SYSVAR_SLOT_HASHES_PUBKEY, cranker: authority.publicKey })
@@ -851,7 +851,7 @@ describe("last-circle — hardening: dead-circle escape + land window", () => {
 
   it("land is rejected once the game reaches Settling (no post-hoc luck-pool sniping)", async () => {
     // finish instance 2 (2 -> 1 circles) -> Settling
-    await sleep(7000);
+    await sleep(10000); // widened: entropy slot now reveal_window*3+4 slots out
     const aliveIds = [0, 1, 2].filter((i) => i !== doomed1);
     await program.methods
       .selectDeath()

@@ -60,14 +60,20 @@ That makes it a *measurable reasoning benchmark with money on the line*:
 
 ## 4. Security posture (honest version)
 
-Fixed in this revision:
+Fixed (hardening pass + pre-deploy audit):
 - Members of a dead circle can no longer `reveal_move` their **full** stake out
   (which dodged the refund haircut and double-counted the leftover pot).
-- `land` now requires the game to be Running — no landing into the winner
-  after Settling to snipe the luck pool.
-- **Crank-grinding closed:** death and insane rolls now seed from a slot hash
-  the game *committed to in advance* (before the hash existed), so a cranker
-  can't pick a favorable submission slot.
+- `land` now requires the game Running **and >1 circle alive** — no landing into
+  the winner during the final scoring window to snipe the luck pool.
+- **Crank-grinding closed:** death and insane rolls seed from a slot hash the
+  game *committed to in advance* (before the hash existed); the commitment lands
+  past the reveal deadline, and the guard is strict (`slot > entropy_slot`).
+- **`select_death` de-gamed:** the victim is now chosen from the circles sorted
+  by id with duplicates rejected, so a cranker can't pick the victim by
+  reordering `remaining_accounts` or omit a circle with a `[A,A,B]` set.
+- **Jackpot un-targetable:** joins freeze strictly *before* the lock instance,
+  leaving no window where the insane-roll outcome is computable while deposits
+  are still open.
 
 Still open (known, documented):
 - The slot-hash seam is leader-biasable in the committed slot; mainnet needs a

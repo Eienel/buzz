@@ -115,6 +115,10 @@ async function playGame(gameNo) {
   log(`game ${gid}: funding ${N_AGENTS} agents…`);
   await fundAgents(agents);
 
+  // Everything after funding is wrapped so sweepBack ALWAYS runs — a throw
+  // anywhere in the lobby, instance loop, or settlement would otherwise strand
+  // the ephemeral agent wallets' balances (their keypairs live only in memory).
+  try {
   // lobby: keeper (payer) creates the game; agents create/join circles 0..5
   await program.methods.createGame(gid, 6).accounts({ config: configPda, game: gamePda, vault: vaultPda, authority: payer.publicKey }).rpc();
   const taken = new Set();
@@ -124,6 +128,7 @@ async function playGame(gameNo) {
     if (!taken.has(a.circle)) {
       await program.methods.createCircle(a.circle, stake).accounts(acc).signers([a.kp]).rpc();
       taken.add(a.circle);
+      a.createdCircle = a.circle; // this agent is the circle's fixed creator (κ claimant)
     } else {
       await program.methods.joinCircle(stake).accounts(acc).signers([a.kp]).rpc();
     }
@@ -207,10 +212,12 @@ async function playGame(gameNo) {
       } catch {}
     }
     delete fog[doomed];
+    const gNow = await fetchGame(gamePda);
+    const canLand = gNow.status.running && gNow.aliveCircles > 1; // land only while undecided
     for (const a of agents) {
       if (a.dead || a.circle !== doomed) continue;
       const alive = Object.keys(fog).map(Number);
-      if (alive.length && (await fetchGame(gamePda)).status.running) {
+      if (alive.length && canLand) {
         const target = alive.sort((x, y) => fog[y] - fog[x])[0];
         try {
           await program.methods.land(target)
@@ -241,29 +248,42 @@ async function playGame(gameNo) {
     await readFog();
   }
 
-  // settlement: survivors claim, skill scorers claim, dead cash out, fees sweep
+  // settlement: creator cut, survivors claim, skill scorers claim, dead cash
+  // out, fees sweep. Wrapped so sweepBack ALWAYS runs (even on a mid-settle
+  // throw), otherwise the ephemeral agent wallets' balances are stranded.
   log(`game ${gid}: settling`);
   const winner = Object.keys(fog).map(Number)[0];
-  for (const a of agents) {
-    const P = playerPda(a.kp.publicKey);
-    const st = await program.account.player.fetch(P);
+    // the winning circle's creator claims κ (else 15% of the pot strands in the vault)
+    const winnerCreator = agents.find((a) => a.circle === winner && a.createdCircle === winner);
+    if (winnerCreator) {
+      try {
+        await program.methods.claimCreatorCut()
+          .accounts({ game: gamePda, vault: vaultPda, winningCircle: circlePda(winner), owner: winnerCreator.kp.publicKey, systemProgram: SystemProgram.programId })
+          .signers([winnerCreator.kp]).rpc();
+      } catch (e) { log(`  creator-cut claim failed: ${e.message?.slice(0, 80)}`); }
+    }
+    for (const a of agents) {
+      const P = playerPda(a.kp.publicKey);
+      const st = await program.account.player.fetch(P);
+      try {
+        if (st.status.active && st.currentCircle === winner)
+          await program.methods.claimWinnings().accounts({ game: gamePda, vault: vaultPda, winningCircle: circlePda(winner), player: P, owner: a.kp.publicKey, systemProgram: SystemProgram.programId }).signers([a.kp]).rpc();
+        else if (st.status.active)
+          await program.methods.cashOut().accounts({ game: gamePda, vault: vaultPda, circle: circlePda(st.currentCircle), player: P, owner: a.kp.publicKey, systemProgram: SystemProgram.programId }).signers([a.kp]).rpc();
+        if (st.points > 0)
+          await program.methods.claimSkill().accounts({ game: gamePda, vault: vaultPda, player: P, owner: a.kp.publicKey, systemProgram: SystemProgram.programId }).signers([a.kp]).rpc();
+        log(`  ${a.name}: settled (${st.points} skill pts)`);
+      } catch (e) { log(`  ${a.name} settle failed: ${e.message?.slice(0, 80)}`); }
+    }
     try {
-      if (st.status.active && st.currentCircle === winner)
-        await program.methods.claimWinnings().accounts({ game: gamePda, vault: vaultPda, winningCircle: circlePda(winner), player: P, owner: a.kp.publicKey, systemProgram: SystemProgram.programId }).signers([a.kp]).rpc();
-      else if (st.status.active)
-        await program.methods.cashOut().accounts({ game: gamePda, vault: vaultPda, circle: circlePda(st.currentCircle), player: P, owner: a.kp.publicKey, systemProgram: SystemProgram.programId }).signers([a.kp]).rpc();
-      if (st.points > 0)
-        await program.methods.claimSkill().accounts({ game: gamePda, vault: vaultPda, player: P, owner: a.kp.publicKey, systemProgram: SystemProgram.programId }).signers([a.kp]).rpc();
-      log(`  ${a.name}: settled (${st.points} skill pts)`);
-    } catch (e) { log(`  ${a.name} settle failed: ${e.message?.slice(0, 80)}`); }
+      const treasuryPda = pda(Buffer.from("treasury"));
+      const treasuryVaultPda = pda(Buffer.from("treasury_vault"));
+      await program.methods.collectFees().accounts({ config: configPda, game: gamePda, vault: vaultPda, treasury: treasuryPda, treasuryVault: treasuryVaultPda, cranker: payer.publicKey, systemProgram: SystemProgram.programId }).rpc();
+    } catch {}
+  } finally {
+    await sweepBack(agents);
   }
-  try {
-    const treasuryPda = pda(Buffer.from("treasury"));
-    const treasuryVaultPda = pda(Buffer.from("treasury_vault"));
-    await program.methods.collectFees().accounts({ config: configPda, game: gamePda, vault: vaultPda, treasury: treasuryPda, treasuryVault: treasuryVaultPda, cranker: payer.publicKey, systemProgram: SystemProgram.programId }).rpc();
-  } catch {}
-  await sweepBack(agents);
-  log(`game ${gid}: done — vault drained back to swarm payer`);
+  log(`game ${gid}: done — funds swept back to swarm payer`);
 }
 
 // one-time setup if this cluster has no config/treasury yet
