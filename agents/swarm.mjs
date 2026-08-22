@@ -22,7 +22,10 @@ const N_AGENTS = Number(process.env.AGENTS ?? 3);
 const N_GAMES = Number(process.env.GAMES ?? 1); // 0 = forever
 const STAKE = Number(process.env.STAKE_SOL ?? 0.01) * LAMPORTS_PER_SOL;
 const GAME_INTERVAL = Number(process.env.GAME_INTERVAL_SECONDS ?? 180) * 1000; // idle between games
-const FUND = Math.floor(STAKE * 1.4); // stake + fee headroom per agent
+// Per-agent funding: stake + fixed headroom for Circle/Player PDA rent
+// (~0.0036), tx fees, and the agent wallet's own rent-exempt minimum (~0.0009).
+// A multiplier breaks at small stakes — the headroom cost is constant.
+const FUND = STAKE + 5_000_000;
 
 const payer = Keypair.fromSecretKey(new Uint8Array(JSON.parse(readFileSync(process.env.PAYER ?? `${process.env.HOME}/.config/solana/id.json`, "utf8"))));
 const connection = new Connection(RPC, "confirmed");
