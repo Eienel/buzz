@@ -12,104 +12,142 @@
 <link rel="icon" type="image/png" href="favicon.png">
 <style>
   :root{
-    --bg:#0b0e14; --panel:#121826; --panel2:#0f1420; --line:#232c3f; --line2:#2f3a52;
-    --text:#e8edf6; --dim:#8b96ab; --dimmer:#5e6980;
-    --amber:#ffb454; --amber2:#ff8c2f; --good:#4cd88a; --bad:#ff5c7a; --info:#5aa7ff;
+    --ink:#0a0806; --shell:#0f0c08; --card:#16110a; --card2:#1c150c;
+    --edge:#3a2c14; --edge2:#54401c;
+    --honey:#ffb300; --honey2:#ff8f1f; --gold:#ffd280;
+    --text:#f3ead9; --dim:#a08f74; --dimmer:#6d5f4c;
+    --alive:#5fd68a; --dead:#f2637a; --cool:#6fb0ff;
     --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
   }
   *{box-sizing:border-box}
-  body{margin:0;background:var(--bg);color:var(--text);
+  body{margin:0;background:var(--ink);color:var(--text);
     font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}
-  a{color:var(--info);text-decoration:none} a:hover{text-decoration:underline}
+  a{color:var(--honey);text-decoration:none} a:hover{text-decoration:underline}
 
-  header.top{padding:14px 22px;border-bottom:1px solid var(--line);
-    display:flex;gap:16px;align-items:center;flex-wrap:wrap;position:sticky;top:0;
-    background:rgba(11,14,20,.9);backdrop-filter:blur(12px);z-index:20}
-  .brand{font-weight:700;font-size:17px;letter-spacing:.5px;color:var(--text)}
-  .brand .dot{color:var(--amber)}
-  .top nav{margin-left:auto;display:flex;gap:15px;font-size:14px;flex-wrap:wrap}
-  .top nav a{color:var(--dim)} .top nav a:hover{color:var(--text);text-decoration:none}
-  .conn{font-family:var(--mono);font-size:12px;color:var(--dim);
-    border:1px solid var(--line2);border-radius:99px;padding:2px 10px;display:inline-flex;gap:6px;align-items:center}
-  .conn b{color:var(--good)}
-  .conn i{width:7px;height:7px;border-radius:99px;background:var(--good);display:inline-block;animation:pulse 1.6s infinite}
-  .conn.down i{background:var(--bad)} .conn.down b{color:var(--bad)}
-  @keyframes pulse{50%{opacity:.25}}
+  /* honeycomb wallpaper */
+  .page{position:relative;min-height:100vh;padding:26px 18px 60px;overflow:hidden}
+  .page::before{content:"";position:fixed;inset:0;pointer-events:none;opacity:.055;
+    background-image:url("data:image/svg+xml;utf8,\
+<svg xmlns='http://www.w3.org/2000/svg' width='56' height='97' viewBox='0 0 56 97'>\
+<g fill='none' stroke='%23ffb300' stroke-width='2'>\
+<path d='M28 0 L56 16 L56 48 L28 64 L0 48 L0 16 Z'/>\
+<path d='M28 64 L56 80 L56 112 L28 128 L0 112 L0 80 Z'/></g></svg>");
+    background-size:56px 97px}
 
-  main{max-width:1240px;margin:0 auto;padding:22px}
-  .empty{color:var(--dim);text-align:center;padding:80px 20px;border:1px dashed var(--line);
-    border-radius:14px;margin-top:12px}
-  .empty b{color:var(--text);display:block;font-size:18px;margin-bottom:8px}
+  .shell{position:relative;max-width:1180px;margin:0 auto;background:var(--shell);
+    border:1px solid var(--edge);border-radius:22px;overflow:hidden;
+    box-shadow:0 30px 90px rgba(0,0,0,.55)}
 
-  .game{background:var(--panel);border:1px solid var(--line);border-radius:16px;
-    margin-bottom:22px;overflow:hidden}
-  .ghead{padding:14px 20px;background:var(--panel2);border-bottom:1px solid var(--line);
-    display:flex;gap:22px;align-items:center;flex-wrap:wrap}
-  .badge{font-family:var(--mono);font-size:11px;letter-spacing:.6px;text-transform:uppercase;
-    padding:3px 11px;border-radius:99px;border:1px solid var(--line2);color:var(--dim)}
-  .badge.run{color:var(--good);border-color:var(--good)}
-  .badge.lobby{color:var(--info);border-color:var(--info)}
-  .badge.insane{color:var(--bad);border-color:var(--bad);animation:pulse .9s infinite}
-  .stat{font-size:12px;color:var(--dimmer);text-transform:uppercase;letter-spacing:.6px}
-  .stat b{display:block;font-size:16px;color:var(--text);font-family:var(--mono);
-    letter-spacing:0;text-transform:none;margin-top:2px}
-  .stat b.amber{color:var(--amber)}
+  header.top{padding:16px 22px;display:flex;gap:16px;align-items:center;flex-wrap:wrap;
+    border-bottom:1px solid var(--edge);background:linear-gradient(180deg,#1a130b,#12100a)}
+  .brand{display:flex;align-items:center;gap:11px;font-weight:800;font-size:23px;
+    letter-spacing:.5px;color:var(--text)}
+  .sub{color:var(--dim);font-size:13.5px}
+  .sub a{color:var(--honey);border-bottom:1px solid rgba(255,179,0,.4)}
+  .right{margin-left:auto;display:flex;gap:10px;align-items:center}
+  .chip{font-family:var(--mono);font-size:12px;color:var(--dim);background:#140f09;
+    border:1px solid var(--edge);border-radius:99px;padding:5px 13px}
+  .chip.live{color:var(--alive);display:flex;gap:7px;align-items:center}
+  .chip.live i{width:7px;height:7px;border-radius:99px;background:var(--alive);animation:blip 1.7s infinite}
+  .chip.live.down{color:var(--dead)} .chip.live.down i{background:var(--dead)}
+  @keyframes blip{50%{opacity:.2}}
 
-  .phasebar{height:3px;background:var(--line);position:relative;overflow:hidden}
-  .phasebar i{position:absolute;inset:0 auto 0 0;background:linear-gradient(90deg,var(--amber2),var(--amber));
+  .body{padding:22px}
+  .empty{color:var(--dim);text-align:center;padding:64px 20px;border:1px dashed var(--edge2);
+    border-radius:16px}
+  .empty b{display:block;color:var(--text);font-size:18px;margin-bottom:8px}
+
+  /* game panel */
+  .game{border:1px solid var(--edge);border-radius:16px;margin-bottom:20px;
+    background:linear-gradient(180deg,#15100a,#100d08);position:relative;overflow:hidden}
+  .game::after{content:"";position:absolute;top:12px;right:14px;width:7px;height:7px;
+    border-radius:99px;background:var(--honey);box-shadow:0 0 12px var(--honey);opacity:.85}
+  .ghead{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:13px 18px;
+    border-bottom:1px solid var(--edge);font-size:13px}
+  .pill{font-family:var(--mono);font-size:11px;letter-spacing:.7px;text-transform:uppercase;
+    padding:5px 13px;border-radius:99px;border:1px solid var(--edge2);color:var(--dim);
+    display:flex;gap:7px;align-items:center}
+  .pill i{width:7px;height:7px;border-radius:99px;background:currentColor}
+  .pill.run{color:var(--alive);border-color:rgba(95,214,138,.45)}
+  .pill.lobby{color:var(--honey);border-color:rgba(255,179,0,.45)}
+  .pill.insane{color:var(--dead);border-color:rgba(242,99,122,.5);animation:blip .9s infinite}
+  .gid{color:var(--dim);font-family:var(--mono);font-size:12.5px}
+  .m{display:flex;gap:7px;align-items:center;color:var(--dim);font-size:12.5px;
+    padding-left:10px;border-left:1px solid var(--edge)}
+  .m b{color:var(--text);font-family:var(--mono);font-weight:600}
+  .m svg{width:15px;height:15px;flex:none;stroke:var(--honey);fill:none;
+    stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;opacity:.85}
+
+  .bar{height:2px;background:#241a0d}
+  .bar i{display:block;height:100%;background:linear-gradient(90deg,var(--honey2),var(--gold));
     transition:width .9s linear}
 
-  .board{display:grid;grid-template-columns:1fr 300px;gap:0}
-  @media(max-width:860px){.board{grid-template-columns:1fr}}
-  .hive{padding:24px 20px;display:flex;align-items:center;justify-content:center;min-height:340px}
-  .hive svg{width:100%;max-width:560px;height:auto;overflow:visible}
-  .side{border-left:1px solid var(--line);padding:16px 18px;background:var(--panel2)}
-  @media(max-width:860px){.side{border-left:0;border-top:1px solid var(--line)}}
-  .side h4{margin:0 0 10px;font-size:12px;color:var(--dimmer);text-transform:uppercase;letter-spacing:.8px}
-  .feed{list-style:none;margin:0;padding:0;font-size:13px;max-height:300px;overflow-y:auto}
-  .feed li{padding:7px 0;border-bottom:1px solid var(--line);color:var(--dim);display:flex;gap:8px}
-  .feed li:last-child{border-bottom:0}
-  .feed time{font-family:var(--mono);font-size:11px;color:var(--dimmer);flex:none}
+  .combs{display:flex;gap:14px;padding:18px;flex-wrap:wrap}
+  .comb{flex:1 1 0;min-width:190px;position:relative;padding:14px 18px 12px;
+    clip-path:polygon(22px 0,100% 0,100% calc(100% - 22px),calc(100% - 22px) 100%,0 100%,0 22px);
+    background:linear-gradient(160deg,#1d1509,#140f09);border:1px solid var(--edge2)}
+  .comb.alive{box-shadow:inset 0 0 40px rgba(255,179,0,.09)}
+  .comb.dead{background:linear-gradient(160deg,#1e0f12,#140b0d);border-color:#4a2029}
+  .comb.doomed{animation:doom .8s infinite}
+  @keyframes doom{50%{opacity:.45}}
+  .comb .cid{font-family:var(--mono);font-size:11.5px;color:var(--dimmer);margin-bottom:2px}
+  .comb .band{font-size:17px;font-weight:700;letter-spacing:-.2px}
+  .comb.alive .band{color:var(--alive)}
+  .comb.thin .band{color:var(--honey)}
+  .comb.crowded .band{color:var(--cool)}
+  .comb.dead .band{color:var(--dead)}
+  .comb.doomed .band{color:var(--dead)}
+  .comb .amt{font-family:var(--mono);font-size:11.5px;color:var(--dim);margin-top:9px}
+  .comb .bee{position:absolute;top:11px;right:11px;width:30px;height:30px;opacity:.9}
+  .comb.dead .bee{opacity:.35;filter:grayscale(.7)}
+  .fill{margin-top:10px;height:44px;width:100%}
+
+  .side{border-top:1px solid var(--edge);padding:12px 18px 16px}
+  .side h4{margin:0 0 8px;font-size:11px;color:var(--dimmer);text-transform:uppercase;letter-spacing:.9px}
+  .feed{list-style:none;margin:0;padding:0;font-size:13px;display:flex;flex-wrap:wrap;gap:6px 18px;
+    max-height:76px;overflow:hidden}
+  .feed li{color:var(--dim);display:flex;gap:8px}
+  .feed time{font-family:var(--mono);font-size:11px;color:var(--dimmer)}
+  .feed .dead{color:var(--dead)} .feed .win{color:var(--alive)} .feed .hot{color:var(--honey)}
   .feed .k{color:var(--text)}
-  .feed .dead{color:var(--bad)} .feed .win{color:var(--good)} .feed .hot{color:var(--amber)}
 
-  /* comb cells */
-  .cell polygon{transition:fill .5s, stroke .5s, opacity .5s}
-  .cell text{font-family:var(--mono);pointer-events:none;text-anchor:middle}
-  .cell .cid{font-size:11px;fill:var(--dimmer)}
-  .cell .band{font-size:13px;font-weight:700}
-  .cell .amt{font-size:10px;fill:var(--dim)}
-  .cell.dead .band{fill:var(--bad)} .cell.dead .cid{fill:var(--dimmer)}
-  .doomed{animation:doom .7s infinite}
-  @keyframes doom{50%{opacity:.35}}
-
-  footer{color:var(--dimmer);text-align:center;font-size:12px;padding:26px;line-height:1.8}
+  footer{color:var(--dimmer);text-align:center;font-size:12px;padding:22px;line-height:1.9;
+    max-width:1180px;margin:0 auto}
   footer code{font-family:var(--mono);color:var(--dim)}
 </style>
 </head>
 <body>
+<div class="page"><div class="shell">
 
 <header class="top">
-  <a class="brand" href="index.html">BUZZ<span class="dot">.</span></a>
-  <span class="conn" id="conn"><i></i><b>connecting</b></span>
-  <nav>
-    <a href="index.html">Docs</a>
-    <a href="index.html#how">How it works</a>
-    <a href="index.html#token">Token</a>
-    <a href="https://github.com/Eienel/buzz">GitHub</a>
-  </nav>
+  <a class="brand" href="index.html">
+    <svg width="30" height="30" viewBox="0 0 100 100" aria-hidden="true">
+      <g fill="none" stroke="#ffb300" stroke-width="6" stroke-linejoin="round">
+        <path d="M50 8 L74 22 L74 50 L50 64 L26 50 L26 22 Z" opacity=".45"/>
+      </g>
+      <path d="M50 30 L68 40 L68 60 L50 70 L32 60 L32 40 Z" fill="#ffb300"/>
+    </svg>
+    BUZZ
+  </a>
+  <span class="sub">last comb standing, live arena &nbsp;<a href="index.html">Docs</a></span>
+  <div class="right">
+    <span class="chip">devnet</span>
+    <span class="chip live" id="conn"><i></i>Live</span>
+  </div>
 </header>
 
-<main id="root">
+<div class="body" id="root">
   <div class="empty"><b>Loading the hive</b>Reading Solana devnet.</div>
-</main>
+</div>
 
+</div>
 <footer>
-  Combs shown at their last confirmed size. Moves for the current instance are hashed commitments,
+  Combs show their last confirmed size. Moves for the current instance are hashed commitments,
   so nobody knows the live board until reveal, including this page.<br>
-  program <code id="pid">4TNbztSMd3zxG57M25y8WhpcKrQMJQVYEK6EnnkQy1Hw</code> ·
+  program <code>4TNbztSMd3zxG57M25y8WhpcKrQMJQVYEK6EnnkQy1Hw</code> ·
   <a href="index.html">docs</a> · <a href="https://github.com/Eienel/buzz">source</a>
 </footer>
+</div>
 
 <script>
 const PROGRAM_ID="4TNbztSMd3zxG57M25y8WhpcKrQMJQVYEK6EnnkQy1Hw";
@@ -117,7 +155,6 @@ const RPC="https://api.devnet.solana.com";
 const STATUS=["Lobby","Running","Settling","Closed"], PHASE=["Commit","Reveal","Resolving","Scoring"];
 const sol=l=>(Number(l)/1e9).toFixed(3);
 
-/* ---------- data: prefer the server's cached API, fall back to direct RPC ---- */
 const DISC={game:[27,90,166,125,74,100,121,18],circle:[27,59,8,117,62,199,222,252]};
 const u8=(d,o)=>d[o],u16=(d,o)=>d[o]|d[o+1]<<8,u32=(d,o)=>(d[o]|d[o+1]<<8|d[o+2]<<16|d[o+3]<<24)>>>0;
 const u64=(d,o)=>{let n=0n;for(let i=7;i>=0;i--)n=n<<8n|BigInt(d[o+i]);return n};
@@ -143,161 +180,125 @@ function decodeCircle(d){let o=8,c={};
 let useApi=true;
 async function fetchState(){
   if(useApi){
-    try{
-      const r=await fetch("/api/state",{cache:"no-store"});
-      if(r.ok){const j=await r.json(); if(j && j.live) return j;}
-      useApi=false;
+    try{ const r=await fetch("/api/state",{cache:"no-store"});
+      if(r.ok){const j=await r.json(); if(j&&j.live) return j;} useApi=false;
     }catch{ useApi=false; }
   }
-  // direct RPC fallback (GitHub Pages)
   const r=await fetch(RPC,{method:"POST",headers:{"content-type":"application/json"},
-    body:JSON.stringify({jsonrpc:"2.0",id:1,method:"getProgramAccounts",
-      params:[PROGRAM_ID,{encoding:"base64"}]})});
+    body:JSON.stringify({jsonrpc:"2.0",id:1,method:"getProgramAccounts",params:[PROGRAM_ID,{encoding:"base64"}]})});
   const accs=(await r.json()).result||[];
   const games=[],circles=[];
   for(const {pubkey,account} of accs){
-    const d=b64(account.data[0]), disc=Array.from(d.slice(0,8));
+    const d=b64(account.data[0]),disc=Array.from(d.slice(0,8));
     if(eqd(disc,DISC.game))games.push({pubkey,...decodeGame(d)});
     else if(eqd(disc,DISC.circle))circles.push(decodeCircle(d));
   }
   for(const g of games) g.combs=circles.filter(c=>c.game===g.pubkey).sort((a,b)=>a.id-b.id);
   games.sort((a,b)=>Number(BigInt(b.gameId)-BigInt(a.gameId)));
-  return { ok:true, live:games.filter(g=>g.status===0||g.status===1),
-           finished:games.filter(g=>g.status>=2).length, updatedAt:Date.now() };
+  return {ok:true,live:games.filter(g=>g.status===0||g.status===1),
+          finished:games.filter(g=>g.status>=2).length};
 }
 
-/* ---------- honeycomb layout: spiral of flat-top hexes ---------------------- */
-function hexSpiral(n){
-  const out=[{q:0,r:0}]; const dirs=[[1,0],[0,1],[-1,1],[-1,0],[0,-1],[1,-1]];
-  for(let ring=1;out.length<n;ring++){
-    let q=-ring, r=ring;           // start of the ring
-    for(let side=0;side<6 && out.length<n;side++){
-      for(let step=0;step<ring && out.length<n;step++){
-        out.push({q,r}); q+=dirs[side][0]; r+=dirs[side][1];
-      }
-    }
+/* honeycomb fill: little cells that fill with honey by stake share */
+function honeyFill(share, dead){
+  // pointy-top cells: horizontal pitch sqrt(3)r, vertical pitch 1.5r, odd rows offset
+  const COLS=8, ROWS=3, r=6.6, pw=Math.sqrt(3)*r, ph=1.5*r;
+  const total=COLS*ROWS, lit=Math.max(1, Math.round(share*total));
+  let cells="";
+  for(let row=0;row<ROWS;row++)for(let col=0;col<COLS;col++){
+    const x=r+2+col*pw+(row%2?pw/2:0), y=42-row*ph;
+    const pts=Array.from({length:6},(_,i)=>{const a=Math.PI/180*(60*i+30);
+      return `${(x+r*Math.cos(a)).toFixed(1)},${(y+r*Math.sin(a)).toFixed(1)}`}).join(" ");
+    const on=(row*COLS+col)<lit;
+    const fill=dead?(on?"#6d1f2c":"none"):(on?"url(#hg)":"none");
+    cells+=`<polygon points="${pts}" fill="${fill}" stroke="${dead?"#4a2029":"#3a2c14"}" stroke-width="1"/>`;
   }
-  return out.slice(0,n);
+  return `<svg class="fill" viewBox="0 0 ${COLS*pw+pw} 50" preserveAspectRatio="xMinYMax meet">
+    <defs><linearGradient id="hg" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0" stop-color="#ff8f1f"/><stop offset="1" stop-color="#ffd280"/>
+    </linearGradient></defs>${cells}</svg>`;
 }
-const hexPts=(cx,cy,R)=>Array.from({length:6},(_,i)=>{
-  const a=Math.PI/180*(60*i); return `${(cx+R*Math.cos(a)).toFixed(1)},${(cy+R*Math.sin(a)).toFixed(1)}`;
-}).join(" ");
+const BEE=`<svg class="bee" viewBox="0 0 32 32" aria-hidden="true">
+  <ellipse cx="16" cy="19" rx="6.5" ry="8" fill="#ffb300"/>
+  <path d="M10 15h12M10.5 19h11M12 23h8" stroke="#2a1c06" stroke-width="2.2" stroke-linecap="round"/>
+  <ellipse cx="9" cy="11" rx="5" ry="3.4" fill="#ffe6b0" opacity=".75" transform="rotate(-28 9 11)"/>
+  <ellipse cx="23" cy="11" rx="5" ry="3.4" fill="#ffe6b0" opacity=".75" transform="rotate(28 23 11)"/>
+  <circle cx="16" cy="9.5" r="3.6" fill="#2a1c06"/></svg>`;
+const IC={
+  inst:'<svg viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 13l9 5 9-5"/></svg>',
+  clock:'<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
+  ppl:'<svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><path d="M17 8.5a3 3 0 010 5.5"/></svg>',
+  pot:'<svg viewBox="0 0 24 24"><path d="M5 9h14l-1.2 9.5a2 2 0 01-2 1.5H8.2a2 2 0 01-2-1.5L5 9z"/><path d="M8 9V7a4 4 0 018 0v2"/></svg>',
+  vol:'<svg viewBox="0 0 24 24"><path d="M3 12h3l2.5-7 3.5 14 3-9 2 4h4"/></svg>'
+};
+const band=m=>m===0?["empty","thin"]:m<=1?["thin","thin"]:m<=3?["healthy","alive"]:["crowded","crowded"];
 
-function band(m){ return m===0?["empty","var(--bad)"]:m<=1?["thin","var(--bad)"]
-  :m<=3?["healthy","var(--good)"]:["crowded","var(--info)"]; }
-
-function drawHive(g){
-  const combs=g.combs||[];
-  if(!combs.length) return '<div class="stat">combs loading</div>';
-  const R=52, pos=hexSpiral(combs.length);
-  const pts=pos.map(({q,r})=>({x:R*1.5*q, y:R*Math.sqrt(3)*(r+q/2)}));
-  const xs=pts.map(p=>p.x), ys=pts.map(p=>p.y);
-  const pad=R*1.3;
-  const minX=Math.min(...xs)-pad, maxX=Math.max(...xs)+pad;
-  const minY=Math.min(...ys)-pad, maxY=Math.max(...ys)+pad;
-  const cells=combs.map((c,i)=>{
-    const {x,y}=pts[i];
-    const [lbl,col]=band(c.members);
-    const doomed = g.phase>=2 && g.doomed===c.id && c.alive;
-    if(!c.alive){
-      return `<g class="cell dead">
-        <polygon points="${hexPts(x,y,R*0.9)}" fill="none" stroke="var(--line2)"
-          stroke-width="2" stroke-dasharray="5 4" stroke-linejoin="round" opacity=".55"/>
-        <text class="cid" x="${x}" y="${y-14}">comb ${c.id}</text>
-        <text class="band" x="${x}" y="${y+5}" fill="var(--bad)">dead</text>
-        <text class="amt" x="${x}" y="${y+21}">refund ${(c.refundBps/100).toFixed(0)}%</text>
-      </g>`;
-    }
-    // alive: fill weight tracks stake share, outline colour tracks the fog band
-    const total=combs.filter(z=>z.alive).reduce((s,z)=>s+Number(z.stake),0)||1;
-    const share=Number(c.stake)/total;
-    const fill=(0.10+share*0.55).toFixed(3);
-    return `<g class="cell${doomed?" doomed":""}">
-      <polygon points="${hexPts(x,y,R*0.9)}" fill="var(--amber)" fill-opacity="${fill}"
-        stroke="${doomed?"var(--bad)":col}" stroke-width="${doomed?3.5:2.5}" stroke-linejoin="round"/>
-      <text class="cid" x="${x}" y="${y-15}">comb ${c.id}</text>
-      <text class="band" x="${x}" y="${y+5}" fill="${doomed?"var(--bad)":col}">${doomed?"dying":lbl}</text>
-      <text class="amt" x="${x}" y="${y+21}">${sol(c.stake)} SOL</text>
-    </g>`;
-  }).join("");
-  const cap=Math.min(560, 150+110*Math.ceil(Math.sqrt(combs.length)));
-  return `<svg style="max-width:${cap}px" viewBox="${minX.toFixed(0)} ${minY.toFixed(0)} ${(maxX-minX).toFixed(0)} ${(maxY-minY).toFixed(0)}"
-    role="img" aria-label="honeycomb board">${cells}</svg>`;
-}
-
-/* ---------- event feed, derived from state transitions ---------------------- */
 const feeds=new Map(), seen=new Map();
-function note(id,cls,text){
-  const f=feeds.get(id)||[]; const t=new Date().toISOString().slice(11,19);
-  f.unshift({t,cls,text}); feeds.set(id,f.slice(0,40));
-}
+function note(id,cls,text){const f=feeds.get(id)||[];
+  f.unshift({t:new Date().toISOString().slice(11,19),cls,text});feeds.set(id,f.slice(0,6))}
 function diff(g){
   const id=g.gameId, prev=seen.get(id);
-  if(!prev){ note(id,"k",`game opened with ${g.combs?.length??0} combs`); }
+  if(!prev) note(id,"k",`hive opened with ${g.combs?.length??0} combs`);
   else{
-    if(g.instance>prev.instance) note(id,"k",`instance ${g.instance} begins`);
-    if(g.phase!==prev.phase) note(id,"",`phase: ${PHASE[g.phase]}`);
-    for(const c of g.combs||[]){
-      const p=(prev.combs||[]).find(z=>z.id===c.id);
-      if(p && p.alive && !c.alive) note(id,"dead",`comb ${c.id} died, refund ${(c.refundBps/100).toFixed(0)}%`);
-    }
-    if(g.insane && !prev.insane) note(id,"hot","INSANE round, jackpot injected");
-    if(g.status===2 && prev.status!==2){
-      const w=(g.combs||[]).find(c=>c.alive);
-      note(id,"win",`last comb standing: comb ${w?w.id:"?"}`);
-    }
+    if(g.instance>prev.instance) note(id,"k",`instance ${g.instance}`);
+    for(const c of g.combs||[]){const p=(prev.combs||[]).find(z=>z.id===c.id);
+      if(p&&p.alive&&!c.alive) note(id,"dead",`comb ${c.id} died, refund ${(c.refundBps/100).toFixed(0)}%`)}
+    if(g.insane&&!prev.insane) note(id,"hot","INSANE, jackpot injected");
+    if(g.status===2&&prev.status!==2){const w=(g.combs||[]).find(c=>c.alive);
+      note(id,"win",`last comb standing: comb ${w?w.id:"?"}`)}
   }
   seen.set(id,JSON.parse(JSON.stringify(g)));
 }
 
-/* ---------- render ---------------------------------------------------------- */
-function render(state){
-  const conn=document.getElementById("conn");
-  conn.className="conn"+(state.ok?"":" down");
-  conn.innerHTML=`<i></i><b>${state.ok?"live":"reconnecting"}</b> devnet`;
+function render(s){
+  const c=document.getElementById("conn");
+  c.className="chip live"+(s.ok?"":" down"); c.innerHTML=`<i></i>${s.ok?"Live":"Reconnecting"}`;
   const root=document.getElementById("root");
-  const live=(state.live||[]).filter(g=>(g.combs||[]).length>0);
-  const fin=state.finished?`<div class="empty" style="padding:18px;margin-top:14px">
-    <span style="color:var(--dim)">${state.finished} finished game${state.finished>1?"s":""} awaiting cleanup</span></div>`:"";
-
-  if(!live.length){
-    root.innerHTML=`<div class="empty"><b>No game running right now</b>
-      A fresh hive opens every couple of minutes. Keep this open and one will appear.</div>${fin}`;
-    return;
-  }
+  const live=(s.live||[]).filter(g=>(g.combs||[]).length>0);
+  if(!live.length){ root.innerHTML=`<div class="empty"><b>No hive running right now</b>
+    A fresh game opens every couple of minutes. Keep this open and one will appear.</div>`; return; }
   const now=Math.floor(Date.now()/1e3);
   root.innerHTML=live.slice(0,4).map(g=>{
     diff(g);
     const left=Math.max(0,g.phaseEndsAt-now);
-    const span=Math.max(1,Math.round(g.instanceSeconds*(g.phase===0?0.6:0.4)));
-    const pct=g.status===1?Math.max(0,Math.min(100,(left/span)*100)):0;
+    const span=Math.max(1,Math.round(g.instanceSeconds*(g.phase===0?.6:.4)));
+    const pct=g.status===1?Math.max(0,Math.min(100,left/span*100)):0;
+    const totalStake=(g.combs||[]).filter(z=>z.alive).reduce((a,z)=>a+Number(z.stake),0)||1;
+    const combs=(g.combs||[]).map(cb=>{
+      const doomed=g.phase>=2&&g.doomed===cb.id&&cb.alive;
+      if(!cb.alive) return `<div class="comb dead">${BEE}
+        <div class="cid">comb ${cb.id} &middot; dead</div>
+        <div class="band">refund ${(cb.refundBps/100).toFixed(0)}%</div>
+        ${honeyFill(Number(cb.stake)/Math.max(1,totalStake+Number(cb.stake)),true)}
+        <div class="amt">${sol(cb.stake)} SOL staked</div></div>`;
+      const [lbl,cls]=band(cb.members);
+      return `<div class="comb alive ${cls}${doomed?" doomed":""}">${BEE}
+        <div class="cid">comb ${cb.id}</div>
+        <div class="band">${doomed?"dying":lbl}</div>
+        ${honeyFill(Number(cb.stake)/totalStake,false)}
+        <div class="amt">${sol(cb.stake)} SOL staked</div></div>`;
+    }).join("");
     const feed=(feeds.get(g.gameId)||[]).map(e=>
       `<li><time>${e.t}</time><span class="${e.cls}">${e.text}</span></li>`).join("")
-      || '<li><span>waiting for the next event</span></li>';
+      ||'<li><span>waiting for the next event</span></li>';
     return `<section class="game">
       <div class="ghead">
-        <span class="badge ${g.status===1?"run":g.status===0?"lobby":""}">${STATUS[g.status]}</span>
-        ${g.insane?'<span class="badge insane">insane</span>':""}
-        <div class="stat">instance<b>${g.instance} / ${PHASE[g.phase]}</b></div>
-        <div class="stat">combs alive<b>${g.aliveCircles} of ${g.combs?.length??g.numCircles}</b></div>
-        <div class="stat">players<b>${g.players}</b></div>
-        <div class="stat">pot<b class="amber">${sol(g.leftover)} SOL</b></div>
-        <div class="stat">staked<b>${sol(g.deposited)} SOL</b></div>
-        ${g.status===1?`<div class="stat">next phase<b>${left>0?left+"s":"cranking"}</b></div>`:""}
+        <span class="pill ${g.status===1?"run":"lobby"}"><i></i>${STATUS[g.status]}</span>
+        ${g.insane?'<span class="pill insane"><i></i>insane</span>':""}
+        <span class="gid">game #${g.gameId}</span>
+        <span class="m">${IC.inst}instance <b>${g.instance}</b></span>
+        <span class="m">${IC.clock}<b>${PHASE[g.phase]}</b> ${g.status===1?`(${left>0?left+"s":"cranking"})`:""}</span>
+        <span class="m">${IC.ppl}players <b>${g.players}</b></span>
+        <span class="m">${IC.pot}pot <b>${sol(g.leftover)}</b></span>
+        <span class="m">${IC.vol}volume <b>${sol(g.deposited)}</b></span>
       </div>
-      <div class="phasebar"><i style="width:${pct}%"></i></div>
-      <div class="board">
-        <div class="hive">${drawHive(g)}</div>
-        <aside class="side"><h4>Feed</h4><ul class="feed">${feed}</ul></aside>
-      </div>
+      <div class="bar"><i style="width:${pct}%"></i></div>
+      <div class="combs">${combs}</div>
+      <div class="side"><h4>Feed</h4><ul class="feed">${feed}</ul></div>
     </section>`;
-  }).join("")+fin;
+  }).join("");
 }
-
-async function tick(){
-  try{ render(await fetchState()); }
-  catch(e){ render({ok:false,live:[],finished:0}); }
-}
+async function tick(){ try{ render(await fetchState()); }catch{ render({ok:false,live:[]}); } }
 tick(); setInterval(tick,2500);
 </script>
 </body>
