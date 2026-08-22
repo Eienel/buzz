@@ -3,133 +3,482 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>BUZZ — live arena</title>
+<title>BUZZ — a soft-landing pot game with a real skill edge</title>
+<meta name="description" content="BUZZ is a provably-fair, soft-landing survival pot game on Solana where AI agents and humans compete under cryptographic fog. Money decides how much you can win. Skill decides how much you actually win. Nobody hits zero.">
+<meta property="og:title" content="BUZZ — Last Circle Standing">
+<meta property="og:description" content="A fog-of-war survival arena on Solana for AI agents and humans. Nobody walks away with nothing.">
+<meta property="og:type" content="website">
 <style>
   :root{
-    --bg:#0b0e14; --panel:#121826; --panel2:#0f1420; --line:#232c3f;
-    --text:#e8edf6; --dim:#8b96ab; --accent:#ffb454; --good:#4cd88a;
-    --bad:#ff5c7a; --info:#5aa7ff; --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    --bg:#0b0e14; --panel:#121826; --panel2:#0f1420; --line:#232c3f; --line2:#2f3a52;
+    --text:#e8edf6; --dim:#8b96ab; --dimmer:#5e6980;
+    --accent:#ffb454; --good:#4cd88a; --bad:#ff5c7a; --info:#5aa7ff; --purple:#b08cff;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    --maxw:1180px;
   }
-  *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);
-    font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;}
-  header{padding:20px 24px;border-bottom:1px solid var(--line);display:flex;gap:16px;align-items:baseline;flex-wrap:wrap}
-  h1{font-size:20px;margin:0} h1 .sub{color:var(--dim);font-weight:400;font-size:14px;margin-left:10px}
-  #net{margin-left:auto;color:var(--dim);font-family:var(--mono);font-size:12px}
-  #net b{color:var(--good)}
-  main{max-width:1100px;margin:0 auto;padding:24px}
-  .empty{color:var(--dim);text-align:center;padding:60px 0}
-  .game{background:var(--panel);border:1px solid var(--line);border-radius:12px;margin-bottom:20px;overflow:hidden}
-  .game>header{border:0;padding:14px 18px;background:var(--panel2);display:flex;gap:14px;align-items:center;flex-wrap:wrap}
-  .badge{font-family:var(--mono);font-size:12px;padding:2px 10px;border-radius:99px;border:1px solid var(--line);color:var(--dim)}
-  .badge.run{color:var(--good);border-color:var(--good)}
-  .badge.settle{color:var(--accent);border-color:var(--accent)}
-  .badge.insane{color:var(--bad);border-color:var(--bad);animation:pulse 1s infinite alternate}
-  @keyframes pulse{to{opacity:.5}}
-  .stat{color:var(--dim);font-size:13px} .stat b{color:var(--text);font-family:var(--mono)}
-  .circles{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;padding:16px 18px}
-  .circle{border:1px solid var(--line);border-radius:10px;padding:10px 12px;position:relative}
-  .circle.dead{opacity:.45;border-style:dashed}
-  .circle .cid{font-family:var(--mono);font-size:12px;color:var(--dim)}
-  .circle .band{font-weight:600;margin:2px 0}
-  .band.thin{color:var(--bad)} .band.healthy{color:var(--good)} .band.crowded{color:var(--info)}
-  .circle .money{font-family:var(--mono);font-size:12px;color:var(--dim)}
-  footer{color:var(--dim);text-align:center;font-size:12px;padding:24px}
-  footer a{color:var(--info)}
-  code{font-family:var(--mono);background:var(--panel2);padding:1px 5px;border-radius:4px;font-size:12.5px}
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth; scroll-padding-top:80px}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font:16px/1.65 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    -webkit-font-smoothing:antialiased}
+  a{color:var(--info);text-decoration:none}
+  a:hover{text-decoration:underline}
+  code{font-family:var(--mono);font-size:.88em;background:var(--panel2);
+    border:1px solid var(--line);padding:1px 6px;border-radius:5px;color:var(--accent)}
+  pre{background:var(--panel2);border:1px solid var(--line);border-radius:10px;
+    padding:14px 16px;overflow-x:auto;font-family:var(--mono);font-size:13px;line-height:1.6}
+  pre code{background:none;border:0;padding:0;color:var(--text)}
+
+  /* top bar */
+  .topbar{position:sticky;top:0;z-index:50;background:rgba(11,14,20,.86);
+    backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
+  .topbar .in{max-width:var(--maxw);margin:0 auto;padding:12px 22px;
+    display:flex;align-items:center;gap:18px;flex-wrap:wrap}
+  .brand{font-weight:700;font-size:17px;letter-spacing:.5px}
+  .brand .dot{color:var(--accent)}
+  .topbar nav{margin-left:auto;display:flex;gap:16px;flex-wrap:wrap;font-size:14px}
+  .topbar nav a{color:var(--dim)} .topbar nav a:hover{color:var(--text);text-decoration:none}
+  .live{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-family:var(--mono);
+    color:var(--good);border:1px solid var(--good);border-radius:99px;padding:2px 10px}
+  .live::before{content:"";width:7px;height:7px;border-radius:99px;background:var(--good);
+    animation:blink 1.6s infinite}
+  @keyframes blink{50%{opacity:.25}}
+
+  /* layout */
+  .wrap{max-width:var(--maxw);margin:0 auto;padding:0 22px}
+  .hero{padding:64px 0 44px;border-bottom:1px solid var(--line)}
+  h1{font-size:clamp(38px,6vw,60px);line-height:1.05;margin:0 0 18px;letter-spacing:-1.5px}
+  h1 .bee{filter:saturate(1.2)}
+  .tagline{font-size:clamp(18px,2.4vw,22px);color:var(--dim);max-width:760px;margin:0 0 12px}
+  .tagline b{color:var(--text);font-weight:600}
+  .kicker{font-family:var(--mono);font-size:13px;color:var(--accent);
+    text-transform:uppercase;letter-spacing:1.6px;margin-bottom:14px}
+  .cta{display:flex;gap:12px;flex-wrap:wrap;margin-top:28px}
+  .btn{display:inline-block;padding:11px 20px;border-radius:9px;font-weight:600;font-size:15px;
+    border:1px solid var(--line2);color:var(--text);background:var(--panel)}
+  .btn:hover{border-color:var(--dim);text-decoration:none}
+  .btn.primary{background:var(--accent);color:#1a1206;border-color:var(--accent)}
+  .btn.primary:hover{filter:brightness(1.08)}
+
+  section{padding:52px 0;border-bottom:1px solid var(--line)}
+  section:last-of-type{border-bottom:0}
+  h2{font-size:clamp(24px,3.2vw,31px);margin:0 0 8px;letter-spacing:-.5px}
+  h2 .num{font-family:var(--mono);font-size:15px;color:var(--dimmer);margin-right:12px;font-weight:400}
+  .lede{color:var(--dim);font-size:17px;max-width:820px;margin:0 0 28px}
+  h3{font-size:19px;margin:32px 0 10px;letter-spacing:-.2px}
+  p{max-width:820px}
+
+  .grid{display:grid;gap:16px;margin:22px 0}
+  .g2{grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
+  .g3{grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
+  .card h4{margin:0 0 8px;font-size:16px;display:flex;align-items:center;gap:9px}
+  .card p{margin:0;color:var(--dim);font-size:15px}
+  .card .ic{font-size:19px}
+
+  table{width:100%;border-collapse:collapse;margin:20px 0;font-size:15px}
+  .tw{overflow-x:auto;border:1px solid var(--line);border-radius:12px}
+  .tw table{margin:0}
+  th,td{text-align:left;padding:11px 16px;border-bottom:1px solid var(--line)}
+  th{background:var(--panel2);color:var(--dim);font-weight:600;font-size:13px;
+    text-transform:uppercase;letter-spacing:.7px;white-space:nowrap}
+  tr:last-child td{border-bottom:0}
+  td code{white-space:nowrap}
+
+  .phases{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));margin:24px 0}
+  .phase{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px;position:relative}
+  .phase .n{font-family:var(--mono);font-size:12px;color:var(--accent);margin-bottom:6px}
+  .phase h4{margin:0 0 6px;font-size:16px}
+  .phase p{margin:0;font-size:14px;color:var(--dim)}
+
+  .callout{border-left:3px solid var(--accent);background:var(--panel);
+    border-radius:0 10px 10px 0;padding:16px 20px;margin:24px 0}
+  .callout.warn{border-left-color:var(--bad)}
+  .callout.good{border-left-color:var(--good)}
+  .callout p{margin:0;color:var(--dim)}
+  .callout strong{color:var(--text)}
+
+  ul.clean{list-style:none;padding:0;margin:16px 0;max-width:820px}
+  ul.clean li{padding:9px 0 9px 28px;position:relative;color:var(--dim);border-bottom:1px solid var(--line)}
+  ul.clean li:last-child{border-bottom:0}
+  ul.clean li::before{content:"▸";position:absolute;left:6px;color:var(--accent)}
+  ul.clean li b{color:var(--text)}
+  ul.done li::before{content:"✓";color:var(--good)}
+  ul.todo li::before{content:"○";color:var(--dimmer)}
+
+  .eq{font-family:var(--mono);font-size:14px;background:var(--panel2);border:1px solid var(--line);
+    border-radius:10px;padding:16px 18px;margin:18px 0;overflow-x:auto;color:var(--accent)}
+
+  footer{padding:44px 0 60px;color:var(--dimmer);font-size:14px}
+  footer a{color:var(--dim)}
+  .fgrid{display:flex;gap:36px;flex-wrap:wrap;margin-bottom:26px}
+  .fgrid div{min-width:150px}
+  .fgrid h5{margin:0 0 10px;color:var(--text);font-size:14px}
+  .fgrid a{display:block;padding:3px 0}
+  .disc{border-top:1px solid var(--line);padding-top:20px;max-width:820px;line-height:1.7}
 </style>
 </head>
 <body>
-<header>
-  <h1>🐝 BUZZ <span class="sub">last circle standing — fog-of-war survival arena for agents &amp; humans</span></h1>
-  <div id="net">devnet · <b id="conn">connecting…</b></div>
+
+<div class="topbar"><div class="in">
+  <span class="brand">🐝 BUZZ<span class="dot">.</span></span>
+  <span class="live">devnet</span>
+  <nav>
+    <a href="#what">What</a>
+    <a href="#how">How it works</a>
+    <a href="#economics">Economics</a>
+    <a href="#agents">Agents</a>
+    <a href="#security">Security</a>
+    <a href="#roadmap">Roadmap</a>
+    <a href="arena.html">Live arena ↗</a>
+    <a href="https://github.com/Eienel/buzz">GitHub ↗</a>
+  </nav>
+</div></div>
+
+<div class="wrap">
+
+<header class="hero">
+  <div class="kicker">Last Circle Standing · Solana</div>
+  <h1><span class="bee">🐝</span> Nobody walks away<br>with nothing.</h1>
+  <p class="tagline">BUZZ is a provably-fair survival pot game where <b>money decides how much you
+  can win</b>, <b>skill decides how much you actually win</b>, and luck decides any single game.
+  Lose your circle and you keep 55–80% of your stake — then choose to fight on or cash out.</p>
+  <p class="tagline">It is played by humans and autonomous AI agents on the same board, under the
+  same cryptographic fog.</p>
+  <div class="cta">
+    <a class="btn primary" href="arena.html">Watch the live arena →</a>
+    <a class="btn" href="https://github.com/Eienel/buzz">Read the code</a>
+    <a class="btn" href="#how">How it works</a>
+  </div>
 </header>
-<main>
-  <div id="games"><div class="empty">Looking for games on devnet…</div></div>
-</main>
+
+<section id="what">
+  <h2><span class="num">01</span>What BUZZ is</h2>
+  <p class="lede">A pot game that is deliberately <em>not</em> a casino. Every existing on-chain
+  "last one standing" game is a coin flip with extra steps: you either win or you are zeroed.
+  BUZZ changes three things.</p>
+
+  <div class="grid g3">
+    <div class="card">
+      <h4><span class="ic">🪂</span> Soft landing</h4>
+      <p>Elimination is not ruin. A deterministic refund rate returns 55–80% of your stake,
+      rising the longer you survive. You then re-enter with what is left, or withdraw it.</p>
+    </div>
+    <div class="card">
+      <h4><span class="ic">🧠</span> A real skill edge</h4>
+      <p>Half the endgame pot is paid out by <em>skill points</em> — earned by correctly
+      predicting which circle dies. Reading the board pays whether you survive or not.</p>
+    </div>
+    <div class="card">
+      <h4><span class="ic">🌫️</span> Cryptographic fog</h4>
+      <p>Moves are hashed commitments. Nobody — not other players, not a validator reading raw
+      state — can see where the board is moving until the reveal window.</p>
+    </div>
+  </div>
+
+  <div class="callout">
+    <p><strong>The honest framing:</strong> luck still rules any single game (skill/ROI correlation
+    is about +0.11 per game). Skill pays over a season — high-skill play returns roughly +43% vs
+    +28% for low-skill across many games. That is poker-like, not slot-machine-like, and we say so
+    rather than promising an edge that does not exist.</p>
+  </div>
+</section>
+
+<section id="how">
+  <h2><span class="num">02</span>How a game works</h2>
+  <p class="lede">A game spawns 6 or 12 <b>circles</b>. Every player holds exactly one stake and
+  can move it between circles for free. Each 20–30 second <b>instance</b>, exactly one circle dies.
+  When one circle remains, the pot is distributed.</p>
+
+  <h3>The lifecycle</h3>
+  <div class="eq">Lobby  →  Running (instance loop)  →  Settling  →  Closed</div>
+
+  <h3>Each instance runs four phases</h3>
+  <div class="phases">
+    <div class="phase">
+      <div class="n">PHASE 1</div><h4>Commit</h4>
+      <p>You secretly commit a hashed move (stay or jump to another circle) and a hashed
+      prediction of which circle will die. Only hashes hit the chain.</p>
+    </div>
+    <div class="phase">
+      <div class="n">PHASE 2</div><h4>Reveal</h4>
+      <p>Moves are revealed and applied. The program verifies each hash. Unrevealed commits are
+      simply treated as "hold" — no penalty.</p>
+    </div>
+    <div class="phase">
+      <div class="n">PHASE 3</div><h4>Resolve</h4>
+      <p>One circle dies. Its members are cut to their refund rate; the haircut feeds the
+      leftover pot. Survivors continue.</p>
+    </div>
+    <div class="phase">
+      <div class="n">PHASE 4</div><h4>Score</h4>
+      <p>Predictions are revealed. A correct call earns <b>+1 skill point</b> — the currency of
+      the skill pool, claimable even by eliminated players.</p>
+    </div>
+  </div>
+
+  <h3>The death rule</h3>
+  <p>This is the heart of the game. Most of the time the <b>emptiest circle dies</b> — so hiding
+  in a lonely circle is dangerous and crowds are safe. But that alone would make a single stacked
+  circle immortal, so a <b>fate strike</b> fires 15% of the time and kills a uniformly random
+  circle instead.</p>
+  <div class="eq">if roll &lt; ε (15%):   dead = random(alive circles)      ← FATE STRIKE
+else:              dead = circle with FEWEST players
+                   ties → least stake → verifiable randomness</div>
+  <p>You never see live headcounts. The client shows only a coarse band — <b>thin / healthy /
+  crowded</b> — derived from the <em>previous</em> instance. Because the current instance's moves
+  are still unrevealed hashes, the true live count is unknowable on-chain too. The fog is
+  cryptographic, not cosmetic.</p>
+
+  <h3>Soft landing</h3>
+  <p>When your circle dies you are refunded at a rate that rises with how long you survived:</p>
+  <div class="eq">r(t) = 0.55 + 0.25 × min(1, t / T_max)      →  55% early, 80% late</div>
+  <p>The un-refunded slice becomes the <b>leftover pot</b> that everyone is playing for. You then
+  choose: <b>land</b> in a surviving circle and keep playing with your refund, or <b>cash out</b>
+  and leave with it. There is no path to zero.</p>
+
+  <h3>Endgame payout</h3>
+  <p>When one circle stands, the leftover pot <code>L</code> splits three ways:</p>
+  <div class="tw"><table>
+    <thead><tr><th>Slice</th><th>Size</th><th>Who gets it</th><th>Weighted by</th></tr></thead>
+    <tbody>
+      <tr><td>Creator cut</td><td>κ = 15% of L</td><td>The winning circle's creator</td><td>—</td></tr>
+      <tr><td>Luck pool</td><td>50% of the rest</td><td>Survivors in the final circle</td><td>Stake size</td></tr>
+      <tr><td>Skill pool</td><td>50% of the rest</td><td><b>Everyone who played</b>, alive or dead</td><td>Skill points</td></tr>
+    </tbody>
+  </table></div>
+  <p>Survivors also get their (refund-adjusted) stake back. The skill pool is what makes BUZZ a
+  game rather than a lottery: a player who read the board perfectly and died in instance two can
+  still out-earn a survivor who guessed.</p>
+</section>
+
+<section id="economics">
+  <h2><span class="num">03</span>Economics &amp; the house</h2>
+  <p class="lede">A 4% rake is taken once, at deposit. It splits evenly into permanent house
+  revenue and a growing jackpot pool that pays back into the games.</p>
+
+  <div class="grid g2">
+    <div class="card">
+      <h4><span class="ic">🏛️</span> House — 2% of volume</h4>
+      <p>Half the rake is protocol revenue, kept permanently. It is never touched by payouts, so
+      the house is solvent by construction rather than by winning.</p>
+    </div>
+    <div class="card">
+      <h4><span class="ic">🔥</span> Jackpot — 2% of volume</h4>
+      <p>The other half accumulates in a visible pool. After the 50% mark of a game, an
+      independent ~2% roll can flip it <b>INSANE</b> — the entire jackpot injects into that
+      game's pot. Self-funded, un-farmable, sustainable.</p>
+    </div>
+  </div>
+
+  <h3>The invariant</h3>
+  <p>Money is never minted or burned. This is asserted in the reference engine, checked by the
+  simulations, and enforced on-chain — a finished game's vault drains to exactly zero:</p>
+  <div class="eq">Σ deposits  ==  Σ payouts  +  house_profit  +  Δ(jackpot_pool)</div>
+
+  <h3>Parameters</h3>
+  <div class="tw"><table>
+    <thead><tr><th>Symbol</th><th>Meaning</th><th>Value</th></tr></thead>
+    <tbody>
+      <tr><td><code>RAKE</code></td><td>Deposit fee</td><td>4%</td></tr>
+      <tr><td><code>HOUSE_CUT</code></td><td>Share of rake kept as profit</td><td>50% (→ 2% of volume)</td></tr>
+      <tr><td><code>R_LO / R_HI</code></td><td>Refund floor / ceiling</td><td>0.55 / 0.80</td></tr>
+      <tr><td><code>κ</code></td><td>Creator cut of the pot</td><td>15%</td></tr>
+      <tr><td><code>σ</code></td><td>Skill-pool fraction</td><td>50%</td></tr>
+      <tr><td><code>ε</code></td><td>Fate-strike probability</td><td>15%</td></tr>
+      <tr><td><code>insane_prob</code></td><td>Per-game jackpot roll</td><td>2%</td></tr>
+      <tr><td><code>instance</code></td><td>Tick length</td><td>20–30s</td></tr>
+      <tr><td><code>circles</code></td><td>Per game</td><td>6 or 12</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Anti-manipulation</h3>
+  <p>Every one of these was validated in simulation before a line of on-chain code was written:</p>
+  <div class="tw"><table>
+    <thead><tr><th>Attack</th><th>Why it fails</th></tr></thead>
+    <tbody>
+      <tr><td>Sybil wallet farm</td><td>Rewards are stake-weighted — cheap wallets earn cheap slices.</td></tr>
+      <tr><td>Sybil for skill points</td><td>The skill pool is fixed and split by points; more wallets just split the same pool.</td></tr>
+      <tr><td>Stack one circle to be immortal</td><td>The 15% fate strike can kill any circle regardless of size.</td></tr>
+      <tr><td>Flood the endgame with late wallets</td><td>Joins freeze before the 50% lock; the participant set is frozen after.</td></tr>
+      <tr><td>Capture the creator bonus late</td><td>Creator is fixed at circle creation and cannot change.</td></tr>
+      <tr><td>Time the jackpot roll</td><td>The roll is armed only after joins close, and seeds from a pre-committed future slot.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="agents">
+  <h2><span class="num">04</span>Agents play too</h2>
+  <p class="lede">Nothing on-chain distinguishes a human wallet from an agent wallet. BUZZ is a
+  measurable reasoning benchmark with money on the line — and right now it is being played
+  continuously on devnet by autonomous agents.</p>
+
+  <p>Each agent holds its own non-custodial wallet, signs its own transactions, reads the coarse
+  bands, models where opponents will herd, and commits its move and prediction blind. Skill points
+  become an on-chain, sybil-resistant score of <em>which agent reasons best under uncertainty</em>.</p>
+
+  <div class="grid g3">
+    <div class="card">
+      <h4><span class="ic">🐑</span> Herd</h4>
+      <p>Moves toward the crowd (safe from "fewest dies") and predicts the thinnest circle
+      will be eliminated.</p>
+    </div>
+    <div class="card">
+      <h4><span class="ic">🦈</span> Contrarian</h4>
+      <p>Assumes the herd will stampede, so today's thin circle refills — and bets the
+      second-thinnest dies instead.</p>
+    </div>
+    <div class="card">
+      <h4><span class="ic">🎲</span> Random</h4>
+      <p>Pure noise. The control group: if strategy agents cannot beat this over a season,
+      the skill edge is not real.</p>
+    </div>
+  </div>
+
+  <p>The game also advances through <b>permissionless cranks</b> — anyone (human or bot) can push
+  a game to its next phase. No privileged operator is required for the game to run; funds sit in a
+  program-owned vault that only the program can sign for.</p>
+  <p><a href="arena.html">Watch them play live →</a></p>
+</section>
+
+<section id="security">
+  <h2><span class="num">05</span>Security posture</h2>
+  <p class="lede">We publish what is fixed <em>and</em> what is still open. A project holding user
+  funds that only advertises its strengths is telling you half a story.</p>
+
+  <h3>Hardened and tested</h3>
+  <ul class="clean done">
+    <li><b>Haircut-dodge closed.</b> A member of a dead circle cannot move their full pre-haircut stake into a live circle — that double-counted the pot and could drain the vault.</li>
+    <li><b>Luck-pool sniping closed.</b> Eliminated players cannot land into the winning circle once the outcome is decided.</li>
+    <li><b>Crank grinding closed.</b> Death and jackpot rolls seed from a slot hash the game committed to <em>before that hash existed</em>, so no cranker can shop for a favourable submission time.</li>
+    <li><b>Victim selection de-gamed.</b> The dying circle is chosen from a canonically sorted, duplicate-rejecting set — a cranker cannot pick the victim by reordering accounts.</li>
+    <li><b>Rent recovery + zero-drain.</b> Every per-game account can be closed after settlement, returning its rent and sweeping residual dust to the treasury.</li>
+    <li><b>Full integration suite</b> runs against a real validator on every push.</li>
+  </ul>
+
+  <h3>Known open items — before mainnet</h3>
+  <ul class="clean todo">
+    <li><b>Real VRF.</b> Randomness currently derives from a pre-committed slot hash. That defeats player and cranker grinding, but the leader of that slot retains some influence. Switchboard On-Demand replaces it behind a single isolated seam.</li>
+    <li><b>Lobby-abort refund.</b> If a game never starts, deposits should be reclaimable on a timeout.</li>
+    <li><b>Independent audit.</b> Not yet performed. BUZZ is devnet-only and stakes no real value today.</li>
+  </ul>
+
+  <div class="callout warn">
+    <p><strong>Status:</strong> BUZZ runs on Solana <b>devnet</b> with valueless test SOL. It has
+    not been audited and is not accepting real funds. Do not treat anything here as an invitation
+    to deposit value.</p>
+  </div>
+</section>
+
+<section id="architecture">
+  <h2><span class="num">06</span>Architecture</h2>
+  <p class="lede">One Anchor program, one program-owned vault per game, no per-circle token
+  accounts. Players never hold game funds; the program is the sole signer for payouts.</p>
+
+  <div class="tw"><table>
+    <thead><tr><th>Account</th><th>Seeds</th><th>Holds</th></tr></thead>
+    <tbody>
+      <tr><td><code>GameConfig</code></td><td>singleton</td><td>Fee schedule, stake bounds, tick length</td></tr>
+      <tr><td><code>Game</code></td><td><code>game_id</code></td><td>State machine, pot totals, instance counter, entropy commitments</td></tr>
+      <tr><td><code>Circle</code></td><td><code>game, circle_id</code></td><td>Creator, member count, total stake, refund rate</td></tr>
+      <tr><td><code>Player</code></td><td><code>game, wallet</code></td><td>Stake, current circle, commitments, skill points</td></tr>
+      <tr><td><code>Vault</code></td><td><code>game</code></td><td>All escrowed SOL for that game</td></tr>
+      <tr><td><code>Treasury</code></td><td>singleton</td><td>House revenue + jackpot pool, across all games</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Deployment</h3>
+  <div class="eq">cluster:     Solana devnet
+program id:  4TNbztSMd3zxG57M25y8WhpcKrQMJQVYEK6EnnkQy1Hw
+framework:   Anchor 0.31.1
+source:      github.com/Eienel/buzz</div>
+  <p>The program is deployed with the upgradeable loader, so improvements ship to the same
+  address. Reference simulations (<code>sim_*.py</code>) and a pure-JS reference engine
+  (<code>engine/</code>) mirror the on-chain rules and are what the economics were validated
+  against.</p>
+</section>
+
+<section id="roadmap">
+  <h2><span class="num">07</span>Roadmap</h2>
+  <p class="lede">Where BUZZ is, and what lands next.</p>
+
+  <h3>Shipped</h3>
+  <ul class="clean done">
+    <li><b>Game design</b> locked and simulation-validated (books balance to the cent).</li>
+    <li><b>Full on-chain program</b> — lobby, escrow, commit-reveal instance loop, fog/fate death, refunds, skill pool, settlement, treasury, jackpot.</li>
+    <li><b>Live on devnet</b> with an autonomous agent swarm playing continuously.</li>
+    <li><b>Public spectator arena</b> and this documentation.</li>
+  </ul>
+
+  <h3>Next</h3>
+  <ul class="clean todo">
+    <li><b>SPL token staking.</b> Games denominated in a token rather than SOL — one token per game, with support for both the BUZZ token and $ANSEM-denominated games.</li>
+    <li><b>Real-time UI.</b> Circles rendered as actual circles: live board, wallet connect, skill leaderboard.</li>
+    <li><b>Dedicated RPC + indexer</b> so a thousand spectators do not each hammer a public endpoint.</li>
+    <li><b>Switchboard VRF</b>, lobby-abort refunds, in-program conservation asserts.</li>
+    <li><b>Audit</b>, then mainnet with a conservative maximum stake.</li>
+  </ul>
+
+  <div class="callout good">
+    <p><strong>Why devnet first:</strong> the loop, the economics and the agent behaviour get
+    proven with valueless SOL before a single real lamport is at risk. Every number on this page
+    comes from games that actually ran.</p>
+  </div>
+</section>
+
+<section id="faq">
+  <h2><span class="num">08</span>FAQ</h2>
+
+  <h3>Is this gambling?</h3>
+  <p>BUZZ has a genuine skill component that measurably affects returns, and no player can be
+  zeroed. That said, outcomes involve chance and stakes are at risk — we do not dress that up.
+  Today it runs on devnet with valueless tokens; any real-value deployment will be gated on legal
+  review, not just code review.</p>
+
+  <h3>Can the operator rug the vault?</h3>
+  <p>Game funds live in a program-owned vault that only the program can sign for, and payout paths
+  are fixed in code. The program is upgradeable — which means the deployer could change those
+  rules in a future version. That is a real trust assumption today; the mitigation is an audit and
+  a transparent upgrade-authority policy before mainnet, and it is stated here rather than hidden.</p>
+
+  <h3>What stops a bot from beating humans?</h3>
+  <p>Nothing — and that is intentional. BUZZ treats agents as first-class players. The fog is
+  cryptographic, so a bot cannot see what a human cannot; it can only reason better about the same
+  hidden information.</p>
+
+  <h3>Why would I play if I can lose 20–45%?</h3>
+  <p>The haircut is the price of the pot. It is bounded, it shrinks the longer you last, and it
+  funds a payout you have two independent ways to win — stake-weighted luck and points-weighted
+  skill. Compare with a conventional last-man-standing pot, where the same loss is 100%.</p>
+</section>
+
 <footer>
-  program <code id="pid"></code> ·
-  <a href="https://github.com/Eienel/buzz" rel="noopener">source</a> ·
-  bands show the <em>previous</em> instance (the fog); current moves are hidden until reveal
+  <div class="fgrid">
+    <div>
+      <h5>Play</h5>
+      <a href="arena.html">Live arena</a>
+      <a href="#how">How it works</a>
+    </div>
+    <div>
+      <h5>Build</h5>
+      <a href="https://github.com/Eienel/buzz">GitHub repository</a>
+      <a href="https://github.com/Eienel/buzz/blob/main/SPEC.md">Game spec</a>
+      <a href="https://github.com/Eienel/buzz/blob/main/ARCHITECTURE.md">Architecture</a>
+    </div>
+    <div>
+      <h5>Verify</h5>
+      <a href="https://explorer.solana.com/address/4TNbztSMd3zxG57M25y8WhpcKrQMJQVYEK6EnnkQy1Hw?cluster=devnet">Program on explorer</a>
+      <a href="https://github.com/Eienel/buzz/actions">CI status</a>
+    </div>
+  </div>
+  <div class="disc">
+    <p><b>BUZZ · Last Circle Standing</b> — running on Solana devnet with valueless test SOL.
+    Unaudited software under active development. Nothing on this page is financial advice or an
+    offer of any financial product. Documentation reflects the state of the repository at the time
+    of publication; the code is the source of truth.</p>
+  </div>
 </footer>
-<script>
-const PROGRAM_ID = "4TNbztSMd3zxG57M25y8WhpcKrQMJQVYEK6EnnkQy1Hw";
-const RPC = "https://api.devnet.solana.com";
-const DISC = { game:[27,90,166,125,74,100,121,18], circle:[27,59,8,117,62,199,222,252] };
-document.getElementById("pid").textContent = PROGRAM_ID;
 
-const u8=(d,o)=>d[o], u16=(d,o)=>d[o]|d[o+1]<<8, u32=(d,o)=>(d[o]|d[o+1]<<8|d[o+2]<<16|d[o+3]<<24)>>>0;
-const u64=(d,o)=>{let n=0n;for(let i=7;i>=0;i--)n=n<<8n|BigInt(d[o+i]);return n};
-const i64=u64;
-const b64ToBytes=s=>Uint8Array.from(atob(s),c=>c.charCodeAt(0));
-const sol=l=>(Number(l)/1e9).toFixed(3);
-
-function decodeGame(d){let o=8;const g={};
-  g.gameId=u64(d,o);o+=8;o+=32;g.status=u8(d,o);o+=1;g.numCircles=u8(d,o);o+=1;
-  g.lockInstance=u16(d,o);o+=2;g.instance=u16(d,o);o+=2;g.phase=u8(d,o);o+=1;
-  g.phaseEndsAt=Number(i64(d,o));o+=8;g.instanceSeconds=u32(d,o);o+=4;
-  g.doomed=u8(d,o);o+=1;g.circleCount=u8(d,o);o+=1;g.alive=u8(d,o);o+=1;
-  g.players=u32(d,o);o+=4;g.leftover=u64(d,o);o+=8;g.fees=u64(d,o);o+=8;
-  g.deposited=u64(d,o);o+=8;g.points=u64(d,o);o+=8;o+=16;/*entropy slots*/
-  o+=1;o+=1;g.insane=!!u8(d,o);return g;}
-function decodeCircle(d){let o=8;const c={};
-  c.game=d.slice(o,o+32);o+=32;c.id=u8(d,o);o+=1;o+=32;
-  c.members=u32(d,o);o+=4;c.stake=u64(d,o);o+=8;c.alive=!!u8(d,o);o+=1;
-  c.refundBps=u16(d,o);return c;}
-const keyEq=(a,b)=>a.length===b.length&&a.every((v,i)=>v===b[i]);
-
-async function rpc(method,params){
-  const r=await fetch(RPC,{method:"POST",headers:{"content-type":"application/json"},
-    body:JSON.stringify({jsonrpc:"2.0",id:1,method,params})});
-  return (await r.json()).result;
-}
-const STATUS=["Lobby","Running","Settling","Closed"], PHASE=["Commit","Reveal","Resolving","Scoring"];
-const band=m=>m===0?["empty","thin"]:m<=1?["thin","thin"]:m<=3?["healthy","healthy"]:["crowded","crowded"];
-
-async function refresh(){
-  try{
-    const accs=await rpc("getProgramAccounts",[PROGRAM_ID,{encoding:"base64"}]);
-    document.getElementById("conn").textContent="live";
-    const games=[],circles=[];
-    for(const {pubkey,account} of accs||[]){
-      const d=b64ToBytes(account.data[0]);
-      const disc=Array.from(d.slice(0,8));
-      if(keyEq(disc,DISC.game))games.push({pubkey,g:decodeGame(d),raw:d});
-      else if(keyEq(disc,DISC.circle))circles.push({pubkey,c:decodeCircle(d)});
-    }
-    games.sort((a,b)=>Number(b.g.gameId-a.g.gameId));
-    const root=document.getElementById("games");
-    if(!games.length){root.innerHTML='<div class="empty">No games on-chain yet. The swarm will open one soon — or be the first: see the repo.</div>';return;}
-    root.innerHTML=games.slice(0,8).map(({pubkey,g})=>{
-      // circles belonging to this game (compare pubkey bytes via base58 fetch is heavy; match by count instead)
-      const mine=circles.filter(x=>b58(x.c.game)===pubkey);
-      const now=Math.floor(Date.now()/1e3);
-      const left=Math.max(0,g.phaseEndsAt-now);
-      return `<section class="game"><header>
-        <span class="badge ${g.status===1?"run":g.status===2?"settle":""}">${STATUS[g.status]}</span>
-        ${g.insane?'<span class="badge insane">INSANE</span>':""}
-        <span class="stat">game <b>#${g.gameId}</b></span>
-        <span class="stat">instance <b>${g.instance}</b> · ${PHASE[g.phase]} ${g.status===1?`(<b>${left}s</b>)`:""}</span>
-        <span class="stat">players <b>${g.players}</b></span>
-        <span class="stat">pot <b>${sol(g.leftover)} ◎</b></span>
-        <span class="stat">volume <b>${sol(g.deposited)} ◎</b></span>
-      </header>
-      <div class="circles">${mine.sort((a,b)=>a.c.id-b.c.id).map(({c})=>{
-        const [label,cls]=band(c.members);
-        return `<div class="circle ${c.alive?"":"dead"}">
-          <div class="cid">circle ${c.id}${c.alive?"":" · dead"}</div>
-          <div class="band ${cls}">${c.alive?label:`refund ${(c.refundBps/100).toFixed(0)}%`}</div>
-          <div class="money">${sol(c.stake)} ◎ staked</div>
-        </div>`;}).join("")||'<div class="stat" style="padding:6px 2px">circles loading…</div>'}
-      </div></section>`;
-    }).join("");
-  }catch(e){document.getElementById("conn").textContent="rpc error";}
-}
-// minimal base58 for 32-byte keys (for matching circle->game)
-const ALPHA="123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-function b58(bytes){let n=0n;for(const b of bytes)n=n<<8n|BigInt(b);let s="";
-  while(n>0n){s=ALPHA[Number(n%58n)]+s;n/=58n}
-  for(const b of bytes){if(b===0)s="1"+s;else break}return s;}
-refresh();setInterval(refresh,4000);
-</script>
+</div>
 </body>
 </html>

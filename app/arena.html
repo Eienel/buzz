@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BUZZ — live arena</title>
+<style>
+  :root{
+    --bg:#0b0e14; --panel:#121826; --panel2:#0f1420; --line:#232c3f;
+    --text:#e8edf6; --dim:#8b96ab; --accent:#ffb454; --good:#4cd88a;
+    --bad:#ff5c7a; --info:#5aa7ff; --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);
+    font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;}
+  header{padding:20px 24px;border-bottom:1px solid var(--line);display:flex;gap:16px;align-items:baseline;flex-wrap:wrap}
+  h1{font-size:20px;margin:0} h1 .sub{color:var(--dim);font-weight:400;font-size:14px;margin-left:10px}
+  #net{margin-left:auto;color:var(--dim);font-family:var(--mono);font-size:12px}
+  #net b{color:var(--good)}
+  main{max-width:1100px;margin:0 auto;padding:24px}
+  .empty{color:var(--dim);text-align:center;padding:60px 0}
+  .game{background:var(--panel);border:1px solid var(--line);border-radius:12px;margin-bottom:20px;overflow:hidden}
+  .game>header{border:0;padding:14px 18px;background:var(--panel2);display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+  .badge{font-family:var(--mono);font-size:12px;padding:2px 10px;border-radius:99px;border:1px solid var(--line);color:var(--dim)}
+  .badge.run{color:var(--good);border-color:var(--good)}
+  .badge.settle{color:var(--accent);border-color:var(--accent)}
+  .badge.insane{color:var(--bad);border-color:var(--bad);animation:pulse 1s infinite alternate}
+  @keyframes pulse{to{opacity:.5}}
+  .stat{color:var(--dim);font-size:13px} .stat b{color:var(--text);font-family:var(--mono)}
+  .circles{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;padding:16px 18px}
+  .circle{border:1px solid var(--line);border-radius:10px;padding:10px 12px;position:relative}
+  .circle.dead{opacity:.45;border-style:dashed}
+  .circle .cid{font-family:var(--mono);font-size:12px;color:var(--dim)}
+  .circle .band{font-weight:600;margin:2px 0}
+  .band.thin{color:var(--bad)} .band.healthy{color:var(--good)} .band.crowded{color:var(--info)}
+  .circle .money{font-family:var(--mono);font-size:12px;color:var(--dim)}
+  .doneline{color:var(--dim);font-size:13px;text-align:center;padding:14px;
+    border:1px dashed var(--line);border-radius:10px;margin-top:6px}
+  .doneline b{color:var(--text);font-family:var(--mono)}
+  footer{color:var(--dim);text-align:center;font-size:12px;padding:24px}
+  footer a{color:var(--info)}
+  code{font-family:var(--mono);background:var(--panel2);padding:1px 5px;border-radius:4px;font-size:12.5px}
+</style>
+</head>
+<body>
+<header>
+  <h1><a href="index.html" style="color:inherit;text-decoration:none">🐝 BUZZ</a> <span class="sub">last circle standing — live arena · <a href="index.html">docs</a></span></h1>
+  <div id="net">devnet · <b id="conn">connecting…</b></div>
+</header>
+<main>
+  <div id="games"><div class="empty">Looking for games on devnet…</div></div>
+</main>
+<footer>
+  program <code id="pid"></code> ·
+  <a href="https://github.com/Eienel/buzz" rel="noopener">source</a> ·
+  bands show the <em>previous</em> instance (the fog); current moves are hidden until reveal
+</footer>
+<script>
+const PROGRAM_ID = "4TNbztSMd3zxG57M25y8WhpcKrQMJQVYEK6EnnkQy1Hw";
+const RPC = "https://api.devnet.solana.com";
+const DISC = { game:[27,90,166,125,74,100,121,18], circle:[27,59,8,117,62,199,222,252] };
+document.getElementById("pid").textContent = PROGRAM_ID;
+
+const u8=(d,o)=>d[o], u16=(d,o)=>d[o]|d[o+1]<<8, u32=(d,o)=>(d[o]|d[o+1]<<8|d[o+2]<<16|d[o+3]<<24)>>>0;
+const u64=(d,o)=>{let n=0n;for(let i=7;i>=0;i--)n=n<<8n|BigInt(d[o+i]);return n};
+const i64=u64;
+const b64ToBytes=s=>Uint8Array.from(atob(s),c=>c.charCodeAt(0));
+const sol=l=>(Number(l)/1e9).toFixed(3);
+
+function decodeGame(d){let o=8;const g={};
+  g.gameId=u64(d,o);o+=8;o+=32;g.status=u8(d,o);o+=1;g.numCircles=u8(d,o);o+=1;
+  g.lockInstance=u16(d,o);o+=2;g.instance=u16(d,o);o+=2;g.phase=u8(d,o);o+=1;
+  g.phaseEndsAt=Number(i64(d,o));o+=8;g.instanceSeconds=u32(d,o);o+=4;
+  g.doomed=u8(d,o);o+=1;g.circleCount=u8(d,o);o+=1;g.alive=u8(d,o);o+=1;
+  g.players=u32(d,o);o+=4;g.leftover=u64(d,o);o+=8;g.fees=u64(d,o);o+=8;
+  g.deposited=u64(d,o);o+=8;g.points=u64(d,o);o+=8;o+=16;/*entropy slots*/
+  o+=1;o+=1;g.insane=!!u8(d,o);return g;}
+function decodeCircle(d){let o=8;const c={};
+  c.game=d.slice(o,o+32);o+=32;c.id=u8(d,o);o+=1;o+=32;
+  c.members=u32(d,o);o+=4;c.stake=u64(d,o);o+=8;c.alive=!!u8(d,o);o+=1;
+  c.refundBps=u16(d,o);return c;}
+const keyEq=(a,b)=>a.length===b.length&&a.every((v,i)=>v===b[i]);
+
+async function rpc(method,params){
+  const r=await fetch(RPC,{method:"POST",headers:{"content-type":"application/json"},
+    body:JSON.stringify({jsonrpc:"2.0",id:1,method,params})});
+  return (await r.json()).result;
+}
+const STATUS=["Lobby","Running","Settling","Closed"], PHASE=["Commit","Reveal","Resolving","Scoring"];
+const band=m=>m===0?["empty","thin"]:m<=1?["thin","thin"]:m<=3?["healthy","healthy"]:["crowded","crowded"];
+
+async function refresh(){
+  try{
+    const accs=await rpc("getProgramAccounts",[PROGRAM_ID,{encoding:"base64"}]);
+    document.getElementById("conn").textContent="live";
+    const games=[],circles=[];
+    for(const {pubkey,account} of accs||[]){
+      const d=b64ToBytes(account.data[0]);
+      const disc=Array.from(d.slice(0,8));
+      if(keyEq(disc,DISC.game))games.push({pubkey,g:decodeGame(d),raw:d});
+      else if(keyEq(disc,DISC.circle))circles.push({pubkey,c:decodeCircle(d)});
+    }
+    games.sort((a,b)=>Number(b.g.gameId-a.g.gameId));
+    // Live games (Lobby/Running) are the arena. Finished games sit in status
+    // Settling until close_game reaps their accounts, so they are summarised in
+    // one line rather than stacked as if they were still being played.
+    const live=games.filter(x=>x.g.status===0||x.g.status===1);
+    const finished=games.filter(x=>x.g.status===2||x.g.status===3);
+    const root=document.getElementById("games");
+    const finishedNote=finished.length
+      ? `<div class="doneline"><b>${finished.length}</b> finished game${finished.length>1?"s":""} settled
+         · accounts awaiting close (rent reclaim)</div>` : "";
+    if(!live.length){
+      root.innerHTML='<div class="empty">No game running right now — the swarm opens a new one every few minutes. Keep this open.</div>'+finishedNote;
+      return;
+    }
+    root.innerHTML=live.slice(0,6).map(({pubkey,g})=>{
+      // circles belonging to this game (compare pubkey bytes via base58 fetch is heavy; match by count instead)
+      const mine=circles.filter(x=>b58(x.c.game)===pubkey);
+      const now=Math.floor(Date.now()/1e3);
+      const left=Math.max(0,g.phaseEndsAt-now);
+      return `<section class="game"><header>
+        <span class="badge ${g.status===1?"run":g.status===2?"settle":""}">${STATUS[g.status]}</span>
+        ${g.insane?'<span class="badge insane">INSANE</span>':""}
+        <span class="stat">game <b>#${g.gameId}</b></span>
+        <span class="stat">instance <b>${g.instance}</b> · ${PHASE[g.phase]} ${g.status===1?`(<b>${left}s</b>)`:""}</span>
+        <span class="stat">players <b>${g.players}</b></span>
+        <span class="stat">pot <b>${sol(g.leftover)} ◎</b></span>
+        <span class="stat">volume <b>${sol(g.deposited)} ◎</b></span>
+      </header>
+      <div class="circles">${mine.sort((a,b)=>a.c.id-b.c.id).map(({c})=>{
+        const [label,cls]=band(c.members);
+        return `<div class="circle ${c.alive?"":"dead"}">
+          <div class="cid">circle ${c.id}${c.alive?"":" · dead"}</div>
+          <div class="band ${cls}">${c.alive?label:`refund ${(c.refundBps/100).toFixed(0)}%`}</div>
+          <div class="money">${sol(c.stake)} ◎ staked</div>
+        </div>`;}).join("")||'<div class="stat" style="padding:6px 2px">circles loading…</div>'}
+      </div></section>`;
+    }).join("")+finishedNote;
+  }catch(e){document.getElementById("conn").textContent="rpc error";}
+}
+// minimal base58 for 32-byte keys (for matching circle->game)
+const ALPHA="123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+function b58(bytes){let n=0n;for(const b of bytes)n=n<<8n|BigInt(b);let s="";
+  while(n>0n){s=ALPHA[Number(n%58n)]+s;n/=58n}
+  for(const b of bytes){if(b===0)s="1"+s;else break}return s;}
+refresh();setInterval(refresh,4000);
+</script>
+</body>
+</html>
