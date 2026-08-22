@@ -24,9 +24,9 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+      # Pages must be enabled once by a repo admin: Settings → Pages → Build and
+      # deployment → Source → "GitHub Actions" (the CI token cannot enable it).
       - uses: actions/configure-pages@v5
-        with:
-          enablement: true
       - uses: actions/upload-pages-artifact@v3
         with:
           path: app
