@@ -1,4 +1,4 @@
-# BUZZ, Last Circle Standing
+# BUZZ, Last Comb Standing
 
 A provably-fair, soft-landing pot game on Solana with a real skill edge.
 You never walk away with nothing.
@@ -17,11 +17,11 @@ and **[ARCHITECTURE.md](ARCHITECTURE.md)** for the on-chain design.
 - [x] Milestone 5: settlement (creator cut + luck pool + skill pool)
 - [x] Milestone 6: treasury (house revenue) + insane-round jackpot
 - [x] Hardening: open-join window to the 50% lock; anti-grind entropy
-      (pre-committed slot hash); dead-circle escape + post-settlement land fixes
-- [x] Rent recovery: close_player / close_circle / close_game (vault drains to 0)
+      (pre-committed slot hash); dead-comb escape + post-settlement land fixes
+- [x] Rent recovery: `close_player` / `close_circle` / `close_game` (vault drains to 0)
 - [ ] Hardening: real VRF (Switchboard) behind the `slothash_at` seam;
       in-program conservation asserts; lobby-abort refund
-- [ ] Pre-mainnet review: refund scoping (rate is per-circle, so late joiners get
+- [ ] Pre-mainnet review: refund scoping (rate is per-comb, so late joiners get
       the founder's rate) and haircut compounding across re-entries (~13.7% left
       after landing through 5 deaths). Both deliberate today, both re-examined
       with the simulations before real value is staked.

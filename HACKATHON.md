@@ -1,4 +1,4 @@
-# BUZZ (Last Circle Standing) × AnsemHack Clawrena
+# BUZZ (Last Comb Standing) × AnsemHack Clawrena
 
 How this repo becomes an AnsemHack submission: an **arena where AI agents (and
 humans) play a fog-of-war survival game for real stakes**, and the agents that
@@ -13,7 +13,7 @@ read the board best actually earn more.
 
 ## 1. Why this game is an *agent* project
 
-The game (see SPEC.md) is a commit-reveal survival pot: every 30s one circle
+The game (see SPEC.md) is a commit-reveal survival pot: every 30s one comb
 dies (usually the least-crowded one), moves and death-predictions are hidden
 until reveal, eliminated players keep 55-80% of their stake, and a **skill
 pool** pays whoever predicted deaths correctly, survivor or not.
@@ -46,7 +46,7 @@ That makes it a *measurable reasoning benchmark with money on the line*:
      cranks games forward.
    - 2-3 **reference player agents** with different strategies (herd-follower,
      contrarian, band-reader) playing continuously.
-   - A thin web client (read-only at first): live circles, coarse bands, pot,
+   - A thin web client (read-only at first): live combs, coarse bands, pot,
      skill leaderboard. Wallet connect for humans second.
 
 ## 2a. Staking-token model (decided)
@@ -81,16 +81,16 @@ carry gambling weight, the soft-landing framing matters most there.
 ## 4. Security posture
 
 Fixed (hardening pass + pre-deploy audit):
-- Members of a dead circle can no longer `reveal_move` their **full** stake out
+- Members of a dead comb can no longer `reveal_move` their **full** stake out
   (which dodged the refund haircut and double-counted the leftover pot).
-- `land` now requires the game Running **and >1 circle alive**, no landing into
+- `land` now requires the game Running **and >1 comb alive**, no landing into
   the winner during the final scoring window to snipe the luck pool.
 - **Crank-grinding closed:** death and insane rolls seed from a slot hash the
   game *committed to in advance* (before the hash existed); the commitment lands
   past the reveal deadline, and the guard is strict (`slot > entropy_slot`).
-- **`select_death` de-gamed:** the victim is now chosen from the circles sorted
+- **`select_death` de-gamed:** the victim is now chosen from the combs sorted
   by id with duplicates rejected, so a cranker can't pick the victim by
-  reordering `remaining_accounts` or omit a circle with a `[A,A,B]` set.
+  reordering `remaining_accounts` or omit a comb with a `[A,A,B]` set.
 - **Jackpot un-targetable:** joins freeze strictly *before* the lock instance,
   leaving no window where the insane-roll outcome is computable while deposits
   are still open.
@@ -98,8 +98,9 @@ Fixed (hardening pass + pre-deploy audit):
 Still open (known, documented):
 - The slot-hash seam is leader-biasable in the committed slot; mainnet needs a
   real VRF (Switchboard On-Demand), the seam is isolated in `slothash_at`.
-- No lobby-abort refund path if a game never starts; no `close_game`/dust sweep.
-- Rounding/no-point skill-pool remainders strand in the vault until `close_game`.
+- No lobby-abort refund path if a game never starts.
+- Refund scoping (per-comb rate) and haircut compounding are on the pre-mainnet
+  review list; see README.
 
 None of these block a devnet demo; all are on the pre-mainnet list in README.
 

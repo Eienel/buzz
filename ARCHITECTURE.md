@@ -1,4 +1,4 @@
-# Last Circle Standing, Solana Architecture (v0.1)
+# Last Comb Standing, Solana Architecture (v0.1)
 
 Single-chain Solana first. Base/bridge deferred (see §9). Anchor framework.
 
@@ -23,14 +23,20 @@ Player      PDA[game_id, wallet]   stake, current_circle, committed_hash,
 Vault       PDA[game_id]           the escrow token account (all SOL/USDC held here)
 LeftoverPot PDA[game_id]           accumulated haircuts
 ```
+Naming: the game rebranded from Last Circle Standing to Last Comb Standing. The
+on-chain identifiers (`Circle`, `circle_id`, `close_circle`, the `b"circle"` seed)
+were deliberately left unchanged so the deployed program and every existing
+client keep working. Docs say comb, code says circle; they will be unified in the
+SPL token-staking upgrade.
+
 Note: the refund rate lives on `Circle`, not `Player`. It is computed once when
-a circle dies (from the instance number) and applied to every member of that
-circle. An earlier draft of this document listed a `joinT` field on `Player` for
-per-player survival timing; it was never implemented and the circle-scoped rate
+a comb dies (from the instance number) and applied to every member of that
+comb. An earlier draft of this document listed a `joinT` field on `Player` for
+per-player survival timing; it was never implemented and the comb-scoped rate
 is the shipped behaviour. Revisit before mainnet (see SPEC 6).
 
 Key point: **all funds live in one program-owned `Vault`**. Players never hold
-game funds; the program is the sole signer for payouts. No per-circle token
+game funds; the program is the sole signer for payouts. No per-comb token
 accounts (cheaper, fewer attack surfaces).
 
 ---
@@ -41,7 +47,7 @@ Lobby  --(lobby_timer ends)-->  Running  --(1 circle left)-->  Settling  -->  Cl
 ```
 
 ### Phase: Lobby (open join window, e.g. 30-60s)
-- `create_circle(stake)` → opens a Circle, caller = initiator, deposits stake to Vault.
+- `create_circle(stake)` → opens a Comb, caller = initiator, deposits stake to Vault.
 - `join_circle(circle_id, stake)` → deposits to Vault, Player PDA created.
 - Stake validated against `[min_stake, max_stake]` (the cap, see cap sim).
 - At timer end, anyone can crank `start_game` → freezes participant set.
@@ -52,25 +58,25 @@ Each instance has two sub-windows enforced by slots/clock:
    `hash = keccak(circle_target || nonce || wallet)`. Only the hash is stored -
    **moves are invisible**, preserving fog. Players who don't commit = "hold".
 2. **Reveal window:** `reveal_move(circle_target, nonce)` → program checks
-   `keccak(...) == committed_hash`, then applies the move to Circle counters.
+   `keccak(...) == committed_hash`, then applies the move to Comb counters.
    Un-revealed commits are discarded (treated as hold), no penalty needed.
 3. **Resolve:** `resolve_instance` (permissionless crank):
    - reads the per-instance **VRF** result (for tie-breaks only),
    - finds min(member_count); ties → min(total_stake) → VRF index,
-   - kills that Circle, computes `r(t)`, moves haircut → LeftoverPot,
+   - kills that Comb, computes `r(t)`, moves haircut → LeftoverPot,
    - marks dead members `pending_refund` (they act next).
 4. **Death follow-up:** each dead member calls `land(circle_id)` or `sit_out()`
-   within a short window; default if no action = auto-land into largest circle.
+   within a short window; default if no action = auto-land into largest comb.
 
 ### Phase: Settling
-- One circle remains. `settle` distributes: initiator κ-cut of LeftoverPot,
+- One comb remains. `settle` distributes: initiator κ-cut of LeftoverPot,
   join-weighted pool to members, stake-back to all survivors. Sat-out players
   already withdrew. Vault drains to zero (assert!).
 
 ---
 
 ## 4. The fog, what's on-chain vs shown
-- **On-chain (public):** total stake per circle, game phase, instance number,
+- **On-chain (public):** total stake per comb, game phase, instance number,
   pot size. NOT exact member_count during the commit window.
 - **Trick:** `member_count` is only *finalized* at resolve. During commit, the
   client shows a **coarse band** ("thin / healthy / crowded") derived from the
@@ -111,7 +117,7 @@ should `require!` them so a bug can never mint or burn funds.
 
 ## 8. Client / indexer
 - Anchor program + a lightweight indexer (Helius webhooks or Geyser) feeding the
-  frontend the *coarse* circle states and the clock. Frontend handles the
+  frontend the *coarse* comb states and the clock. Frontend handles the
   commit/reveal UX (stores nonce locally, auto-reveals).
 - Wallet: standard Solana wallet adapter; gasless reveal via a relayer optional.
 

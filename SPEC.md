@@ -1,4 +1,4 @@
-# Last Circle Standing, Spec v1.0 (canonical, build target)
+# Last Comb Standing, Spec v1.0 (canonical, build target)
 
 A provably-fair, soft-landing pot game with insane jackpots **and a genuine
 skill edge**. NOT a pure casino: you never walk away with nothing.
@@ -19,26 +19,26 @@ and high-skill players earn a real long-run ROI edge (+15pp at 50% skill-pool).
 ```
 Lobby → Running (instances) → Settling → Closed
 ```
-- **Lobby:** anyone creates a circle (becomes its **initiator**) or joins one.
+- **Lobby:** anyone creates a comb (becomes its **initiator**) or joins one.
   Each player deposits ONCE. A 4% rake is taken at deposit.
 - **Open-join window:** new outside wallets may keep joining until the **50% mark**
   of the game; after that the participant set is **frozen** (anti-manipulation).
   Existing players keep playing fully (move / re-enter) the whole game.
-- **Running:** 30s instances; each kills exactly one circle.
-- **Settling:** one circle remains → distribute pot. Vault drains to zero.
+- **Running:** 30s instances; each kills exactly one comb.
+- **Settling:** one comb remains → distribute pot. Vault drains to zero.
 
 ## 2. Board size & pace
-- Each game randomly spawns **6 or 12 circles** (≈50/50, VRF).
-- 30s per instance → 6-circle ≈ 2.5min, 12-circle ≈ 5.5min.
+- Each game randomly spawns **6 or 12 combs** (≈50/50, VRF).
+- 30s per instance → 6-comb ≈ 2.5min, 12-comb ≈ 5.5min.
 
 ## 3. Fixed stake, free movement
 - You hold ONE stake (your deposit minus rake). You never add more.
-- Each instance you may **move your whole stake** to another circle, FREE.
+- Each instance you may **move your whole stake** to another comb, FREE.
 - Money cannot buy survival; a big stake is a bigger refund-haircut liability.
 
 ## 4. Each instance = TWO commit-reveals
 1. **Move commit/reveal:** secretly commit stay/move (hashed), then reveal.
-2. **Prediction commit/reveal:** secretly predict WHICH circle dies this instance.
+2. **Prediction commit/reveal:** secretly predict WHICH comb dies this instance.
    Correct prediction = +1 **skill point** (this is the skill engine, see §7).
 Both hidden until reveal → unpredictability comes from opponents, not dice.
 
@@ -51,20 +51,20 @@ Both hidden until reveal → unpredictability comes from opponents, not dice.
   else:                     dead = circle with FEWEST players  # fog/skill
   tie → fewest money → VRF
   ```
-- Fate strike means no circle is ever immortal (kills the "stack a circle" Sybil).
+- Fate strike means no comb is ever immortal (kills the "stack a comb" Sybil).
 
 ## 6. Refund & soft landing
 - Deterministic, set per CIRCLE at the instance it dies (every member of that
-  circle gets the same rate, regardless of when they personally joined), and
+  comb gets the same rate, regardless of when they personally joined), and
   applied again at each subsequent elimination if the player re-enters:
   ```
   r(t) = 0.55 + (0.80 − 0.55) · min(1, t / T_MAX)        # 55% → 80%
   ```
-- Dead circle: each member's stake → `stake · r(t)` (carried forward), the haircut
+- Dead comb: each member's stake → `stake · r(t)` (carried forward), the haircut
   `stake · (1 − r(t))` → **leftover pot L**.
-- Eliminated player then chooses: **LAND** in a surviving circle, or **CASH OUT**
+- Eliminated player then chooses: **LAND** in a surviving comb, or **CASH OUT**
   (bank the refund, leave). The haircut applies per elimination and compounds
-  across re-entries: landing through all 5 deaths of a 6-circle game leaves
+  across re-entries: landing through all 5 deaths of a 6-comb game leaves
   ~13.7% of the original stake. The stake asymptotes toward zero but never
   reaches it, and cashing out at any elimination locks in that rate.
 
@@ -75,7 +75,7 @@ creator_cut = κ · L                         # κ = 0.15, to winning circle's c
 luck_pool   = (1 − κ) · L · (1 − σ)         # σ = 0.50 skill-pool fraction
 skill_pool  = (1 − κ) · L · σ
 ```
-- **Luck pool** → split STAKE-WEIGHTED among final-circle survivors (degens chase size).
+- **Luck pool** → split STAKE-WEIGHTED among final-comb survivors (degens chase size).
 - **Skill pool** → split by **skill points / total points** across ALL players who
   played (even those who died) → reading the board well pays, survival or not.
 - Plus every survivor gets their (refund-adjusted) **stake back**.
@@ -86,7 +86,7 @@ skill_pool  = (1 − κ) · L · σ
 ## 8. Anti-manipulation (all validated)
 - **Stake-weighted reward** → cheap Sybil wallets earn cheap slices (no farm).
 - **Skill pool by points** → many wallets just split one pool (no Sybil edge).
-- **Fate strike ε** → no circle is unkillable by stacking headcount.
+- **Fate strike ε** → no comb is unkillable by stacking headcount.
 - **50% join-freeze** → no late-wallet flooding of the endgame.
 - **Fixed creator = lobby address** → no late-join initiator-bonus capture.
 
@@ -120,5 +120,5 @@ Exact to the lamport. No funds are ever minted or burned.
 | ε | fate-strike prob | 0.15 |
 | insane_prob | per-game jackpot roll | 0.02 |
 | instance | tick length | 30s |
-| circles | per game | 6 or 12 |
+| combs | per game | 6 or 12 |
 | min / max stake | deposit bounds | $10 / $2000 |

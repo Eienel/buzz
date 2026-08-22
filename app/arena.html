@@ -130,10 +130,10 @@ async function refresh(){
       <div class="circles">${mine.sort((a,b)=>a.c.id-b.c.id).map(({c})=>{
         const [label,cls]=band(c.members);
         return `<div class="circle ${c.alive?"":"dead"}">
-          <div class="cid">circle ${c.id}${c.alive?"":" · dead"}</div>
+          <div class="cid">comb ${c.id}${c.alive?"":" · dead"}</div>
           <div class="band ${cls}">${c.alive?label:`refund ${(c.refundBps/100).toFixed(0)}%`}</div>
           <div class="money">${sol(c.stake)} ◎ staked</div>
-        </div>`;}).join("")||'<div class="stat" style="padding:6px 2px">circles loading…</div>'}
+        </div>`;}).join("")||'<div class="stat" style="padding:6px 2px">combs loading…</div>'}
       </div></section>`;
     }).join("")+finishedNote;
   }catch(e){document.getElementById("conn").textContent="rpc error";}
