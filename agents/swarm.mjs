@@ -302,7 +302,7 @@ async function playGame(gameNo) {
         try {
           await program.methods.closePlayer()
             .accounts({ game: gamePda, player: playerPda(a.kp.publicKey), owner: a.kp.publicKey, cranker: payer.publicKey })
-            .signers([a.kp]).rpc();
+            .rpc(); // permissionless: agents are fully settled by this point
         } catch (e) { log(`  close player ${a.name}: ${String(e.message).slice(0, 50)}`); }
       }
       for (const id of taken) {
@@ -311,7 +311,7 @@ async function playGame(gameNo) {
         try {
           await program.methods.closeCircle()
             .accounts({ game: gamePda, circle: circlePda(id), creator: creator.kp.publicKey, cranker: payer.publicKey })
-            .signers([creator.kp]).rpc();
+            .rpc(); // permissionless: kappa already claimed / circle dead
         } catch (e) { log(`  close circle ${id}: ${String(e.message).slice(0, 50)}`); }
       }
       const treasuryPda2 = pda(Buffer.from("treasury"));
