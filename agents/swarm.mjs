@@ -10,8 +10,9 @@
 
 import anchorPkg from "@coral-xyz/anchor";
 import { Connection, Keypair, PublicKey, SystemProgram, LAMPORTS_PER_SOL,
-         SYSVAR_SLOT_HASHES_PUBKEY, Transaction } from "@solana/web3.js";
-import { keccak_256 } from "js-sha3";
+         SYSVAR_SLOT_HASHES_PUBKEY, Transaction, sendAndConfirmTransaction } from "@solana/web3.js";
+import jsSha3 from "js-sha3";
+const { keccak_256 } = jsSha3;
 import { readFileSync } from "node:fs";
 
 const { AnchorProvider, Program, Wallet, BN } = anchorPkg;
@@ -85,8 +86,9 @@ async function sweepBack(agents) {
       const back = bal - 6000; // leave dust for the fee
       if (back > 0) {
         const tx = new Transaction().add(SystemProgram.transfer({ fromPubkey: a.kp.publicKey, toPubkey: payer.publicKey, lamports: back }));
-        tx.feePayer = a.kp.publicKey;
-        await provider.sendAndConfirm(tx, [a.kp]);
+        // agent pays + signs its own sweep — provider.sendAndConfirm would
+        // inject the payer wallet as signer (it isn't one) -> "unknown signer".
+        await sendAndConfirmTransaction(connection, tx, [a.kp], { commitment: "confirmed" });
       }
     } catch (e) { log(`sweep ${a.name} failed: ${e.message}`); }
   }
@@ -120,11 +122,11 @@ async function playGame(gameNo) {
   // the ephemeral agent wallets' balances (their keypairs live only in memory).
   try {
   // lobby: keeper (payer) creates the game; agents create/join circles 0..5
-  await program.methods.createGame(gid, 6).accounts({ config: configPda, game: gamePda, vault: vaultPda, authority: payer.publicKey }).rpc();
+  await program.methods.createGame(gid, 6).accounts({ config: configPda, game: gamePda, vault: vaultPda, authority: payer.publicKey, systemProgram: SystemProgram.programId }).rpc();
   const taken = new Set();
   for (const a of agents) {
     const stake = new BN(STAKE);
-    const acc = { config: configPda, game: gamePda, vault: vaultPda, circle: circlePda(a.circle), player: playerPda(a.kp.publicKey), owner: a.kp.publicKey };
+    const acc = { config: configPda, game: gamePda, vault: vaultPda, circle: circlePda(a.circle), player: playerPda(a.kp.publicKey), owner: a.kp.publicKey, systemProgram: SystemProgram.programId };
     if (!taken.has(a.circle)) {
       await program.methods.createCircle(a.circle, stake).accounts(acc).signers([a.kp]).rpc();
       taken.add(a.circle);
@@ -291,14 +293,15 @@ async function ensureSetup() {
   try { await program.account.gameConfig.fetch(configPda); }
   catch {
     log("initializing config…");
-    await program.methods.initializeConfig(400, 5000, new BN(0.01 * LAMPORTS_PER_SOL), new BN(5 * LAMPORTS_PER_SOL), 30, 200)
-      .accounts({ config: configPda, authority: payer.publicKey }).rpc();
+    const instanceSecs = Number(process.env.INSTANCE_SECONDS ?? 20);
+    await program.methods.initializeConfig(400, 5000, new BN(0.01 * LAMPORTS_PER_SOL), new BN(5 * LAMPORTS_PER_SOL), instanceSecs, 200)
+      .accounts({ config: configPda, authority: payer.publicKey, systemProgram: SystemProgram.programId }).rpc();
   }
   const treasuryPda = pda(Buffer.from("treasury"));
   try { await program.account.treasury.fetch(treasuryPda); }
   catch {
     log("initializing treasury…");
-    await program.methods.initTreasury().accounts({ treasury: treasuryPda, treasuryVault: pda(Buffer.from("treasury_vault")), authority: payer.publicKey }).rpc();
+    await program.methods.initTreasury().accounts({ treasury: treasuryPda, treasuryVault: pda(Buffer.from("treasury_vault")), authority: payer.publicKey, systemProgram: SystemProgram.programId }).rpc();
   }
 }
 
