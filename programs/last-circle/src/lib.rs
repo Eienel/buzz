@@ -26,6 +26,12 @@ const SIGMA_BPS: u128 = 5_000;
 /// A lobby that never starts becomes abortable after this long, so deposits can
 /// never be stranded by an authority that walks away.
 const LOBBY_TIMEOUT_SECONDS: i64 = 3_600;
+/// Hard ceiling on what a single game may ever take in. Each game escrows into
+/// its own vault PDA, so this bounds the blast radius of any bug we have not
+/// found to one game's deposits. Deliberately a compile-time constant rather
+/// than a config field: raising it takes a program upgrade anyone can see on
+/// chain, not an admin transaction. Raise only as audit coverage grows.
+const MAX_GAME_DEPOSITS: u64 = 2_000_000_000; // 2 SOL
 
 #[program]
 pub mod last_circle {
@@ -844,6 +850,8 @@ fn record_deposit(game: &mut Account<Game>, stake: u64, net: u64) -> Result<()> 
     let rake = stake.checked_sub(net).ok_or(GameError::MathOverflow)?;
     game.fees_collected = game.fees_collected.checked_add(rake).ok_or(GameError::MathOverflow)?;
     game.total_deposited = game.total_deposited.checked_add(stake).ok_or(GameError::MathOverflow)?;
+    // BOUNDED RISK: refuse deposits past the per-game ceiling.
+    require!(game.total_deposited <= MAX_GAME_DEPOSITS, GameError::GameCapReached);
     Ok(())
 }
 
@@ -1647,4 +1655,6 @@ pub enum GameError {
     CirclesRemain,
     #[msg("Conservation violated: the books do not balance")]
     ConservationViolated,
+    #[msg("This game has reached its deposit cap")]
+    GameCapReached,
 }
