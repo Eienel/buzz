@@ -1,16 +1,10 @@
 name: deploy-pages
 
 # Publishes /app as the public spectator site (GitHub Pages).
-#
-# MANUAL-ONLY until Pages is enabled: repo admin must first set
-# Settings → Pages → Build and deployment → Source → "GitHub Actions".
-# Until then this workflow can only fail (the CI token cannot enable Pages),
-# so it is workflow_dispatch-only to avoid failure emails on every push.
-# After enabling Pages, restore the push trigger below to auto-deploy on app/ changes.
 on:
-  # push:
-  #   branches: [master, main]
-  #   paths: ["app/**", ".github/workflows/pages.yml"]
+  push:
+    branches: [master, main]
+    paths: ["app/**", ".github/workflows/pages.yml"]
   workflow_dispatch:
 
 permissions:
@@ -30,9 +24,9 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
-      # Pages must be enabled once by a repo admin: Settings → Pages → Build and
-      # deployment → Source → "GitHub Actions" (the CI token cannot enable it).
       - uses: actions/configure-pages@v5
+        with:
+          enablement: true
       - uses: actions/upload-pages-artifact@v3
         with:
           path: app
