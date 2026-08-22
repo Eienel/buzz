@@ -56,7 +56,9 @@ tokens). The platform supports **both**:
 - **Your token (primary/default):** most games are denominated in the arena's
   own ClawPump-launched token, real utility (play-to-use) that drives token
   volume and therefore ClawPump trading fees.
-- **$ANSEM games:** games can also be denominated in $ANSEM, for hackathon
+- **$ANSEM games:** games can also be denominated in $ANSEM
+  (`9cRCn9rGT8V2imeM2BaKs13yhMEais3ruM3rPvTGpump`, "The Black Bull", 6 decimals,
+  verified Token-2022 like $BUZZ, so both take the identical code path), for hackathon
   alignment and because the event rewards $ANSEM volume (ClawPump buys back
   $ANSEM from fees). Note: $ANSEM is a mainnet token, devnet uses SOL or a mock
   mint; real $ANSEM only at mainnet.
