@@ -62,16 +62,22 @@ jobs:
 
       # The real program id (declare_id! / Anchor.toml) belongs to the devnet
       # deploy keypair, which is intentionally NOT in the repo. For CI we test
-      # under an ephemeral id instead: build once to generate a fresh deploy
-      # keypair, sync declare_id + Anchor.toml to it, then rebuild so the .so
-      # embeds the matching id before `anchor test` deploys it.
-      - name: Anchor build (generate deploy keypair)
-        run: anchor build
+      # under a fresh EPHEMERAL id: generate a program keypair, write its pubkey
+      # into both declare_id! and Anchor.toml ourselves (deterministic — no
+      # reliance on `anchor keys sync` + cache interplay), then build so the .so
+      # embeds exactly the id `anchor test` will deploy it at.
+      - name: Set ephemeral program id (declare_id + Anchor.toml)
+        run: |
+          mkdir -p target/deploy
+          solana-keygen new --no-bip39-passphrase --force -o target/deploy/last_circle-keypair.json
+          PID=$(solana-keygen pubkey target/deploy/last_circle-keypair.json)
+          echo "Ephemeral program id: $PID"
+          sed -i "s/declare_id!(\"[^\"]*\")/declare_id!(\"$PID\")/" programs/last-circle/src/lib.rs
+          sed -i "s/^last_circle = \".*\"/last_circle = \"$PID\"/" Anchor.toml
+          grep -n "declare_id" programs/last-circle/src/lib.rs
+          grep -n "last_circle = " Anchor.toml
 
-      - name: Sync ephemeral program key into Anchor.toml / declare_id
-        run: anchor keys sync
-
-      - name: Anchor rebuild (embed synced declare_id)
+      - name: Anchor build
         run: anchor build
 
       - name: Node setup
