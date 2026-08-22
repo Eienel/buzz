@@ -8,6 +8,1832 @@
   },
   "instructions": [
     {
+      "name": "abort_lobby",
+      "docs": [
+        "Permissionless: a lobby that never started becomes abortable an hour",
+        "after it opened. No authority can strand deposits by walking away."
+      ],
+      "discriminator": [
+        26,
+        79,
+        138,
+        4,
+        232,
+        190,
+        121,
+        170
+      ],
+      "accounts": [
+        {
+          "name": "game",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  97,
+                  109,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game.game_id",
+                "account": "Game"
+              }
+            ]
+          }
+        },
+        {
+          "name": "cranker",
+          "signer": true
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "advance_instance",
+      "docs": [
+        "Permissionless crank: end the scoring window and either advance to the",
+        "next instance's commit phase, or move to Settling if one circle remains."
+      ],
+      "discriminator": [
+        167,
+        89,
+        51,
+        18,
+        164,
+        248,
+        46,
+        46
+      ],
+      "accounts": [
+        {
+          "name": "game",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  97,
+                  109,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game.game_id",
+                "account": "Game"
+              }
+            ]
+          }
+        },
+        {
+          "name": "cranker",
+          "signer": true
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "advance_to_reveal",
+      "docs": [
+        "Permissionless crank: end the commit window, open the reveal window."
+      ],
+      "discriminator": [
+        137,
+        109,
+        48,
+        201,
+        93,
+        38,
+        29,
+        171
+      ],
+      "accounts": [
+        {
+          "name": "game",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  97,
+                  109,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game.game_id",
+                "account": "Game"
+              }
+            ]
+          }
+        },
+        {
+          "name": "cranker",
+          "signer": true
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "allow_mint",
+      "docs": [
+        "Authority-only: mark an SPL mint playable. Combs can only ever be opened",
+        "in a mint that has one of these, so $BUZZ and $ANSEM are enabled",
+        "deliberately and anything else is refused."
+      ],
+      "discriminator": [
+        240,
+        28,
+        240,
+        70,
+        124,
+        240,
+        245,
+        225
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "mint"
+        },
+        {
+          "name": "allowed",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  108,
+                  108,
+                  111,
+                  119,
+                  101,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "enabled",
+          "type": "bool"
+        }
+      ]
+    },
+    {
+      "name": "cash_out",
+      "docs": [
+        "An eliminated player banks their refund (stake \u00d7 refund_bps) from the",
+        "vault and leaves the game. Their circle must be dead."
+      ],
+      "discriminator": [
+        1,
+        110,
+        57,
+        58,
+        159,
+        157,
+        243,
+        192
+      ],
+      "accounts": [
+        {
+          "name": "game",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  97,
+                  109,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game.game_id",
+                "account": "Game"
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game"
+              }
+            ]
+          }
+        },
+        {
+          "name": "circle"
+        },
+        {
+          "name": "player",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  108,
+                  97,
+                  121,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game"
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "owner",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "player"
+          ]
+        },
+        {
+          "name": "stake_mint",
+          "docs": [
+            "stake mint for this game"
+          ]
+        },
+        {
+          "name": "owner_token",
+          "docs": [
+            "the caller's token account for that mint"
+          ],
+          "writable": true
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "claim_abort_refund",
+      "docs": [
+        "Reclaim a deposit from an aborted lobby, INCLUDING the rake: the game",
+        "never ran, so the house takes nothing. The gross deposit is recomputed",
+        "from the net stake and the fee rate rather than stored, so this needs no",
+        "extra Player field."
+      ],
+      "discriminator": [
+        70,
+        108,
+        18,
+        66,
+        102,
+        17,
+        89,
+        170
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "game",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  97,
+                  109,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game.game_id",
+                "account": "Game"
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game"
+              }
+            ]
+          }
+        },
+        {
+          "name": "player",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  108,
+                  97,
+                  121,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game"
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "owner",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "player"
+          ]
+        },
+        {
+          "name": "stake_mint",
+          "docs": [
+            "stake mint for this game"
+          ]
+        },
+        {
+          "name": "owner_token",
+          "docs": [
+            "the caller's token account for that mint"
+          ],
+          "writable": true
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "claim_creator_cut",
+      "docs": [
+        "The winning circle's creator claims their \u03ba cut of the leftover pot."
+      ],
+      "discriminator": [
+        54,
+        62,
+        1,
+        54,
+        36,
+        74,
+        69,
+        145
+      ],
+      "accounts": [
+        {
+          "name": "game",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  97,
+                  109,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game.game_id",
+                "account": "Game"
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game"
+              }
+            ]
+          }
+        },
+        {
+          "name": "winning_circle"
+        },
+        {
+          "name": "owner",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "stake_mint",
+          "docs": [
+            "stake mint for this game"
+          ]
+        },
+        {
+          "name": "owner_token",
+          "docs": [
+            "the caller's token account for that mint"
+          ],
+          "writable": true
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "claim_skill",
+      "docs": [
+        "Any player who scored skill points claims their points-weighted share of",
+        "the skill pool (survivors and eliminated alike)."
+      ],
+      "discriminator": [
+        49,
+        227,
+        21,
+        100,
+        192,
+        147,
+        31,
+        153
+      ],
+      "accounts": [
+        {
+          "name": "game",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  97,
+                  109,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game.game_id",
+                "account": "Game"
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game"
+              }
+            ]
+          }
+        },
+        {
+          "name": "player",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  108,
+                  97,
+                  121,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game"
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "owner",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "player"
+          ]
+        },
+        {
+          "name": "stake_mint",
+          "docs": [
+            "stake mint for this game"
+          ]
+        },
+        {
+          "name": "owner_token",
+          "docs": [
+            "the caller's token account for that mint"
+          ],
+          "writable": true
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "claim_winnings",
+      "docs": [
+        "A surviving player (in the winning circle) claims stake-back + their",
+        "stake-weighted share of the luck pool."
+      ],
+      "discriminator": [
+        161,
+        215,
+        24,
+        59,
+        14,
+        236,
+        242,
+        221
+      ],
+      "accounts": [
+        {
+          "name": "game",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  97,
+                  109,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game.game_id",
+                "account": "Game"
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game"
+              }
+            ]
+          }
+        },
+        {
+          "name": "winning_circle"
+        },
+        {
+          "name": "player",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  108,
+                  97,
+                  121,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game"
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "owner",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "player"
+          ]
+        },
+        {
+          "name": "stake_mint",
+          "docs": [
+            "stake mint for this game"
+          ]
+        },
+        {
+          "name": "owner_token",
+          "docs": [
+            "the caller's token account for that mint"
+          ],
+          "writable": true
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "close_circle",
+      "docs": [
+        "Close a Circle account once every player is closed; rent returns to the",
+        "circle's creator. Closing the WINNING circle before its creator claimed",
+        "\u03ba requires the creator's signature (an explicit forfeit of the cut)."
+      ],
+      "discriminator": [
+        249,
+        63,
+        161,
+        46,
+        147,
+        239,
+        34,
+        37
+      ],
+      "accounts": [
+        {
+          "name": "game",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  97,
+                  109,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game.game_id",
+                "account": "Game"
+              }
+            ]
+          }
+        },
+        {
+          "name": "circle",
+          "writable": true
+        },
+        {
+          "name": "creator",
+          "docs": [
+            "signature is only required to close an unclaimed winning circle."
+          ],
+          "writable": true,
+          "relations": [
+            "circle"
+          ]
+        },
+        {
+          "name": "cranker",
+          "signer": true
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "close_game",
+      "docs": [
+        "Close the Game account last: sweep any vault dust (rounding remainders,",
+        "forfeited claims) into the treasury jackpot pool, then return the game",
+        "account's rent to the game authority. Vault drains to exactly zero."
+      ],
+      "discriminator": [
+        237,
+        236,
+        157,
+        201,
+        253,
+        20,
+        248,
+        67
+      ],
+      "accounts": [
+        {
+          "name": "game",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  97,
+                  109,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game.game_id",
+                "account": "Game"
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game"
+              }
+            ]
+          }
+        },
+        {
+          "name": "treasury",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  114,
+                  101,
+                  97,
+                  115,
+                  117,
+                  114,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "stake_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "treasury_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "stake_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "writable": true,
+          "relations": [
+            "game"
+          ]
+        },
+        {
+          "name": "stake_mint"
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "cranker",
+          "signer": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "close_player",
+      "docs": [
+        "Close a Player account; its rent returns to the player's wallet.",
+        "Permissionless once the player has nothing left to claim. If they still",
+        "have an unclaimed win (status Active) or an unclaimed skill share, only",
+        "the owner may close \u2014 their signature is an explicit forfeit."
+      ],
+      "discriminator": [
+        225,
+        227,
+        204,
+        63,
+        32,
+        122,
+        58,
+        227
+      ],
+      "accounts": [
+        {
+          "name": "game",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  97,
+                  109,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game.game_id",
+                "account": "Game"
+              }
+            ]
+          }
+        },
+        {
+          "name": "player",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  108,
+                  97,
+                  121,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game"
+              },
+              {
+                "kind": "account",
+                "path": "player.owner",
+                "account": "Player"
+              }
+            ]
+          }
+        },
+        {
+          "name": "owner",
+          "docs": [
+            "signature is only required for the forfeit path (checked in handler)."
+          ],
+          "writable": true,
+          "relations": [
+            "player"
+          ]
+        },
+        {
+          "name": "cranker",
+          "signer": true
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "collect_fees",
+      "docs": [
+        "Sweep a finished game's collected rake into the treasury, split into",
+        "house profit (house_cut) and the jackpot pool (the rest)."
+      ],
+      "discriminator": [
+        164,
+        152,
+        207,
+        99,
+        30,
+        186,
+        19,
+        182
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "game",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  97,
+                  109,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game.game_id",
+                "account": "Game"
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game"
+              }
+            ]
+          }
+        },
+        {
+          "name": "treasury",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  114,
+                  101,
+                  97,
+                  115,
+                  117,
+                  114,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "stake_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "treasury_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "stake_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "stake_mint"
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "cranker",
+          "signer": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "commit_move",
+      "docs": [
+        "Commit a hashed move for the current instance (hides stay/move under fog).",
+        "hash = keccak(target_circle \u2016 nonce_le \u2016 owner \u2016 game \u2016 instance_le)."
+      ],
+      "discriminator": [
+        27,
+        16,
+        69,
+        212,
+        175,
+        110,
+        123,
+        189
+      ],
+      "accounts": [
+        {
+          "name": "game",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  97,
+                  109,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game.game_id",
+                "account": "Game"
+              }
+            ]
+          }
+        },
+        {
+          "name": "player",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  108,
+                  97,
+                  121,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game"
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "owner",
+          "signer": true,
+          "relations": [
+            "player"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "commit_prediction",
+      "docs": [
+        "Commit a hashed prediction of WHICH circle dies this instance.",
+        "hash = keccak(predicted_circle \u2016 nonce_le \u2016 owner \u2016 game \u2016 instance_le)."
+      ],
+      "discriminator": [
+        92,
+        250,
+        182,
+        231,
+        10,
+        22,
+        234,
+        71
+      ],
+      "accounts": [
+        {
+          "name": "game",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  97,
+                  109,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game.game_id",
+                "account": "Game"
+              }
+            ]
+          }
+        },
+        {
+          "name": "player",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  108,
+                  97,
+                  121,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game"
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "owner",
+          "signer": true,
+          "relations": [
+            "player"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "create_circle",
+      "docs": [
+        "Create a circle in the lobby (caller becomes its fixed initiator) and stake into it."
+      ],
+      "discriminator": [
+        186,
+        99,
+        49,
+        131,
+        31,
+        51,
+        13,
+        198
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "game",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  97,
+                  109,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game.game_id",
+                "account": "Game"
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game"
+              }
+            ]
+          }
+        },
+        {
+          "name": "circle",
+          "writable": true
+        },
+        {
+          "name": "player",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  108,
+                  97,
+                  121,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game"
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "owner",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "stake_mint",
+          "docs": [
+            "stake mint for this game"
+          ]
+        },
+        {
+          "name": "owner_token",
+          "docs": [
+            "the caller's token account for that mint"
+          ],
+          "writable": true
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "circle_id",
+          "type": "u8"
+        },
+        {
+          "name": "stake",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "create_game",
+      "docs": [
+        "Open a new game arena in the Lobby phase. `num_circles` is 6 or 12."
+      ],
+      "discriminator": [
+        124,
+        69,
+        75,
+        66,
+        184,
+        220,
+        72,
+        206
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "stake_mint",
+          "docs": [
+            "the mint every stake in this game is denominated in"
+          ]
+        },
+        {
+          "name": "allowed",
+          "docs": [
+            "gate: only mints the authority has allowed can open combs"
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  108,
+                  108,
+                  111,
+                  119,
+                  101,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "stake_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "game",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  97,
+                  109,
+                  101
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "game_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault",
+          "docs": [
+            "token escrow for this game; the PDA is its own authority"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "game_id",
+          "type": "u64"
+        },
+        {
+          "name": "num_circles",
+          "type": "u8"
+        },
+        {
+          "name": "require_vrf",
+          "type": "bool"
+        }
+      ]
+    },
+    {
+      "name": "execute_death",
+      "docs": [
+        "Permissionless crank: kill the doomed circle, lock its refund rate, sweep",
+        "the haircut into the leftover pot, and either advance to the next instance",
+        "or move to Settling if only one circle remains."
+      ],
+      "discriminator": [
+        44,
+        230,
+        71,
+        33,
+        35,
+        222,
+        43,
+        120
+      ],
+      "accounts": [
+        {
+          "name": "game",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  97,
+                  109,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game.game_id",
+                "account": "Game"
+              }
+            ]
+          }
+        },
+        {
+          "name": "circle",
+          "writable": true
+        },
+        {
+          "name": "cranker",
+          "signer": true
+        }
+      ],
+      "args": [
+        {
+          "name": "circle_id",
+          "type": "u8"
+        }
+      ]
+    },
+    {
+      "name": "init_treasury",
+      "docs": [
+        "One-time: create the cross-game treasury."
+      ],
+      "discriminator": [
+        105,
+        152,
+        173,
+        51,
+        158,
+        151,
+        49,
+        14
+      ],
+      "accounts": [
+        {
+          "name": "stake_mint"
+        },
+        {
+          "name": "treasury",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  114,
+                  101,
+                  97,
+                  115,
+                  117,
+                  114,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "stake_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "treasury_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "stake_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "initialize_config",
       "docs": [
         "One-time global config (fee schedule, stake bounds, tick length)."
@@ -25,7 +1851,22 @@
       "accounts": [
         {
           "name": "config",
-          "writable": true
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
         },
         {
           "name": "authority",
@@ -33,7 +1874,8 @@
           "signer": true
         },
         {
-          "name": "system_program"
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
         }
       ],
       "args": [
@@ -64,111 +1906,6 @@
       ]
     },
     {
-      "name": "create_game",
-      "docs": [
-        "Open a new game arena in the Lobby phase. `num_circles` is 6 or 12."
-      ],
-      "discriminator": [
-        124,
-        69,
-        75,
-        66,
-        184,
-        220,
-        72,
-        206
-      ],
-      "accounts": [
-        {
-          "name": "config"
-        },
-        {
-          "name": "game",
-          "writable": true
-        },
-        {
-          "name": "vault",
-          "docs": [
-            "SOL escrow PDA for this game. System-owned; holds all staked lamports."
-          ],
-          "writable": true
-        },
-        {
-          "name": "authority",
-          "writable": true,
-          "signer": true
-        },
-        {
-          "name": "system_program"
-        }
-      ],
-      "args": [
-        {
-          "name": "game_id",
-          "type": "u64"
-        },
-        {
-          "name": "num_circles",
-          "type": "u8"
-        }
-      ]
-    },
-    {
-      "name": "create_circle",
-      "docs": [
-        "Create a circle in the lobby (caller becomes its fixed initiator) and stake into it."
-      ],
-      "discriminator": [
-        186,
-        99,
-        49,
-        131,
-        31,
-        51,
-        13,
-        198
-      ],
-      "accounts": [
-        {
-          "name": "config"
-        },
-        {
-          "name": "game",
-          "writable": true
-        },
-        {
-          "name": "vault",
-          "writable": true
-        },
-        {
-          "name": "circle",
-          "writable": true
-        },
-        {
-          "name": "player",
-          "writable": true
-        },
-        {
-          "name": "owner",
-          "writable": true,
-          "signer": true
-        },
-        {
-          "name": "system_program"
-        }
-      ],
-      "args": [
-        {
-          "name": "circle_id",
-          "type": "u8"
-        },
-        {
-          "name": "stake",
-          "type": "u64"
-        }
-      ]
-    },
-    {
       "name": "join_circle",
       "docs": [
         "Join an existing circle and stake into it. Allowed during the Lobby, and",
@@ -190,15 +1927,66 @@
       ],
       "accounts": [
         {
-          "name": "config"
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
         },
         {
           "name": "game",
-          "writable": true
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  97,
+                  109,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game.game_id",
+                "account": "Game"
+              }
+            ]
+          }
         },
         {
           "name": "vault",
-          "writable": true
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game"
+              }
+            ]
+          }
         },
         {
           "name": "circle",
@@ -206,7 +1994,30 @@
         },
         {
           "name": "player",
-          "writable": true
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  108,
+                  97,
+                  121,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game"
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              }
+            ]
+          }
         },
         {
           "name": "owner",
@@ -214,7 +2025,24 @@
           "signer": true
         },
         {
-          "name": "system_program"
+          "name": "stake_mint",
+          "docs": [
+            "stake mint for this game"
+          ]
+        },
+        {
+          "name": "owner_token",
+          "docs": [
+            "the caller's token account for that mint"
+          ],
+          "writable": true
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
         }
       ],
       "args": [
@@ -225,99 +2053,91 @@
       ]
     },
     {
-      "name": "start_game",
+      "name": "land",
       "docs": [
-        "Close the lobby and start the instance loop (instance 1, Commit phase)."
+        "An eliminated player carries their refund forward into a surviving circle."
       ],
       "discriminator": [
-        249,
-        47,
-        252,
-        172,
-        184,
-        162,
-        245,
-        14
+        34,
+        112,
+        208,
+        19,
+        65,
+        226,
+        42,
+        230
       ],
       "accounts": [
         {
           "name": "game",
-          "writable": true
-        },
-        {
-          "name": "authority",
-          "signer": true
-        }
-      ],
-      "args": []
-    },
-    {
-      "name": "commit_move",
-      "docs": [
-        "Commit a hashed move for the current instance (hides stay/move under fog).",
-        "hash = keccak(target_circle \u2016 nonce_le \u2016 owner \u2016 game \u2016 instance_le)."
-      ],
-      "discriminator": [
-        27,
-        16,
-        69,
-        212,
-        175,
-        110,
-        123,
-        189
-      ],
-      "accounts": [
-        {
-          "name": "game"
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  97,
+                  109,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game.game_id",
+                "account": "Game"
+              }
+            ]
+          }
         },
         {
           "name": "player",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  108,
+                  97,
+                  121,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game"
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "from_circle",
+          "writable": true
+        },
+        {
+          "name": "to_circle",
           "writable": true
         },
         {
           "name": "owner",
-          "signer": true
+          "signer": true,
+          "relations": [
+            "player"
+          ]
         }
       ],
       "args": [
         {
-          "name": "hash",
-          "type": {
-            "array": [
-              "u8",
-              32
-            ]
-          }
+          "name": "target_circle",
+          "type": "u8"
         }
       ]
-    },
-    {
-      "name": "advance_to_reveal",
-      "docs": [
-        "Permissionless crank: end the commit window, open the reveal window."
-      ],
-      "discriminator": [
-        137,
-        109,
-        48,
-        201,
-        93,
-        38,
-        29,
-        171
-      ],
-      "accounts": [
-        {
-          "name": "game",
-          "writable": true
-        },
-        {
-          "name": "cranker",
-          "signer": true
-        }
-      ],
-      "args": []
     },
     {
       "name": "reveal_move",
@@ -337,11 +2157,52 @@
       ],
       "accounts": [
         {
-          "name": "game"
+          "name": "game",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  97,
+                  109,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game.game_id",
+                "account": "Game"
+              }
+            ]
+          }
         },
         {
           "name": "player",
-          "writable": true
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  108,
+                  97,
+                  121,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game"
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              }
+            ]
+          }
         },
         {
           "name": "from_circle",
@@ -353,7 +2214,10 @@
         },
         {
           "name": "owner",
-          "signer": true
+          "signer": true,
+          "relations": [
+            "player"
+          ]
         }
       ],
       "args": [
@@ -366,6 +2230,248 @@
           "type": "u64"
         }
       ]
+    },
+    {
+      "name": "reveal_prediction",
+      "docs": [
+        "Reveal a prediction during the Scoring window; a correct call (matching the",
+        "circle that died this instance) earns +1 skill point."
+      ],
+      "discriminator": [
+        76,
+        137,
+        127,
+        4,
+        163,
+        5,
+        110,
+        64
+      ],
+      "accounts": [
+        {
+          "name": "game",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  97,
+                  109,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game.game_id",
+                "account": "Game"
+              }
+            ]
+          }
+        },
+        {
+          "name": "player",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  108,
+                  97,
+                  121,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game"
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "owner",
+          "signer": true,
+          "relations": [
+            "player"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "predicted_circle",
+          "type": "u8"
+        },
+        {
+          "name": "nonce",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "roll_insane",
+      "docs": [
+        "Post-lock crank: roll for an INSANE round. On a hit, the whole jackpot",
+        "pool is injected into this game's leftover pot (and the pool resets).",
+        "Revealed after the 50% lock so it can't be targeted at deposit time.",
+        "",
+        "NOTE: placeholder randomness (slot/clock hash) \u2014 swap in VRF before mainnet."
+      ],
+      "discriminator": [
+        63,
+        119,
+        36,
+        174,
+        126,
+        9,
+        89,
+        3
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "game",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  97,
+                  109,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game.game_id",
+                "account": "Game"
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game"
+              }
+            ]
+          }
+        },
+        {
+          "name": "treasury",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  114,
+                  101,
+                  97,
+                  115,
+                  117,
+                  114,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "stake_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "treasury_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "stake_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "recent_slot_hashes"
+        },
+        {
+          "name": "randomness",
+          "docs": [
+            "the committed slot hash unless the game requires VRF."
+          ],
+          "optional": true
+        },
+        {
+          "name": "stake_mint"
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "cranker",
+          "signer": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
     },
     {
       "name": "select_death",
@@ -392,158 +2498,35 @@
       "accounts": [
         {
           "name": "game",
-          "writable": true
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  97,
+                  109,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game.game_id",
+                "account": "Game"
+              }
+            ]
+          }
         },
         {
           "name": "recent_slot_hashes"
         },
         {
-          "name": "cranker",
-          "signer": true
-        }
-      ],
-      "args": []
-    },
-    {
-      "name": "execute_death",
-      "docs": [
-        "Permissionless crank: kill the doomed circle, lock its refund rate, sweep",
-        "the haircut into the leftover pot, and either advance to the next instance",
-        "or move to Settling if only one circle remains."
-      ],
-      "discriminator": [
-        44,
-        230,
-        71,
-        33,
-        35,
-        222,
-        43,
-        120
-      ],
-      "accounts": [
-        {
-          "name": "game",
-          "writable": true
-        },
-        {
-          "name": "circle",
-          "writable": true
-        },
-        {
-          "name": "cranker",
-          "signer": true
-        }
-      ],
-      "args": [
-        {
-          "name": "circle_id",
-          "type": "u8"
-        }
-      ]
-    },
-    {
-      "name": "commit_prediction",
-      "docs": [
-        "Commit a hashed prediction of WHICH circle dies this instance.",
-        "hash = keccak(predicted_circle \u2016 nonce_le \u2016 owner \u2016 game \u2016 instance_le)."
-      ],
-      "discriminator": [
-        92,
-        250,
-        182,
-        231,
-        10,
-        22,
-        234,
-        71
-      ],
-      "accounts": [
-        {
-          "name": "game"
-        },
-        {
-          "name": "player",
-          "writable": true
-        },
-        {
-          "name": "owner",
-          "signer": true
-        }
-      ],
-      "args": [
-        {
-          "name": "hash",
-          "type": {
-            "array": [
-              "u8",
-              32
-            ]
-          }
-        }
-      ]
-    },
-    {
-      "name": "reveal_prediction",
-      "docs": [
-        "Reveal a prediction during the Scoring window; a correct call (matching the",
-        "circle that died this instance) earns +1 skill point."
-      ],
-      "discriminator": [
-        76,
-        137,
-        127,
-        4,
-        163,
-        5,
-        110,
-        64
-      ],
-      "accounts": [
-        {
-          "name": "game",
-          "writable": true
-        },
-        {
-          "name": "player",
-          "writable": true
-        },
-        {
-          "name": "owner",
-          "signer": true
-        }
-      ],
-      "args": [
-        {
-          "name": "predicted_circle",
-          "type": "u8"
-        },
-        {
-          "name": "nonce",
-          "type": "u64"
-        }
-      ]
-    },
-    {
-      "name": "advance_instance",
-      "docs": [
-        "Permissionless crank: end the scoring window and either advance to the",
-        "next instance's commit phase, or move to Settling if one circle remains."
-      ],
-      "discriminator": [
-        167,
-        89,
-        51,
-        18,
-        164,
-        248,
-        46,
-        46
-      ],
-      "accounts": [
-        {
-          "name": "game",
-          "writable": true
+          "name": "randomness",
+          "docs": [
+            "the committed slot hash unless the game requires VRF."
+          ],
+          "optional": true
         },
         {
           "name": "cranker",
@@ -553,285 +2536,49 @@
       "args": []
     },
     {
-      "name": "cash_out",
+      "name": "start_game",
       "docs": [
-        "An eliminated player banks their refund (stake \u00d7 refund_bps) from the",
-        "vault and leaves the game. Their circle must be dead."
+        "Close the lobby and start the instance loop (instance 1, Commit phase)."
       ],
       "discriminator": [
-        1,
-        110,
-        57,
-        58,
-        159,
-        157,
-        243,
-        192
-      ],
-      "accounts": [
-        {
-          "name": "game"
-        },
-        {
-          "name": "vault",
-          "writable": true
-        },
-        {
-          "name": "circle"
-        },
-        {
-          "name": "player",
-          "writable": true
-        },
-        {
-          "name": "owner",
-          "writable": true,
-          "signer": true
-        },
-        {
-          "name": "system_program"
-        }
-      ],
-      "args": []
-    },
-    {
-      "name": "land",
-      "docs": [
-        "An eliminated player carries their refund forward into a surviving circle."
-      ],
-      "discriminator": [
-        34,
-        112,
-        208,
-        19,
-        65,
-        226,
-        42,
-        230
-      ],
-      "accounts": [
-        {
-          "name": "game"
-        },
-        {
-          "name": "player",
-          "writable": true
-        },
-        {
-          "name": "from_circle",
-          "writable": true
-        },
-        {
-          "name": "to_circle",
-          "writable": true
-        },
-        {
-          "name": "owner",
-          "signer": true
-        }
-      ],
-      "args": [
-        {
-          "name": "target_circle",
-          "type": "u8"
-        }
-      ]
-    },
-    {
-      "name": "claim_creator_cut",
-      "docs": [
-        "The winning circle's creator claims their \u03ba cut of the leftover pot."
-      ],
-      "discriminator": [
-        54,
-        62,
-        1,
-        54,
-        36,
-        74,
-        69,
-        145
-      ],
-      "accounts": [
-        {
-          "name": "game",
-          "writable": true
-        },
-        {
-          "name": "vault",
-          "writable": true
-        },
-        {
-          "name": "winning_circle"
-        },
-        {
-          "name": "owner",
-          "writable": true,
-          "signer": true
-        },
-        {
-          "name": "system_program"
-        }
-      ],
-      "args": []
-    },
-    {
-      "name": "claim_winnings",
-      "docs": [
-        "A surviving player (in the winning circle) claims stake-back + their",
-        "stake-weighted share of the luck pool."
-      ],
-      "discriminator": [
-        161,
-        215,
-        24,
-        59,
-        14,
-        236,
-        242,
-        221
-      ],
-      "accounts": [
-        {
-          "name": "game"
-        },
-        {
-          "name": "vault",
-          "writable": true
-        },
-        {
-          "name": "winning_circle"
-        },
-        {
-          "name": "player",
-          "writable": true
-        },
-        {
-          "name": "owner",
-          "writable": true,
-          "signer": true
-        },
-        {
-          "name": "system_program"
-        }
-      ],
-      "args": []
-    },
-    {
-      "name": "claim_skill",
-      "docs": [
-        "Any player who scored skill points claims their points-weighted share of",
-        "the skill pool (survivors and eliminated alike)."
-      ],
-      "discriminator": [
-        49,
-        227,
-        21,
-        100,
-        192,
-        147,
-        31,
-        153
-      ],
-      "accounts": [
-        {
-          "name": "game"
-        },
-        {
-          "name": "vault",
-          "writable": true
-        },
-        {
-          "name": "player",
-          "writable": true
-        },
-        {
-          "name": "owner",
-          "writable": true,
-          "signer": true
-        },
-        {
-          "name": "system_program"
-        }
-      ],
-      "args": []
-    },
-    {
-      "name": "init_treasury",
-      "docs": [
-        "One-time: create the cross-game treasury."
-      ],
-      "discriminator": [
-        105,
-        152,
-        173,
-        51,
-        158,
-        151,
-        49,
+        249,
+        47,
+        252,
+        172,
+        184,
+        162,
+        245,
         14
       ],
       "accounts": [
         {
-          "name": "treasury",
-          "writable": true
-        },
-        {
-          "name": "treasury_vault"
+          "name": "game",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  97,
+                  109,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game.game_id",
+                "account": "Game"
+              }
+            ]
+          }
         },
         {
           "name": "authority",
-          "writable": true,
-          "signer": true
-        },
-        {
-          "name": "system_program"
-        }
-      ],
-      "args": []
-    },
-    {
-      "name": "collect_fees",
-      "docs": [
-        "Sweep a finished game's collected rake into the treasury, split into",
-        "house profit (house_cut) and the jackpot pool (the rest)."
-      ],
-      "discriminator": [
-        164,
-        152,
-        207,
-        99,
-        30,
-        186,
-        19,
-        182
-      ],
-      "accounts": [
-        {
-          "name": "config"
-        },
-        {
-          "name": "game",
-          "writable": true
-        },
-        {
-          "name": "vault",
-          "writable": true
-        },
-        {
-          "name": "treasury",
-          "writable": true
-        },
-        {
-          "name": "treasury_vault",
-          "writable": true
-        },
-        {
-          "name": "cranker",
-          "signer": true
-        },
-        {
-          "name": "system_program"
+          "signer": true,
+          "relations": [
+            "game"
+          ]
         }
       ],
       "args": []
@@ -854,10 +2601,57 @@
       "accounts": [
         {
           "name": "treasury",
-          "writable": true
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  114,
+                  101,
+                  97,
+                  115,
+                  117,
+                  114,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "stake_mint"
+              }
+            ]
+          }
         },
         {
           "name": "treasury_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "stake_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "stake_mint"
+        },
+        {
+          "name": "authority_token",
           "writable": true
         },
         {
@@ -866,7 +2660,11 @@
           "signer": true
         },
         {
-          "name": "system_program"
+          "name": "token_program"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
         }
       ],
       "args": [
@@ -875,190 +2673,22 @@
           "type": "u64"
         }
       ]
-    },
-    {
-      "name": "roll_insane",
-      "docs": [
-        "Post-lock crank: roll for an INSANE round. On a hit, the whole jackpot",
-        "pool is injected into this game's leftover pot (and the pool resets).",
-        "Revealed after the 50% lock so it can't be targeted at deposit time.",
-        "",
-        "NOTE: placeholder randomness (slot/clock hash) \u2014 swap in VRF before mainnet."
-      ],
-      "discriminator": [
-        63,
-        119,
-        36,
-        174,
-        126,
-        9,
-        89,
-        3
-      ],
-      "accounts": [
-        {
-          "name": "config"
-        },
-        {
-          "name": "game",
-          "writable": true
-        },
-        {
-          "name": "vault",
-          "writable": true
-        },
-        {
-          "name": "treasury",
-          "writable": true
-        },
-        {
-          "name": "treasury_vault",
-          "writable": true
-        },
-        {
-          "name": "recent_slot_hashes"
-        },
-        {
-          "name": "cranker",
-          "signer": true
-        },
-        {
-          "name": "system_program"
-        }
-      ],
-      "args": []
-    },
-    {
-      "name": "close_player",
-      "docs": [
-        "Close a Player account; its rent returns to the player's wallet.",
-        "Permissionless once the player has nothing left to claim. If they still",
-        "have an unclaimed win (status Active) or an unclaimed skill share, only",
-        "the owner may close \u2014 their signature is an explicit forfeit."
-      ],
-      "discriminator": [
-        225,
-        227,
-        204,
-        63,
-        32,
-        122,
-        58,
-        227
-      ],
-      "accounts": [
-        {
-          "name": "game",
-          "writable": true
-        },
-        {
-          "name": "player",
-          "writable": true
-        },
-        {
-          "name": "owner",
-          "docs": [
-            "signature is only required for the forfeit path (checked in handler)."
-          ],
-          "writable": true
-        },
-        {
-          "name": "cranker",
-          "signer": true
-        }
-      ],
-      "args": []
-    },
-    {
-      "name": "close_circle",
-      "docs": [
-        "Close a Circle account once every player is closed; rent returns to the",
-        "circle's creator. Closing the WINNING circle before its creator claimed",
-        "\u03ba requires the creator's signature (an explicit forfeit of the cut)."
-      ],
-      "discriminator": [
-        249,
-        63,
-        161,
-        46,
-        147,
-        239,
-        34,
-        37
-      ],
-      "accounts": [
-        {
-          "name": "game",
-          "writable": true
-        },
-        {
-          "name": "circle",
-          "writable": true
-        },
-        {
-          "name": "creator",
-          "docs": [
-            "signature is only required to close an unclaimed winning circle."
-          ],
-          "writable": true
-        },
-        {
-          "name": "cranker",
-          "signer": true
-        }
-      ],
-      "args": []
-    },
-    {
-      "name": "close_game",
-      "docs": [
-        "Close the Game account last: sweep any vault dust (rounding remainders,",
-        "forfeited claims) into the treasury jackpot pool, then return the game",
-        "account's rent to the game authority. Vault drains to exactly zero."
-      ],
-      "discriminator": [
-        237,
-        236,
-        157,
-        201,
-        253,
-        20,
-        248,
-        67
-      ],
-      "accounts": [
-        {
-          "name": "game",
-          "writable": true
-        },
-        {
-          "name": "vault",
-          "writable": true
-        },
-        {
-          "name": "treasury",
-          "writable": true
-        },
-        {
-          "name": "treasury_vault",
-          "writable": true
-        },
-        {
-          "name": "authority",
-          "writable": true
-        },
-        {
-          "name": "cranker",
-          "signer": true
-        },
-        {
-          "name": "system_program"
-        }
-      ],
-      "args": []
     }
   ],
   "accounts": [
+    {
+      "name": "AllowedMint",
+      "discriminator": [
+        173,
+        229,
+        179,
+        46,
+        121,
+        164,
+        247,
+        6
+      ]
+    },
     {
       "name": "Circle",
       "discriminator": [
@@ -1125,7 +2755,169 @@
       ]
     }
   ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "BadParam",
+      "msg": "Invalid parameter"
+    },
+    {
+      "code": 6001,
+      "name": "WrongPhase",
+      "msg": "Action not allowed in the current game phase"
+    },
+    {
+      "code": 6002,
+      "name": "StakeOutOfRange",
+      "msg": "Stake outside the configured min/max bounds"
+    },
+    {
+      "code": 6003,
+      "name": "CircleDead",
+      "msg": "Circle is no longer alive"
+    },
+    {
+      "code": 6004,
+      "name": "NotEnoughCircles",
+      "msg": "Need at least 2 circles to start"
+    },
+    {
+      "code": 6005,
+      "name": "MathOverflow",
+      "msg": "Arithmetic overflow"
+    },
+    {
+      "code": 6006,
+      "name": "Unauthorized",
+      "msg": "Unauthorized"
+    },
+    {
+      "code": 6007,
+      "name": "PlayerInactive",
+      "msg": "Player is not active"
+    },
+    {
+      "code": 6008,
+      "name": "PhaseEnded",
+      "msg": "This phase's window has ended"
+    },
+    {
+      "code": 6009,
+      "name": "PhaseNotOver",
+      "msg": "This phase's window is not over yet"
+    },
+    {
+      "code": 6010,
+      "name": "BadReveal",
+      "msg": "Reveal does not match commitment"
+    },
+    {
+      "code": 6011,
+      "name": "NothingCommitted",
+      "msg": "No live commitment for this instance"
+    },
+    {
+      "code": 6012,
+      "name": "NotAMove",
+      "msg": "Reveal target must differ from current circle"
+    },
+    {
+      "code": 6013,
+      "name": "IncompleteCircleSet",
+      "msg": "Must pass every alive circle to select death"
+    },
+    {
+      "code": 6014,
+      "name": "CircleAlive",
+      "msg": "Circle is still alive"
+    },
+    {
+      "code": 6015,
+      "name": "AlreadyClaimed",
+      "msg": "Already claimed"
+    },
+    {
+      "code": 6016,
+      "name": "NotInWinningCircle",
+      "msg": "Player is not in the winning circle"
+    },
+    {
+      "code": 6017,
+      "name": "NothingToClaim",
+      "msg": "Nothing to claim"
+    },
+    {
+      "code": 6018,
+      "name": "TooEarly",
+      "msg": "Too early: action only allowed after the 50% lock"
+    },
+    {
+      "code": 6019,
+      "name": "JoinWindowClosed",
+      "msg": "The join window is closed (past the 50% lock or wrong phase)"
+    },
+    {
+      "code": 6020,
+      "name": "PlayersRemain",
+      "msg": "All players must be closed first"
+    },
+    {
+      "code": 6021,
+      "name": "CirclesRemain",
+      "msg": "All circles must be closed first"
+    },
+    {
+      "code": 6022,
+      "name": "ConservationViolated",
+      "msg": "Conservation violated: the books do not balance"
+    },
+    {
+      "code": 6023,
+      "name": "GameCapReached",
+      "msg": "This game has reached its deposit cap"
+    },
+    {
+      "code": 6024,
+      "name": "MintNotAllowed",
+      "msg": "That mint is not allowed to open combs"
+    },
+    {
+      "code": 6025,
+      "name": "BadRandomness",
+      "msg": "Randomness account could not be parsed"
+    },
+    {
+      "code": 6026,
+      "name": "RandomnessNotReady",
+      "msg": "Randomness is not settled yet, or this game requires VRF"
+    }
+  ],
   "types": [
+    {
+      "name": "AllowedMint",
+      "docs": [
+        "Cross-game treasury: accumulates house profit (withdrawable) and the jackpot",
+        "pool that feeds insane rounds. Lamports live in a separate treasury vault PDA.",
+        "Presence of this account (with enabled = true) is what makes a mint playable."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "enabled",
+            "type": "bool"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
     {
       "name": "Circle",
       "type": {
@@ -1274,6 +3066,30 @@
             "type": "u64"
           },
           {
+            "name": "created_at",
+            "docs": [
+              "unix time the lobby opened; after LOBBY_TIMEOUT_SECONDS without a start,",
+              "anyone may abort the game and every player reclaims their full deposit."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "stake_mint",
+            "docs": [
+              "the SPL mint every stake in this game is denominated in. One mint per",
+              "game: a pot is never mixed. Wrapped SOL is just another allowed mint."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "require_vrf",
+            "docs": [
+              "when set, the death and jackpot rolls REFUSE to fall back to the slot",
+              "hash and require a settled Switchboard value. Real-value games set this."
+            ],
+            "type": "bool"
+          },
+          {
             "name": "creator_cut_paid",
             "docs": [
               "set once the winning circle's creator has claimed \u03ba."
@@ -1361,6 +3177,9 @@
           },
           {
             "name": "Closed"
+          },
+          {
+            "name": "Aborted"
           }
         ]
       }
@@ -1492,10 +3311,6 @@
     },
     {
       "name": "Treasury",
-      "docs": [
-        "Cross-game treasury: accumulates house profit (withdrawable) and the jackpot",
-        "pool that feeds insane rounds. Lamports live in a separate treasury vault PDA."
-      ],
       "type": {
         "kind": "struct",
         "fields": [

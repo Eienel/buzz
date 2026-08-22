@@ -1,0 +1,12 @@
+{
+  "BUZZ": {
+    "mint": "7yPdd9WxE3zwYQWK5a6bobwfDpQpzst6J7j5tVDPw1q8",
+    "decimals": 6,
+    "tokenProgram": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+  },
+  "ANSEM": {
+    "mint": "BxrMzNFPmftcNgn5v4PuUoXAiezZTN7edjXFRqJTusuA",
+    "decimals": 6,
+    "tokenProgram": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+  }
+}
