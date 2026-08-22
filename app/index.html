@@ -13,14 +13,22 @@
 <link rel="icon" type="image/png" href="favicon.png">
 <style>
   :root{
-    --bg:#0b0e14; --panel:#121826; --panel2:#0f1420; --line:#232c3f; --line2:#2f3a52;
-    --text:#e8edf6; --dim:#8b96ab; --dimmer:#5e6980;
-    --accent:#ffb454; --good:#4cd88a; --bad:#ff5c7a; --info:#5aa7ff;
+    --bg:#0a0806; --panel:#16110a; --panel2:#120e08; --line:#3a2c14; --line2:#54401c;
+    --text:#f3ead9; --dim:#a08f74; --dimmer:#6d5f4c;
+    --accent:#ffb300; --accent2:#ff8f1f; --good:#5fd68a; --bad:#f2637a; --info:#6fb0ff;
     --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
     --maxw:1180px;
   }
   *{box-sizing:border-box}
   html{scroll-behavior:smooth; scroll-padding-top:80px}
+  body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;opacity:.05;
+    background-image:url("data:image/svg+xml;utf8,\
+<svg xmlns='http://www.w3.org/2000/svg' width='56' height='97' viewBox='0 0 56 97'>\
+<g fill='none' stroke='%23ffb300' stroke-width='2'>\
+<path d='M28 0 L56 16 L56 48 L28 64 L0 48 L0 16 Z'/>\
+<path d='M28 64 L56 80 L56 112 L28 128 L0 112 L0 80 Z'/></g></svg>");
+    background-size:56px 97px}
+  .topbar,.wrap{position:relative;z-index:1}
   body{margin:0;background:var(--bg);color:var(--text);
     font:16px/1.65 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
     -webkit-font-smoothing:antialiased}
@@ -54,7 +62,8 @@
   .btn{display:inline-block;padding:11px 20px;border-radius:9px;font-weight:600;font-size:15px;
     border:1px solid var(--line2);color:var(--text);background:var(--panel)}
   .btn:hover{border-color:var(--dim);text-decoration:none}
-  .btn.primary{background:var(--accent);color:#1a1206;border-color:var(--accent)}
+  .btn.primary{background:linear-gradient(135deg,var(--accent),var(--accent2));color:#241703;
+    border-color:var(--accent);font-weight:700}
   .btn.primary:hover{filter:brightness(1.08)}
 
   section{padding:52px 0;border-bottom:1px solid var(--line)}
@@ -68,8 +77,11 @@
   .grid{display:grid;gap:16px;margin:22px 0}
   .g2{grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
   .g3{grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
-  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
-  .card h4{margin:0 0 8px;font-size:16px}
+  .card{background:linear-gradient(160deg,#1d1509,#140f09);border:1px solid var(--line2);
+    padding:18px 22px;
+    clip-path:polygon(20px 0,100% 0,100% calc(100% - 20px),calc(100% - 20px) 100%,0 100%,0 20px);
+    box-shadow:inset 0 0 40px rgba(255,179,0,.06)}
+  .card h4{margin:0 0 8px;font-size:16px;color:var(--accent)}
   .card p{margin:0;color:var(--dim);font-size:15px}
 
   table{width:100%;border-collapse:collapse;margin:20px 0;font-size:15px}
@@ -82,7 +94,8 @@
   td code{white-space:nowrap}
 
   .phases{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));margin:24px 0}
-  .phase{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+  .phase{background:linear-gradient(160deg,#1b1409,#130f08);border:1px solid var(--line2);padding:16px 18px;
+    clip-path:polygon(16px 0,100% 0,100% calc(100% - 16px),calc(100% - 16px) 100%,0 100%,0 16px)}
   .phase .n{font-family:var(--mono);font-size:12px;color:var(--accent);margin-bottom:6px}
   .phase h4{margin:0 0 6px;font-size:16px}
   .phase p{margin:0;font-size:14px;color:var(--dim)}
@@ -101,7 +114,7 @@
   ul.done li::before{content:"\\2713";color:var(--good)}
   ul.todo li::before{content:"\\25CB";color:var(--dimmer)}
 
-  .eq{font-family:var(--mono);font-size:14px;background:var(--panel2);border:1px solid var(--line);
+  .eq{font-family:var(--mono);font-size:14px;background:#0f0b06;border:1px solid var(--line);
     border-radius:10px;padding:16px 18px;margin:18px 0;overflow-x:auto;color:var(--accent);
     white-space:pre}
 
@@ -117,7 +130,9 @@
 <body>
 
 <div class="topbar"><div class="in">
-  <span class="brand">BUZZ<span class="dot">.</span></span>
+  <span class="brand"><svg width="22" height="22" viewBox="0 0 100 100" style="vertical-align:-4px;margin-right:7px">
+    <path d="M50 8 L74 22 L74 50 L50 64 L26 50 L26 22 Z" fill="none" stroke="#ffb300" stroke-width="6" opacity=".45"/>
+    <path d="M50 30 L68 40 L68 60 L50 70 L32 60 L32 40 Z" fill="#ffb300"/></svg>BUZZ<span class="dot">.</span></span>
   <span class="live">devnet</span>
   <nav>
     <a href="#what">What</a>
