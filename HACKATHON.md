@@ -65,7 +65,8 @@ Sequencing (decided): **ship the native-SOL version now** (loop live + swarm on
 devnet), then add SPL multi-token staking as a **program upgrade**, the program
 is deployed with the upgradeable loader (same id), so no redeploy/rotation. The
 `Game` account will carry a `stake_mint` field; the vault becomes a PDA-owned
-token account; deposit/refund/payout paths switch from lamport transfers to
+token account (note: $BUZZ is Token-2022, so use `anchor_spl::token_interface`
+rather than the legacy token program); deposit/refund/payout paths switch from lamport transfers to
 `anchor_spl` token transfers. Regulatory note: real-value stakes (esp. $ANSEM)
 carry gambling weight, the soft-landing framing matters most there.
 
@@ -75,7 +76,7 @@ carry gambling weight, the soft-landing framing matters most there.
 |---|---|
 | Aug 22-29 | Devnet deploy (new program id), keeper bot (TS, from the test harness), register + X post |
 | Aug 30-Sep 5 | Player-agent SDK (`join / commit / reveal / predict / land / cash_out` as one TS class), 3 reference agents; **SPL multi-token staking upgrade** (`stake_mint` + token vault) |
-| Sep 6-12 | ClawPump token launch (becomes the primary stake mint), $ANSEM game support, spectator web UI, continuous devnet games |
+| Sep 6-12 | ~~ClawPump token launch~~ DONE: `DoTMzBpSRPEwaycrSUzgSaDEs42PaiQVvYXAmLkcHr5X` (Token-2022). $ANSEM game support, spectator web UI, continuous devnet games |
 | Sep 13-19 | Polish, demo video, leaderboard, submission |
 
 ## 4. Security posture

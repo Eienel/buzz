@@ -125,6 +125,7 @@
     <a href="#economics">Economics</a>
     <a href="#agents">Agents</a>
     <a href="#security">Security</a>
+    <a href="#token">Token</a>
     <a href="#roadmap">Roadmap</a>
     <a href="arena.html">Live arena</a>
     <a href="https://github.com/Eienel/buzz">GitHub</a>
@@ -422,8 +423,51 @@ source:      github.com/Eienel/buzz</div>
   the on-chain rules and are what the economics were validated against.</p>
 </section>
 
+<section id="token">
+  <h2><span class="num">07</span>The token</h2>
+  <p class="lede">$BUZZ is live on ClawPump. Here is exactly what it is today and what it is
+  not, because the difference matters.</p>
+
+  <div class="eq">mint:     DoTMzBpSRPEwaycrSUzgSaDEs42PaiQVvYXAmLkcHr5X
+program:  Token-2022
+supply:   1,000,000,000
+decimals: 6
+mint authority:   revoked
+freeze authority: revoked</div>
+
+  <p>Mint authority revoked means no one can print more. Freeze authority revoked means no one
+  can freeze your balance. Both were given up at launch, so the supply above is the supply
+  forever.</p>
+
+  <div class="grid g2">
+    <div class="card">
+      <h4>What it is today</h4>
+      <p>A ClawPump-launched token and the project's entry into AnsemHack. Trading fees on it
+      accrue to the project and fund development and the devnet arena.</p>
+    </div>
+    <div class="card">
+      <h4>What it is not, yet</h4>
+      <p>It is not the game's stake. Games currently run on devnet and are staked in test SOL.
+      $BUZZ does not gate access, and holding it does not entitle you to game revenue.</p>
+    </div>
+  </div>
+
+  <p>The plan is for $BUZZ to become the primary stake asset once SPL staking ships, so that
+  playing the game means using the token. That is a program upgrade on the roadmap below, not a
+  promise with a date attached. Until it lands, treat the token as what it is: a hackathon entry
+  and a speculative asset on an unaudited, devnet-stage project.</p>
+
+  <p><a href="https://clawpump.tech/tokens/DoTMzBpSRPEwaycrSUzgSaDEs42PaiQVvYXAmLkcHr5X">View on ClawPump</a></p>
+
+  <div class="callout warn">
+    <p><strong>Do not confuse the two chains.</strong> The token is on Solana mainnet. The game is
+    on Solana devnet with valueless test SOL. Buying the token does not buy into a live-money game,
+    because there is not one yet.</p>
+  </div>
+</section>
+
 <section id="roadmap">
-  <h2><span class="num">07</span>Roadmap</h2>
+  <h2><span class="num">08</span>Roadmap</h2>
 
   <h3>Shipped</h3>
   <ul class="clean done">
@@ -450,7 +494,7 @@ source:      github.com/Eienel/buzz</div>
 </section>
 
 <section id="faq">
-  <h2><span class="num">08</span>FAQ</h2>
+  <h2><span class="num">09</span>FAQ</h2>
 
   <h3>Is this gambling?</h3>
   <p>BUZZ has a skill component that measurably moves returns, and no player can be zeroed.
@@ -486,6 +530,7 @@ source:      github.com/Eienel/buzz</div>
     <div>
       <h5>Build</h5>
       <a href="https://github.com/Eienel/buzz">GitHub repository</a>
+      <a href="https://clawpump.tech/tokens/DoTMzBpSRPEwaycrSUzgSaDEs42PaiQVvYXAmLkcHr5X">$BUZZ on ClawPump</a>
       <a href="https://github.com/Eienel/buzz/blob/main/SPEC.md">Game spec</a>
       <a href="https://github.com/Eienel/buzz/blob/main/ARCHITECTURE.md">Architecture</a>
     </div>

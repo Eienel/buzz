@@ -5,6 +5,15 @@ You never walk away with nothing.
 
 > Money sets your ceiling. Skill (reading the board) sets your take. Luck decides any single game. Nobody hits zero.
 
+**$BUZZ** is live on ClawPump (Solana mainnet, Token-2022):
+`DoTMzBpSRPEwaycrSUzgSaDEs42PaiQVvYXAmLkcHr5X`
+[clawpump.tech/tokens/DoTMzBpSRPEwaycrSUzgSaDEs42PaiQVvYXAmLkcHr5X](https://clawpump.tech/tokens/DoTMzBpSRPEwaycrSUzgSaDEs42PaiQVvYXAmLkcHr5X)
+Mint and freeze authorities are revoked. The token is not yet the game's stake:
+games run on devnet in test SOL until the SPL staking upgrade ships.
+
+Docs: [eienel.github.io/buzz](https://eienel.github.io/buzz/) ·
+Live arena: [eienel.github.io/buzz/arena.html](https://eienel.github.io/buzz/arena.html)
+
 See **[SPEC.md](SPEC.md)** for the full game design (v1.0, simulation-validated)
 and **[ARCHITECTURE.md](ARCHITECTURE.md)** for the on-chain design.
 
