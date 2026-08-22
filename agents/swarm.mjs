@@ -126,7 +126,7 @@ async function playGame(gameNo) {
   // the ephemeral agent wallets' balances (their keypairs live only in memory).
   try {
   // lobby: keeper (payer) creates the game; agents create/join circles 0..5
-  await program.methods.createGame(gid, 6).accounts({ config: configPda, game: gamePda, vault: vaultPda, authority: payer.publicKey, systemProgram: SystemProgram.programId }).rpc();
+  await program.methods.createGame(gid, 6, false).accounts({ config: configPda, game: gamePda, vault: vaultPda, authority: payer.publicKey, systemProgram: SystemProgram.programId }).rpc();
   const taken = new Set();
   for (const a of agents) {
     const stake = new BN(STAKE);

@@ -93,7 +93,7 @@ describe("buzz: token staking", () => {
     const g = gamePda(gid);
     let rejected = false;
     try {
-      await program.methods.createGame(gid, 6).accountsPartial({
+      await program.methods.createGame(gid, 6, false).accountsPartial({
         config: configPda, stakeMint: rogue, allowed: allowedPda(rogue), game: g, vault: vaultPda(g),
         authority: authority.publicKey, tokenProgram, systemProgram: SystemProgram.programId,
       }).rpc();
@@ -108,7 +108,7 @@ describe("buzz: token staking", () => {
     const gid = new anchor.BN(Date.now() + 1);
     const g = gamePda(gid);
 
-    await program.methods.createGame(gid, 6).accountsPartial({
+    await program.methods.createGame(gid, 6, false).accountsPartial({
       config: configPda, stakeMint: mint, allowed: allowedPda(mint), game: g, vault: vaultPda(g),
       authority: authority.publicKey, tokenProgram, systemProgram: SystemProgram.programId,
     }).rpc();
@@ -139,7 +139,7 @@ describe("buzz: token staking", () => {
     const gid = new anchor.BN(Date.now() + 2);
     const g = gamePda(gid);
 
-    await program.methods.createGame(gid, 6).accountsPartial({
+    await program.methods.createGame(gid, 6, false).accountsPartial({
       config: configPda, stakeMint: mint, allowed: allowedPda(mint), game: g, vault: vaultPda(g),
       authority: authority.publicKey, tokenProgram, systemProgram: SystemProgram.programId,
     }).rpc();
@@ -158,7 +158,7 @@ describe("buzz: token staking", () => {
     const { mint, tokenProgram } = await newStakeAsset();
     const gid = new anchor.BN(Date.now() + 3);
     const g = gamePda(gid);
-    await program.methods.createGame(gid, 6).accountsPartial({
+    await program.methods.createGame(gid, 6, false).accountsPartial({
       config: configPda, stakeMint: mint, allowed: allowedPda(mint), game: g, vault: vaultPda(g),
       authority: authority.publicKey, tokenProgram, systemProgram: SystemProgram.programId,
     }).rpc();
@@ -189,7 +189,7 @@ describe("buzz: token staking", () => {
     const mk = async (asset: any, p: any, salt: number) => {
       const gid = new anchor.BN(Date.now() + 100 + salt);
       const g = gamePda(gid);
-      await program.methods.createGame(gid, 6).accountsPartial({
+      await program.methods.createGame(gid, 6, false).accountsPartial({
         config: configPda, stakeMint: asset.mint, allowed: allowedPda(asset.mint), game: g,
         vault: vaultPda(g), authority: authority.publicKey,
         tokenProgram: asset.tokenProgram, systemProgram: SystemProgram.programId,
@@ -225,7 +225,7 @@ describe("buzz: a full game in tokens", () => {
     const g = gamePda(gid);
     const stake = new anchor.BN(10 * UNIT);
 
-    await program.methods.createGame(gid, 6).accountsPartial({
+    await program.methods.createGame(gid, 6, false).accountsPartial({
       config: configPda, stakeMint: mint, allowed: allowedPda(mint), game: g, vault: vaultPda(g),
       authority: authority.publicKey, tokenProgram, systemProgram: SystemProgram.programId,
     }).rpc();

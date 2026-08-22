@@ -12,6 +12,7 @@ use anchor_lang::prelude::*;
 use anchor_spl::token_interface::{
     self, Mint, TokenAccount, TokenInterface, TransferChecked,
 };
+use switchboard_on_demand::accounts::RandomnessAccountData;
 
 declare_id!("4TNbztSMd3zxG57M25y8WhpcKrQMJQVYEK6EnnkQy1Hw");
 
@@ -69,7 +70,7 @@ pub mod last_circle {
     }
 
     /// Open a new game arena in the Lobby phase. `num_circles` is 6 or 12.
-    pub fn create_game(ctx: Context<CreateGame>, game_id: u64, num_circles: u8) -> Result<()> {
+    pub fn create_game(ctx: Context<CreateGame>, game_id: u64, num_circles: u8, require_vrf: bool) -> Result<()> {
         require!(num_circles == 6 || num_circles == 12, GameError::BadParam);
 
         let g = &mut ctx.accounts.game;
@@ -95,6 +96,7 @@ pub mod last_circle {
         g.insane_entropy_slot = 0;
         g.created_at = Clock::get()?.unix_timestamp;
         g.stake_mint = ctx.accounts.stake_mint.key();
+        g.require_vrf = require_vrf;
         g.creator_cut_paid = false;
         g.insane_rolled = false;
         g.insane = false;
@@ -314,7 +316,13 @@ pub mod last_circle {
         // committed to in advance_to_reveal, mixed with game/instance for
         // domain separation. NOTE: deliberately no clock.slot in the seed —
         // the seed must not vary with WHEN the crank lands.
-        let entropy = slothash_at(&ctx.accounts.recent_slot_hashes, g.entropy_slot)?;
+        let entropy = randomness_seed(
+            ctx.accounts.randomness.as_ref().map(|a| a.as_ref()),
+            &ctx.accounts.recent_slot_hashes,
+            g.entropy_slot,
+            &clock,
+            g.require_vrf,
+        )?;
         let seed = anchor_lang::solana_program::keccak::hashv(&[
             &entropy,
             &g.entropy_slot.to_le_bytes(),
@@ -657,9 +665,10 @@ pub mod last_circle {
     ///
     /// NOTE: placeholder randomness (slot/clock hash) — swap in VRF before mainnet.
     pub fn roll_insane(ctx: Context<RollInsane>) -> Result<()> {
-        let (status, instance, lock, rolled, entropy_slot, gkey, gvbump) = {
+        let (status, instance, lock, rolled, entropy_slot, require_vrf, gkey, gvbump) = {
             let g = &ctx.accounts.game;
-            (g.status, g.instance, g.lock_instance, g.insane_rolled, g.insane_entropy_slot, g.key(), g.vault_bump)
+            (g.status, g.instance, g.lock_instance, g.insane_rolled, g.insane_entropy_slot,
+             g.require_vrf, g.key(), g.vault_bump)
         };
         require!(status == GameStatus::Running, GameError::WrongPhase);
         require!(instance >= lock, GameError::TooEarly);
@@ -670,7 +679,13 @@ pub mod last_circle {
         // fixed slot's hash (no clock.slot) so the outcome cannot be ground
         // by choosing when to submit the crank.
         require!(entropy_slot > 0 && clock.slot > entropy_slot, GameError::TooEarly);
-        let entropy = slothash_at(&ctx.accounts.recent_slot_hashes, entropy_slot)?;
+        let entropy = randomness_seed(
+            ctx.accounts.randomness.as_ref().map(|a| a.as_ref()),
+            &ctx.accounts.recent_slot_hashes,
+            entropy_slot,
+            &clock,
+            require_vrf,
+        )?;
         let seed = anchor_lang::solana_program::keccak::hashv(&[
             &entropy,
             &entropy_slot.to_le_bytes(),
@@ -901,27 +916,48 @@ fn refund_bps(instance: u16, num_circles: u8) -> u16 {
     (REFUND_LO_BPS + (t.min(tmax) * span) / tmax) as u16
 }
 
-/// Randomness seam. Returns the SlotHashes entry for the newest slot at or
-/// before `target_slot` — a slot the game COMMITTED to before its hash existed,
-/// so neither players nor crankers can grind submission timing for a better
-/// draw. Falls back to the oldest retained entry if the crank stalled past the
-/// sysvar's ~512-slot horizon (liveness over grind-resistance in that rare case).
+/// Randomness seam.
 ///
-/// NOTE: the leader of the target slot can still bias its hash. For mainnet,
-/// replace this seam with a real VRF (Switchboard On-Demand): commit a
-/// randomness account pre-reveal and read its settled value here instead. The
-/// call sites mix in game/instance for domain separation, so only this
-/// function changes.
+/// Preferred source is Switchboard On-Demand: the crank commits a randomness
+/// account to a future slot, an oracle reveals it, and we read the settled
+/// value here. That value is unpredictable to players, to the cranker, and to
+/// the slot leader, which is the property the slot hash alone cannot give.
+///
+/// If no randomness account is supplied, we fall back to the pre-committed slot
+/// hash. That still defeats player and cranker grinding (the slot is fixed
+/// before its hash exists) but leaves the slot's leader some influence, so the
+/// fallback is for devnet and is refused once `require_vrf` is set on the game.
+fn randomness_seed(
+    randomness: Option<&AccountInfo>,
+    slot_hashes: &AccountInfo,
+    target_slot: u64,
+    clock: &Clock,
+    require_vrf: bool,
+) -> Result<[u8; 32]> {
+    if let Some(acc) = randomness {
+        let data = acc.try_borrow_data().map_err(|_| GameError::BadParam)?;
+        let parsed = RandomnessAccountData::parse(data).map_err(|_| GameError::BadRandomness)?;
+        // get_value only returns once the oracle has revealed for that slot
+        let value = parsed
+            .get_value(clock.slot)
+            .map_err(|_| GameError::RandomnessNotReady)?;
+        return Ok(value);
+    }
+    require!(!require_vrf, GameError::RandomnessNotReady);
+    slothash_at(slot_hashes, target_slot)
+}
+
+/// Fallback entropy: the SlotHashes entry for the newest slot at or before
+/// `target_slot`, a slot the game committed to before its hash existed.
 fn slothash_at(slot_hashes_ai: &AccountInfo, target_slot: u64) -> Result<[u8; 32]> {
     require!(
         *slot_hashes_ai.key == anchor_lang::solana_program::sysvar::slot_hashes::id(),
         GameError::BadParam
     );
     let data = slot_hashes_ai.try_borrow_data().map_err(|_| GameError::BadParam)?;
-    // layout: [num_entries: u64][ (slot: u64, hash: [u8;32]) ... ] most-recent first
     require!(data.len() >= 48, GameError::BadParam);
     let n = u64::from_le_bytes(data[0..8].try_into().unwrap()) as usize;
-    let mut chosen = 8 + (n.saturating_sub(1)) * 40; // default: oldest entry
+    let mut chosen = 8 + (n.saturating_sub(1)) * 40;
     for i in 0..n {
         let off = 8 + i * 40;
         if off + 40 > data.len() {
@@ -929,7 +965,7 @@ fn slothash_at(slot_hashes_ai: &AccountInfo, target_slot: u64) -> Result<[u8; 32
         }
         let slot = u64::from_le_bytes(data[off..off + 8].try_into().unwrap());
         if slot <= target_slot {
-            chosen = off; // newest entry at or before the committed slot
+            chosen = off;
             break;
         }
     }
@@ -1111,6 +1147,9 @@ pub struct Game {
     /// the SPL mint every stake in this game is denominated in. One mint per
     /// game: a pot is never mixed. Wrapped SOL is just another allowed mint.
     pub stake_mint: Pubkey,
+    /// when set, the death and jackpot rolls REFUSE to fall back to the slot
+    /// hash and require a settled Switchboard value. Real-value games set this.
+    pub require_vrf: bool,
     /// set once the winning circle's creator has claimed κ.
     pub creator_cut_paid: bool,
     /// whether the post-lock insane roll has happened, and its outcome.
@@ -1121,7 +1160,7 @@ pub struct Game {
 }
 impl Game {
     pub const SPACE: usize =
-        8 + 8 + 32 + 1 + 1 + 2 + 2 + 1 + 8 + 4 + 1 + 1 + 1 + 4 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 32 + 1 + 1 + 1 + 1 + 1;
+        8 + 8 + 32 + 1 + 1 + 2 + 2 + 1 + 8 + 4 + 1 + 1 + 1 + 4 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 32 + 1 + 1 + 1 + 1 + 1 + 1;
     /// Commit window = 60% of the instance, reveal = 40% (min 1s each).
     pub fn commit_window(&self) -> i64 {
         ((self.instance_seconds as i64) * 3 / 5).max(1)
@@ -1414,6 +1453,9 @@ pub struct SelectDeath<'info> {
     pub game: Account<'info, Game>,
     /// CHECK: validated against the SlotHashes sysvar id in slothash_at.
     pub recent_slot_hashes: UncheckedAccount<'info>,
+    /// CHECK: parsed as a Switchboard randomness account; absent falls back to
+    /// the committed slot hash unless the game requires VRF.
+    pub randomness: Option<UncheckedAccount<'info>>,
     pub cranker: Signer<'info>,
 }
 
@@ -1607,6 +1649,9 @@ pub struct RollInsane<'info> {
     pub treasury_vault: InterfaceAccount<'info, TokenAccount>,
     /// CHECK: validated against the SlotHashes sysvar id in slothash_at.
     pub recent_slot_hashes: UncheckedAccount<'info>,
+    /// CHECK: parsed as a Switchboard randomness account; absent falls back to
+    /// the committed slot hash unless the game requires VRF.
+    pub randomness: Option<UncheckedAccount<'info>>,
     #[account(address = game.stake_mint @ GameError::BadParam)]
     pub stake_mint: InterfaceAccount<'info, Mint>,
     pub token_program: Interface<'info, TokenInterface>,
@@ -1817,4 +1862,8 @@ pub enum GameError {
     GameCapReached,
     #[msg("That mint is not allowed to open combs")]
     MintNotAllowed,
+    #[msg("Randomness account could not be parsed")]
+    BadRandomness,
+    #[msg("Randomness is not settled yet, or this game requires VRF")]
+    RandomnessNotReady,
 }
