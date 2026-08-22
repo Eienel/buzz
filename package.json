@@ -4,10 +4,13 @@
   "license": "MIT",
   "scripts": {
     "lint": "prettier */*.js \"*/**/*{.js,.ts}\" --check",
-    "test": "anchor test"
+    "test": "anchor test",
+    "start": "node server/index.mjs"
   },
   "dependencies": {
-    "@coral-xyz/anchor": "^0.31.1"
+    "@coral-xyz/anchor": "^0.31.1",
+    "@solana/web3.js": "^1.95.0",
+    "js-sha3": "^0.9.3"
   },
   "devDependencies": {
     "@types/bn.js": "^5.1.0",
