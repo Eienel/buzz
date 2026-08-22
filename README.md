@@ -1,15 +1,14 @@
-# BUZZ — Last Circle Standing
+# BUZZ, Last Circle Standing
 
-A provably-fair, soft-landing pot game on Solana **with a genuine skill edge** —
-not a casino. You never walk away with nothing.
+A provably-fair, soft-landing pot game on Solana with a real skill edge.
+You never walk away with nothing.
 
-> Money decides how much you **can** win. Skill (reading the board) decides how
-> much you **actually** win. Luck decides any single game. Nobody hits zero.
+> Money sets your ceiling. Skill (reading the board) sets your take. Luck decides any single game. Nobody hits zero.
 
 See **[SPEC.md](SPEC.md)** for the full game design (v1.0, simulation-validated)
 and **[ARCHITECTURE.md](ARCHITECTURE.md)** for the on-chain design.
 
-## Status — feature-complete, hardening next
+## Status, feature-complete, hardening next
 - [x] Game design locked & simulation-validated (`/sim*.py`, `/engine`)
 - [x] Milestone 1: config + SOL escrow + lobby state machine
 - [x] Milestone 2: instance loop + commit-reveal moves

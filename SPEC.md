@@ -1,4 +1,4 @@
-# Last Circle Standing — Spec v1.0 (canonical, build target)
+# Last Circle Standing, Spec v1.0 (canonical, build target)
 
 A provably-fair, soft-landing pot game with insane jackpots **and a genuine
 skill edge**. NOT a pure casino: you never walk away with nothing.
@@ -33,7 +33,7 @@ Lobby → Running (instances) → Settling → Closed
 
 ## 3. Fixed stake, free movement
 - You hold ONE stake (your deposit minus rake). You never add more.
-- Each instance you may **move your whole stake** to another circle — FREE.
+- Each instance you may **move your whole stake** to another circle, FREE.
 - Money cannot buy survival; a big stake is a bigger refund-haircut liability.
 
 ## 4. Each instance = TWO commit-reveals
@@ -44,7 +44,7 @@ Both hidden until reveal → unpredictability comes from opponents, not dice.
 
 ## 5. Death rule (fog + fate)
 - Players see only a **coarse band** (thin / healthy / crowded) from the PREVIOUS
-  instance — never live exact counts. Reading it is intuition.
+  instance, never live exact counts. Reading it is intuition.
 - Resolve:
   ```
   if VRF_roll < ε (=0.15):  dead = uniform_random(alive)      # FATE STRIKE
@@ -63,7 +63,7 @@ Both hidden until reveal → unpredictability comes from opponents, not dice.
 - Eliminated player then chooses: **LAND** in a surviving circle, or **CASH OUT**
   (bank the refund, leave). You never lose more than the haircut floor.
 
-## 7. Endgame payout — luck pool + SKILL pool
+## 7. Endgame payout, luck pool + SKILL pool
 Let `L` = leftover pot (+ any insane-round injection, §9). Split:
 ```
 creator_cut = κ · L                         # κ = 0.15, to winning circle's creator
@@ -74,7 +74,7 @@ skill_pool  = (1 − κ) · L · σ
 - **Skill pool** → split by **skill points / total points** across ALL players who
   played (even those who died) → reading the board well pays, survival or not.
 - Plus every survivor gets their (refund-adjusted) **stake back**.
-- Result: high-skill ROI **+43%** vs low-skill **+28%** at σ=0.5 — a real edge —
+- Result: high-skill ROI **+43%** vs low-skill **+28%** at σ=0.5, a real edge -
   while soft landing & jackpots are untouched. (corr(skill,ROI)≈+0.11: luck still
   rules any single game; skill pays over a season. Poker-like, honest framing.)
 
@@ -94,7 +94,7 @@ skill_pool  = (1 − κ) · L · σ
 
 ## 10. Randomness
 ONE VRF draw per instance (board size at start, fate strike, ties, insane roll).
-Everything else is a published deterministic function — replay-verifiable.
+Everything else is a published deterministic function, replay-verifiable.
 
 ## 11. Invariant (asserted in-program & in the reference engine)
 ```

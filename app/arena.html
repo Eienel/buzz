@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>BUZZ — live arena</title>
+<title>BUZZ | live arena</title>
 <style>
   :root{
     --bg:#0b0e14; --panel:#121826; --panel2:#0f1420; --line:#232c3f;
@@ -43,7 +43,7 @@
 </head>
 <body>
 <header>
-  <h1><a href="index.html" style="color:inherit;text-decoration:none">🐝 BUZZ</a> <span class="sub">last circle standing — live arena · <a href="index.html">docs</a></span></h1>
+  <h1><a href="index.html" style="color:inherit;text-decoration:none">BUZZ</a> <span class="sub">last circle standing, live arena · <a href="index.html">docs</a></span></h1>
   <div id="net">devnet · <b id="conn">connecting…</b></div>
 </header>
 <main>
@@ -110,7 +110,7 @@ async function refresh(){
       ? `<div class="doneline"><b>${finished.length}</b> finished game${finished.length>1?"s":""} settled
          · accounts awaiting close (rent reclaim)</div>` : "";
     if(!live.length){
-      root.innerHTML='<div class="empty">No game running right now — the swarm opens a new one every few minutes. Keep this open.</div>'+finishedNote;
+      root.innerHTML='<div class="empty">No game running right now, the swarm opens a new one every few minutes. Keep this open.</div>'+finishedNote;
       return;
     }
     root.innerHTML=live.slice(0,6).map(({pubkey,g})=>{
