@@ -15,6 +15,7 @@ import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { Connection, PublicKey } from "@solana/web3.js";
+import { makeArena, PRICE, challenge } from "./arena-api.mjs";
 
 const ROOT = fileURLToPath(new URL("../app/", import.meta.url));
 const PORT = Number(process.env.PORT ?? 3000);
@@ -77,9 +78,55 @@ poll(); setInterval(poll, POLL_MS);
 const MIME = {".html":"text/html; charset=utf-8",".css":"text/css",".js":"text/javascript",
   ".png":"image/png",".svg":"image/svg+xml",".json":"application/json",".ico":"image/x-icon"};
 
+// ---- agent action queue -----------------------------------------------------
+// Actions land here from the x402 surface and a relayer drains them on chain.
+// Kept in memory deliberately: a queue that survives a restart would imply we
+// owe an action we may no longer be able to honour.
+let actionSeq = 0;
+const actions = new Map();
+const enqueue = (a) => {
+  const id = `a${++actionSeq}`;
+  actions.set(id, { ...a, id, state: "queued", at: Date.now() });
+  return id;
+};
+const arena = makeArena({ snapshot: () => snapshot, enqueue });
+
+const readBody = (req) => new Promise((resolve) => {
+  let b = ""; req.on("data", (c) => { b += c; if (b.length > 1e5) req.destroy(); });
+  req.on("end", () => { try { resolve(b ? JSON.parse(b) : {}); } catch { resolve({}); } });
+});
+const send = (res, status, body) => {
+  res.writeHead(status, { "content-type": "application/json",
+    "cache-control": "no-store", "access-control-allow-origin": "*" });
+  res.end(JSON.stringify(body));
+};
+
 createServer(async (req,res)=>{
   const url = new URL(req.url, "http://x");
   let p = decodeURIComponent(url.pathname);
+
+  // ---- agent surface -------------------------------------------------------
+  if(p === "/api/agent/lobbies"){
+    const r = arena.lobbies(); return send(res, r.status, r.body);
+  }
+  if(p.startsWith("/api/agent/action/")){
+    const a = actions.get(p.split("/").pop());
+    return a ? send(res,200,a) : send(res,404,{error:"unknown action"});
+  }
+  if(p === "/api/agent/join" || p === "/api/agent/move" || p === "/api/agent/predict"){
+    const kind = p.split("/").pop();
+    const price = PRICE[kind] ?? 0;
+    const paid = req.headers["x-payment"];        // x402 payment proof
+    if(price > 0 && !paid){
+      return challenge(res, `https://${req.headers.host}${p}`, price,
+        `BUZZ arena: ${kind}`);
+    }
+    const body = await readBody(req);
+    // NOTE: payment proof is accepted but not yet settled against chain. Until
+    // that verification lands this surface must stay on devnet only.
+    const r = arena[kind]({ ...body, paymentProof: paid ?? null });
+    return send(res, r.status, r.body);
+  }
 
   if(p === "/api/state"){
     res.writeHead(200,{ "content-type":"application/json",
