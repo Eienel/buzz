@@ -1,0 +1,38 @@
+name: agent-swarm
+
+# Runs the devnet agent swarm so the spectator site always has live games.
+# Needs repo secret SWARM_PAYER: the JSON array of a funded devnet keypair
+# (Settings -> Secrets and variables -> Actions -> New repository secret).
+on:
+  workflow_dispatch:
+    inputs:
+      games:
+        description: "games to play (0 = loop until the job times out)"
+        default: "3"
+      agents:
+        description: "agents per game"
+        default: "5"
+  schedule:
+    - cron: "17 */4 * * *" # a session every 4h keeps the arena warm
+
+jobs:
+  swarm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --no-save @coral-xyz/anchor@0.31.1 @solana/web3.js js-sha3
+      - name: Write payer keypair
+        run: echo "$SWARM_PAYER" > /tmp/payer.json
+        env:
+          SWARM_PAYER: ${{ secrets.SWARM_PAYER }}
+      - name: Run swarm
+        run: node agents/swarm.mjs
+        env:
+          PAYER: /tmp/payer.json
+          RPC: https://api.devnet.solana.com
+          GAMES: ${{ github.event.inputs.games || '3' }}
+          AGENTS: ${{ github.event.inputs.agents || '5' }}

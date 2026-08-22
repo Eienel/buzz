@@ -1,0 +1,1394 @@
+{
+  "address": "4TNbztSMd3zxG57M25y8WhpcKrQMJQVYEK6EnnkQy1Hw",
+  "metadata": {
+    "name": "last_circle",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "Last Circle Standing \u2014 a provably-fair soft-landing pot game with a skill edge"
+  },
+  "instructions": [
+    {
+      "name": "initialize_config",
+      "docs": [
+        "One-time global config (fee schedule, stake bounds, tick length)."
+      ],
+      "discriminator": [
+        208,
+        127,
+        21,
+        1,
+        194,
+        190,
+        196,
+        70
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true
+        },
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "system_program"
+        }
+      ],
+      "args": [
+        {
+          "name": "fee_bps",
+          "type": "u16"
+        },
+        {
+          "name": "house_cut_bps",
+          "type": "u16"
+        },
+        {
+          "name": "min_stake",
+          "type": "u64"
+        },
+        {
+          "name": "max_stake",
+          "type": "u64"
+        },
+        {
+          "name": "instance_seconds",
+          "type": "u32"
+        },
+        {
+          "name": "insane_prob_bps",
+          "type": "u16"
+        }
+      ]
+    },
+    {
+      "name": "create_game",
+      "docs": [
+        "Open a new game arena in the Lobby phase. `num_circles` is 6 or 12."
+      ],
+      "discriminator": [
+        124,
+        69,
+        75,
+        66,
+        184,
+        220,
+        72,
+        206
+      ],
+      "accounts": [
+        {
+          "name": "config"
+        },
+        {
+          "name": "game",
+          "writable": true
+        },
+        {
+          "name": "vault",
+          "docs": [
+            "SOL escrow PDA for this game. System-owned; holds all staked lamports."
+          ],
+          "writable": true
+        },
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "system_program"
+        }
+      ],
+      "args": [
+        {
+          "name": "game_id",
+          "type": "u64"
+        },
+        {
+          "name": "num_circles",
+          "type": "u8"
+        }
+      ]
+    },
+    {
+      "name": "create_circle",
+      "docs": [
+        "Create a circle in the lobby (caller becomes its fixed initiator) and stake into it."
+      ],
+      "discriminator": [
+        186,
+        99,
+        49,
+        131,
+        31,
+        51,
+        13,
+        198
+      ],
+      "accounts": [
+        {
+          "name": "config"
+        },
+        {
+          "name": "game",
+          "writable": true
+        },
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "circle",
+          "writable": true
+        },
+        {
+          "name": "player",
+          "writable": true
+        },
+        {
+          "name": "owner",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "system_program"
+        }
+      ],
+      "args": [
+        {
+          "name": "circle_id",
+          "type": "u8"
+        },
+        {
+          "name": "stake",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "join_circle",
+      "docs": [
+        "Join an existing circle and stake into it. Allowed during the Lobby, and",
+        "for newcomers during the Commit phase of running instances up to the 50%",
+        "lock (`instance <= lock_instance`); frozen thereafter (anti-manipulation)."
+      ],
+      "discriminator": [
+        231,
+        168,
+        235,
+        18,
+        99,
+        12,
+        22,
+        7
+      ],
+      "accounts": [
+        {
+          "name": "config"
+        },
+        {
+          "name": "game",
+          "writable": true
+        },
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "circle",
+          "writable": true
+        },
+        {
+          "name": "player",
+          "writable": true
+        },
+        {
+          "name": "owner",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "system_program"
+        }
+      ],
+      "args": [
+        {
+          "name": "stake",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "start_game",
+      "docs": [
+        "Close the lobby and start the instance loop (instance 1, Commit phase)."
+      ],
+      "discriminator": [
+        249,
+        47,
+        252,
+        172,
+        184,
+        162,
+        245,
+        14
+      ],
+      "accounts": [
+        {
+          "name": "game",
+          "writable": true
+        },
+        {
+          "name": "authority",
+          "signer": true
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "commit_move",
+      "docs": [
+        "Commit a hashed move for the current instance (hides stay/move under fog).",
+        "hash = keccak(target_circle \u2016 nonce_le \u2016 owner \u2016 game \u2016 instance_le)."
+      ],
+      "discriminator": [
+        27,
+        16,
+        69,
+        212,
+        175,
+        110,
+        123,
+        189
+      ],
+      "accounts": [
+        {
+          "name": "game"
+        },
+        {
+          "name": "player",
+          "writable": true
+        },
+        {
+          "name": "owner",
+          "signer": true
+        }
+      ],
+      "args": [
+        {
+          "name": "hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "advance_to_reveal",
+      "docs": [
+        "Permissionless crank: end the commit window, open the reveal window."
+      ],
+      "discriminator": [
+        137,
+        109,
+        48,
+        201,
+        93,
+        38,
+        29,
+        171
+      ],
+      "accounts": [
+        {
+          "name": "game",
+          "writable": true
+        },
+        {
+          "name": "cranker",
+          "signer": true
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "reveal_move",
+      "docs": [
+        "Reveal a committed MOVE (target must differ from current circle) and apply",
+        "it: move the player's whole stake from `from_circle` to `to_circle`."
+      ],
+      "discriminator": [
+        30,
+        133,
+        198,
+        26,
+        106,
+        44,
+        55,
+        149
+      ],
+      "accounts": [
+        {
+          "name": "game"
+        },
+        {
+          "name": "player",
+          "writable": true
+        },
+        {
+          "name": "from_circle",
+          "writable": true
+        },
+        {
+          "name": "to_circle",
+          "writable": true
+        },
+        {
+          "name": "owner",
+          "signer": true
+        }
+      ],
+      "args": [
+        {
+          "name": "target_circle",
+          "type": "u8"
+        },
+        {
+          "name": "nonce",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "select_death",
+      "docs": [
+        "Permissionless crank: end the reveal window and SELECT the dying circle.",
+        "Pass every alive Circle as a remaining_account. With prob \u03b5 a uniformly",
+        "random circle dies (FATE STRIKE); otherwise the FEWEST-players circle",
+        "dies (tie \u2192 least stake \u2192 pseudo-random). Stores the doomed id; the",
+        "mutation happens in execute_death.",
+        "",
+        "NOTE: randomness here is a placeholder slot/clock hash \u2014 a later milestone",
+        "swaps in a real VRF before mainnet."
+      ],
+      "discriminator": [
+        252,
+        232,
+        9,
+        0,
+        158,
+        77,
+        83,
+        86
+      ],
+      "accounts": [
+        {
+          "name": "game",
+          "writable": true
+        },
+        {
+          "name": "recent_slot_hashes"
+        },
+        {
+          "name": "cranker",
+          "signer": true
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "execute_death",
+      "docs": [
+        "Permissionless crank: kill the doomed circle, lock its refund rate, sweep",
+        "the haircut into the leftover pot, and either advance to the next instance",
+        "or move to Settling if only one circle remains."
+      ],
+      "discriminator": [
+        44,
+        230,
+        71,
+        33,
+        35,
+        222,
+        43,
+        120
+      ],
+      "accounts": [
+        {
+          "name": "game",
+          "writable": true
+        },
+        {
+          "name": "circle",
+          "writable": true
+        },
+        {
+          "name": "cranker",
+          "signer": true
+        }
+      ],
+      "args": [
+        {
+          "name": "circle_id",
+          "type": "u8"
+        }
+      ]
+    },
+    {
+      "name": "commit_prediction",
+      "docs": [
+        "Commit a hashed prediction of WHICH circle dies this instance.",
+        "hash = keccak(predicted_circle \u2016 nonce_le \u2016 owner \u2016 game \u2016 instance_le)."
+      ],
+      "discriminator": [
+        92,
+        250,
+        182,
+        231,
+        10,
+        22,
+        234,
+        71
+      ],
+      "accounts": [
+        {
+          "name": "game"
+        },
+        {
+          "name": "player",
+          "writable": true
+        },
+        {
+          "name": "owner",
+          "signer": true
+        }
+      ],
+      "args": [
+        {
+          "name": "hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "reveal_prediction",
+      "docs": [
+        "Reveal a prediction during the Scoring window; a correct call (matching the",
+        "circle that died this instance) earns +1 skill point."
+      ],
+      "discriminator": [
+        76,
+        137,
+        127,
+        4,
+        163,
+        5,
+        110,
+        64
+      ],
+      "accounts": [
+        {
+          "name": "game",
+          "writable": true
+        },
+        {
+          "name": "player",
+          "writable": true
+        },
+        {
+          "name": "owner",
+          "signer": true
+        }
+      ],
+      "args": [
+        {
+          "name": "predicted_circle",
+          "type": "u8"
+        },
+        {
+          "name": "nonce",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "advance_instance",
+      "docs": [
+        "Permissionless crank: end the scoring window and either advance to the",
+        "next instance's commit phase, or move to Settling if one circle remains."
+      ],
+      "discriminator": [
+        167,
+        89,
+        51,
+        18,
+        164,
+        248,
+        46,
+        46
+      ],
+      "accounts": [
+        {
+          "name": "game",
+          "writable": true
+        },
+        {
+          "name": "cranker",
+          "signer": true
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "cash_out",
+      "docs": [
+        "An eliminated player banks their refund (stake \u00d7 refund_bps) from the",
+        "vault and leaves the game. Their circle must be dead."
+      ],
+      "discriminator": [
+        1,
+        110,
+        57,
+        58,
+        159,
+        157,
+        243,
+        192
+      ],
+      "accounts": [
+        {
+          "name": "game"
+        },
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "circle"
+        },
+        {
+          "name": "player",
+          "writable": true
+        },
+        {
+          "name": "owner",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "system_program"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "land",
+      "docs": [
+        "An eliminated player carries their refund forward into a surviving circle."
+      ],
+      "discriminator": [
+        34,
+        112,
+        208,
+        19,
+        65,
+        226,
+        42,
+        230
+      ],
+      "accounts": [
+        {
+          "name": "game"
+        },
+        {
+          "name": "player",
+          "writable": true
+        },
+        {
+          "name": "from_circle",
+          "writable": true
+        },
+        {
+          "name": "to_circle",
+          "writable": true
+        },
+        {
+          "name": "owner",
+          "signer": true
+        }
+      ],
+      "args": [
+        {
+          "name": "target_circle",
+          "type": "u8"
+        }
+      ]
+    },
+    {
+      "name": "claim_creator_cut",
+      "docs": [
+        "The winning circle's creator claims their \u03ba cut of the leftover pot."
+      ],
+      "discriminator": [
+        54,
+        62,
+        1,
+        54,
+        36,
+        74,
+        69,
+        145
+      ],
+      "accounts": [
+        {
+          "name": "game",
+          "writable": true
+        },
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "winning_circle"
+        },
+        {
+          "name": "owner",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "system_program"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "claim_winnings",
+      "docs": [
+        "A surviving player (in the winning circle) claims stake-back + their",
+        "stake-weighted share of the luck pool."
+      ],
+      "discriminator": [
+        161,
+        215,
+        24,
+        59,
+        14,
+        236,
+        242,
+        221
+      ],
+      "accounts": [
+        {
+          "name": "game"
+        },
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "winning_circle"
+        },
+        {
+          "name": "player",
+          "writable": true
+        },
+        {
+          "name": "owner",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "system_program"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "claim_skill",
+      "docs": [
+        "Any player who scored skill points claims their points-weighted share of",
+        "the skill pool (survivors and eliminated alike)."
+      ],
+      "discriminator": [
+        49,
+        227,
+        21,
+        100,
+        192,
+        147,
+        31,
+        153
+      ],
+      "accounts": [
+        {
+          "name": "game"
+        },
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "player",
+          "writable": true
+        },
+        {
+          "name": "owner",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "system_program"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "init_treasury",
+      "docs": [
+        "One-time: create the cross-game treasury."
+      ],
+      "discriminator": [
+        105,
+        152,
+        173,
+        51,
+        158,
+        151,
+        49,
+        14
+      ],
+      "accounts": [
+        {
+          "name": "treasury",
+          "writable": true
+        },
+        {
+          "name": "treasury_vault"
+        },
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "system_program"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "collect_fees",
+      "docs": [
+        "Sweep a finished game's collected rake into the treasury, split into",
+        "house profit (house_cut) and the jackpot pool (the rest)."
+      ],
+      "discriminator": [
+        164,
+        152,
+        207,
+        99,
+        30,
+        186,
+        19,
+        182
+      ],
+      "accounts": [
+        {
+          "name": "config"
+        },
+        {
+          "name": "game",
+          "writable": true
+        },
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "treasury",
+          "writable": true
+        },
+        {
+          "name": "treasury_vault",
+          "writable": true
+        },
+        {
+          "name": "cranker",
+          "signer": true
+        },
+        {
+          "name": "system_program"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "withdraw_house",
+      "docs": [
+        "Treasury authority withdraws accumulated house profit."
+      ],
+      "discriminator": [
+        226,
+        236,
+        222,
+        156,
+        198,
+        230,
+        70,
+        147
+      ],
+      "accounts": [
+        {
+          "name": "treasury",
+          "writable": true
+        },
+        {
+          "name": "treasury_vault",
+          "writable": true
+        },
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "system_program"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "roll_insane",
+      "docs": [
+        "Post-lock crank: roll for an INSANE round. On a hit, the whole jackpot",
+        "pool is injected into this game's leftover pot (and the pool resets).",
+        "Revealed after the 50% lock so it can't be targeted at deposit time.",
+        "",
+        "NOTE: placeholder randomness (slot/clock hash) \u2014 swap in VRF before mainnet."
+      ],
+      "discriminator": [
+        63,
+        119,
+        36,
+        174,
+        126,
+        9,
+        89,
+        3
+      ],
+      "accounts": [
+        {
+          "name": "config"
+        },
+        {
+          "name": "game",
+          "writable": true
+        },
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "treasury",
+          "writable": true
+        },
+        {
+          "name": "treasury_vault",
+          "writable": true
+        },
+        {
+          "name": "recent_slot_hashes"
+        },
+        {
+          "name": "cranker",
+          "signer": true
+        },
+        {
+          "name": "system_program"
+        }
+      ],
+      "args": []
+    }
+  ],
+  "accounts": [
+    {
+      "name": "last_circle::Circle",
+      "discriminator": [
+        27,
+        59,
+        8,
+        117,
+        62,
+        199,
+        222,
+        252
+      ]
+    },
+    {
+      "name": "last_circle::Game",
+      "discriminator": [
+        27,
+        90,
+        166,
+        125,
+        74,
+        100,
+        121,
+        18
+      ]
+    },
+    {
+      "name": "last_circle::GameConfig",
+      "discriminator": [
+        45,
+        146,
+        146,
+        33,
+        170,
+        69,
+        96,
+        133
+      ]
+    },
+    {
+      "name": "last_circle::Player",
+      "discriminator": [
+        205,
+        222,
+        112,
+        7,
+        165,
+        155,
+        206,
+        218
+      ]
+    },
+    {
+      "name": "last_circle::Treasury",
+      "discriminator": [
+        238,
+        239,
+        123,
+        238,
+        89,
+        1,
+        168,
+        253
+      ]
+    }
+  ],
+  "types": [
+    {
+      "name": "last_circle::Circle",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "game",
+            "type": "pubkey"
+          },
+          {
+            "name": "circle_id",
+            "type": "u8"
+          },
+          {
+            "name": "creator",
+            "type": "pubkey"
+          },
+          {
+            "name": "member_count",
+            "type": "u32"
+          },
+          {
+            "name": "total_stake",
+            "type": "u64"
+          },
+          {
+            "name": "alive",
+            "type": "bool"
+          },
+          {
+            "name": "refund_bps",
+            "docs": [
+              "refund rate (bps) locked in when this circle died; 0 while alive."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "last_circle::Game",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "game_id",
+            "type": "u64"
+          },
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "status",
+            "type": {
+              "defined": {
+                "name": "last_circle::GameStatus"
+              }
+            }
+          },
+          {
+            "name": "num_circles",
+            "type": "u8"
+          },
+          {
+            "name": "lock_instance",
+            "type": "u16"
+          },
+          {
+            "name": "instance",
+            "type": "u16"
+          },
+          {
+            "name": "phase",
+            "type": {
+              "defined": {
+                "name": "last_circle::InstancePhase"
+              }
+            }
+          },
+          {
+            "name": "phase_ends_at",
+            "type": "i64"
+          },
+          {
+            "name": "instance_seconds",
+            "type": "u32"
+          },
+          {
+            "name": "doomed_circle",
+            "docs": [
+              "circle id selected to die this instance (valid only during Resolving)."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "circle_count",
+            "type": "u8"
+          },
+          {
+            "name": "alive_circles",
+            "type": "u8"
+          },
+          {
+            "name": "player_count",
+            "type": "u32"
+          },
+          {
+            "name": "leftover_pot",
+            "type": "u64"
+          },
+          {
+            "name": "fees_collected",
+            "type": "u64"
+          },
+          {
+            "name": "total_deposited",
+            "type": "u64"
+          },
+          {
+            "name": "total_points",
+            "docs": [
+              "running sum of all skill points awarded (skill-pool denominator)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "entropy_slot",
+            "docs": [
+              "slot whose SlotHashes entry seeds this instance's death roll. Committed",
+              "in advance (at advance_to_reveal, pointing PAST the reveal window) so a",
+              "cranker cannot grind submission timing for a favorable hash."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "insane_entropy_slot",
+            "docs": [
+              "same idea for the one-shot insane roll: armed when the 50% lock is",
+              "crossed, pointing a few slots into the future."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "creator_cut_paid",
+            "docs": [
+              "set once the winning circle's creator has claimed \u03ba."
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "insane_rolled",
+            "docs": [
+              "whether the post-lock insane roll has happened, and its outcome."
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "insane",
+            "type": "bool"
+          },
+          {
+            "name": "vault_bump",
+            "type": "u8"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "last_circle::GameConfig",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "fee_bps",
+            "type": "u16"
+          },
+          {
+            "name": "house_cut_bps",
+            "type": "u16"
+          },
+          {
+            "name": "min_stake",
+            "type": "u64"
+          },
+          {
+            "name": "max_stake",
+            "type": "u64"
+          },
+          {
+            "name": "instance_seconds",
+            "type": "u32"
+          },
+          {
+            "name": "insane_prob_bps",
+            "docs": [
+              "probability (bps) that a game flips INSANE at the post-lock roll."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "last_circle::GameStatus",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Lobby"
+          },
+          {
+            "name": "Running"
+          },
+          {
+            "name": "Settling"
+          },
+          {
+            "name": "Closed"
+          }
+        ]
+      }
+    },
+    {
+      "name": "last_circle::InstancePhase",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Commit"
+          },
+          {
+            "name": "Reveal"
+          },
+          {
+            "name": "Resolving"
+          },
+          {
+            "name": "Scoring"
+          }
+        ]
+      }
+    },
+    {
+      "name": "last_circle::Player",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "game",
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "stake",
+            "type": "u64"
+          },
+          {
+            "name": "current_circle",
+            "type": "u8"
+          },
+          {
+            "name": "points",
+            "type": "u32"
+          },
+          {
+            "name": "status",
+            "type": {
+              "defined": {
+                "name": "last_circle::PlayerStatus"
+              }
+            }
+          },
+          {
+            "name": "committed_hash",
+            "docs": [
+              "keccak commitment for the current instance's move (zeroed when consumed)."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "commit_instance",
+            "docs": [
+              "instance the move commitment is for; 0 = no live commitment."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "prediction_hash",
+            "docs": [
+              "keccak commitment for the current instance's death PREDICTION."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "prediction_instance",
+            "docs": [
+              "instance the prediction is for; 0 = none live."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "skill_claimed",
+            "docs": [
+              "set once this player has claimed their skill-pool share."
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "last_circle::PlayerStatus",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Active"
+          },
+          {
+            "name": "CashedOut"
+          },
+          {
+            "name": "Eliminated"
+          },
+          {
+            "name": "Settled"
+          }
+        ]
+      }
+    },
+    {
+      "name": "last_circle::Treasury",
+      "docs": [
+        "Cross-game treasury: accumulates house profit (withdrawable) and the jackpot",
+        "pool that feeds insane rounds. Lamports live in a separate treasury vault PDA."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "house_balance",
+            "type": "u64"
+          },
+          {
+            "name": "jackpot_pool",
+            "type": "u64"
+          },
+          {
+            "name": "vault_bump",
+            "type": "u8"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    }
+  ]
+}
