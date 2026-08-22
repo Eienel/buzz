@@ -83,14 +83,14 @@ async function sweepBack(agents) {
   for (const a of agents) {
     try {
       const bal = await connection.getBalance(a.kp.publicKey);
-      const back = bal - 6000; // leave dust for the fee
-      if (back > 0) {
-        const tx = new Transaction().add(SystemProgram.transfer({ fromPubkey: a.kp.publicKey, toPubkey: payer.publicKey, lamports: back }));
-        // agent pays + signs its own sweep — provider.sendAndConfirm would
-        // inject the payer wallet as signer (it isn't one) -> "unknown signer".
-        await sendAndConfirmTransaction(connection, tx, [a.kp], { commitment: "confirmed" });
-      }
-    } catch (e) { log(`sweep ${a.name} failed: ${e.message}`); }
+      if (bal <= 0) continue;
+      // Move the agent's ENTIRE balance (down to 0) with the PAYER as fee payer,
+      // so the agent isn't left with sub-rent-exempt dust (which the runtime
+      // rejects) and doesn't need to keep lamports for its own fee.
+      const tx = new Transaction().add(SystemProgram.transfer({ fromPubkey: a.kp.publicKey, toPubkey: payer.publicKey, lamports: bal }));
+      tx.feePayer = payer.publicKey;
+      await provider.sendAndConfirm(tx, [a.kp]); // payer signs as fee payer + wallet; agent signs the transfer
+    } catch (e) { log(`sweep ${a.name} failed: ${String(e.message).slice(0, 60)}`); }
   }
 }
 
