@@ -11,6 +11,7 @@
 import anchorPkg from "@coral-xyz/anchor";
 import { Connection, Keypair, PublicKey, SystemProgram, LAMPORTS_PER_SOL,
          SYSVAR_SLOT_HASHES_PUBKEY, Transaction, sendAndConfirmTransaction } from "@solana/web3.js";
+import { getOrCreateAssociatedTokenAccount, mintTo, getAssociatedTokenAddressSync } from "@solana/spl-token";
 import jsSha3 from "js-sha3";
 const { keccak_256 } = jsSha3;
 import { readFileSync } from "node:fs";
@@ -20,12 +21,18 @@ const { AnchorProvider, Program, Wallet, BN } = anchorPkg;
 const RPC = process.env.RPC ?? "https://api.devnet.solana.com";
 const N_AGENTS = Number(process.env.AGENTS ?? 3);
 const N_GAMES = Number(process.env.GAMES ?? 1); // 0 = forever
-const STAKE = Number(process.env.STAKE_SOL ?? 0.01) * LAMPORTS_PER_SOL;
+// Stakes are SPL tokens now. STAKE is in whole units of the stake asset.
+const STAKE_UNITS = Number(process.env.STAKE_UNITS ?? 10);
+const mints = JSON.parse(readFileSync(new URL("./devnet-mints.json", import.meta.url), "utf8"));
+const ASSETS = Object.entries(mints).map(([name, m]) => ({
+  name, mint: new PublicKey(m.mint), decimals: m.decimals,
+  tokenProgram: new PublicKey(m.tokenProgram),
+}));
 const GAME_INTERVAL = Number(process.env.GAME_INTERVAL_SECONDS ?? 180) * 1000; // idle between games
 // Per-agent funding: stake + fixed headroom for Circle/Player PDA rent
 // (~0.0036), tx fees, and the agent wallet's own rent-exempt minimum (~0.0009).
 // A multiplier breaks at small stakes — the headroom cost is constant.
-const FUND = STAKE + 5_000_000;
+const FUND = 8_000_000; // SOL for fees and PDA rent only; the stake is a token
 
 const payer = Keypair.fromSecretKey(new Uint8Array(JSON.parse(readFileSync(process.env.PAYER ?? `${process.env.HOME}/.config/solana/id.json`, "utf8"))));
 const connection = new Connection(RPC, "confirmed");
@@ -77,10 +84,19 @@ const moveHash = (target, nonce, owner, game, instance) =>
     Buffer.from(new Uint16Array([instance]).buffer),
   ])));
 
-async function fundAgents(agents) {
+async function fundAgents(agents, asset) {
   const tx = new Transaction();
   for (const a of agents) tx.add(SystemProgram.transfer({ fromPubkey: payer.publicKey, toPubkey: a.kp.publicKey, lamports: FUND }));
   await provider.sendAndConfirm(tx, []);
+  // hand each agent the stake asset (we hold mint authority on devnet)
+  const amount = BigInt(STAKE_UNITS) * BigInt(10) ** BigInt(asset.decimals);
+  for (const a of agents) {
+    const ata = await getOrCreateAssociatedTokenAccount(connection, payer, asset.mint,
+      a.kp.publicKey, false, undefined, undefined, asset.tokenProgram);
+    a.ata = ata.address;
+    await mintTo(connection, payer, asset.mint, a.ata, payer.publicKey, amount,
+      [], undefined, asset.tokenProgram);
+  }
 }
 
 async function sweepBack(agents) {
@@ -106,6 +122,10 @@ const waitPhaseEnd = async (gamePda, margin = 1500) => {
 };
 
 async function playGame(gameNo) {
+  const asset = ASSETS[gameNo % ASSETS.length];
+  const treasuryPda = pda(Buffer.from("treasury"), asset.mint.toBuffer());
+  const tvaultPda = pda(Buffer.from("tvault"), asset.mint.toBuffer());
+  const allowedPda = pda(Buffer.from("allowed"), asset.mint.toBuffer());
   const gid = new BN(Date.now());
   const gamePda = gamePdaOf(gid);
   const vaultPda = pda(Buffer.from("vault"), gamePda.toBuffer());
@@ -118,29 +138,35 @@ async function playGame(gameNo) {
     strat: strategies[stratNames[i % stratNames.length]],
     circle: i % 6, dead: false,
   }));
-  log(`game ${gid}: funding ${N_AGENTS} agents…`);
-  await fundAgents(agents);
+  log(`game ${gid}: ${asset.name} game, funding ${N_AGENTS} agents…`);
+  await fundAgents(agents, asset);
 
   // Everything after funding is wrapped so sweepBack ALWAYS runs — a throw
   // anywhere in the lobby, instance loop, or settlement would otherwise strand
   // the ephemeral agent wallets' balances (their keypairs live only in memory).
   try {
   // lobby: keeper (payer) creates the game; agents create/join circles 0..5
-  await program.methods.createGame(gid, 6, false).accounts({ config: configPda, game: gamePda, vault: vaultPda, authority: payer.publicKey, systemProgram: SystemProgram.programId }).rpc();
+  await program.methods.createGame(gid, 6, false).accountsPartial({
+    config: configPda, stakeMint: asset.mint, allowed: allowedPda, game: gamePda, vault: vaultPda,
+    authority: payer.publicKey, tokenProgram: asset.tokenProgram, systemProgram: SystemProgram.programId,
+  }).rpc();
   const taken = new Set();
   for (const a of agents) {
-    const stake = new BN(STAKE);
-    const acc = { config: configPda, game: gamePda, vault: vaultPda, circle: circlePda(a.circle), player: playerPda(a.kp.publicKey), owner: a.kp.publicKey, systemProgram: SystemProgram.programId };
+    const stake = new BN(String(BigInt(STAKE_UNITS) * BigInt(10) ** BigInt(asset.decimals)));
+    const acc = { config: configPda, game: gamePda, vault: vaultPda, circle: circlePda(a.circle),
+      player: playerPda(a.kp.publicKey), owner: a.kp.publicKey,
+      stakeMint: asset.mint, ownerToken: a.ata, tokenProgram: asset.tokenProgram,
+      systemProgram: SystemProgram.programId };
     if (!taken.has(a.circle)) {
-      await program.methods.createCircle(a.circle, stake).accounts(acc).signers([a.kp]).rpc();
+      await program.methods.createCircle(a.circle, stake).accountsPartial(acc).signers([a.kp]).rpc();
       taken.add(a.circle);
       a.createdCircle = a.circle; // this agent is the circle's fixed creator (κ claimant)
     } else {
-      await program.methods.joinCircle(stake).accounts(acc).signers([a.kp]).rpc();
+      await program.methods.joinCircle(stake).accountsPartial(acc).signers([a.kp]).rpc();
     }
     log(`  ${a.name} staked into circle ${a.circle}`);
   }
-  await program.methods.startGame().accounts({ game: gamePda, authority: payer.publicKey }).rpc();
+  await program.methods.startGame().accountsPartial({ game: gamePda, authority: payer.publicKey }).rpc();
   log(`game ${gid}: started (${taken.size} circles)`);
 
   // fog = previous instance's finalized member counts
@@ -171,20 +197,20 @@ async function playGame(gameNo) {
       try {
         if (plan.move !== null && fog[plan.move] !== undefined)
           await program.methods.commitMove([...moveHash(plan.move, mvNonce, a.kp.publicKey, gamePda, instance)])
-            .accounts({ game: gamePda, player: playerPda(a.kp.publicKey), owner: a.kp.publicKey }).signers([a.kp]).rpc();
+            .accountsPartial({ game: gamePda, player: playerPda(a.kp.publicKey), owner: a.kp.publicKey }).signers([a.kp]).rpc();
         await program.methods.commitPrediction([...moveHash(plan.predict, pdNonce, a.kp.publicKey, gamePda, instance)])
-          .accounts({ game: gamePda, player: playerPda(a.kp.publicKey), owner: a.kp.publicKey }).signers([a.kp]).rpc();
+          .accountsPartial({ game: gamePda, player: playerPda(a.kp.publicKey), owner: a.kp.publicKey }).signers([a.kp]).rpc();
       } catch (e) { log(`  ${a.name} commit failed: ${e.message?.slice(0, 80)}`); }
     }
     await waitPhaseEnd(gamePda);
-    await program.methods.advanceToReveal().accounts({ game: gamePda, cranker: payer.publicKey }).rpc();
+    await program.methods.advanceToReveal().accountsPartial({ game: gamePda, cranker: payer.publicKey }).rpc();
 
     // reveal phase
     for (const [a, p] of plans) {
       if (p.move === null || fog[p.move] === undefined) continue;
       try {
         await program.methods.revealMove(p.move, p.mvNonce)
-          .accounts({ game: gamePda, player: playerPda(a.kp.publicKey), fromCircle: circlePda(a.circle), toCircle: circlePda(p.move), owner: a.kp.publicKey })
+          .accountsPartial({ game: gamePda, player: playerPda(a.kp.publicKey), fromCircle: circlePda(a.circle), toCircle: circlePda(p.move), owner: a.kp.publicKey })
           .signers([a.kp]).rpc();
         a.circle = p.move;
       } catch (e) { log(`  ${a.name} reveal failed: ${e.message?.slice(0, 80)}`); }
@@ -195,7 +221,7 @@ async function playGame(gameNo) {
     for (;;) {
       try {
         await program.methods.selectDeath()
-          .accounts({ game: gamePda, recentSlotHashes: SYSVAR_SLOT_HASHES_PUBKEY, cranker: payer.publicKey })
+          .accountsPartial({ game: gamePda, recentSlotHashes: SYSVAR_SLOT_HASHES_PUBKEY, randomness: null, cranker: payer.publicKey })
           .remainingAccounts([...taken].filter((i) => fog[i] !== undefined).map((i) => ({ pubkey: circlePda(i), isSigner: false, isWritable: false })))
           .rpc();
         break;
@@ -206,14 +232,14 @@ async function playGame(gameNo) {
     }
     g = await fetchGame(gamePda);
     const doomed = g.doomedCircle;
-    await program.methods.executeDeath(doomed).accounts({ game: gamePda, circle: circlePda(doomed), cranker: payer.publicKey }).rpc();
+    await program.methods.executeDeath(doomed).accountsPartial({ game: gamePda, circle: circlePda(doomed), cranker: payer.publicKey }).rpc();
     log(`game ${gid}: instance ${instance} — circle ${doomed} died`);
 
     // scoring: reveal predictions; casualties land in the fullest surviving circle
     for (const [a, p] of plans) {
       try {
         await program.methods.revealPrediction(p.predict, p.pdNonce)
-          .accounts({ game: gamePda, player: playerPda(a.kp.publicKey), owner: a.kp.publicKey }).signers([a.kp]).rpc();
+          .accountsPartial({ game: gamePda, player: playerPda(a.kp.publicKey), owner: a.kp.publicKey }).signers([a.kp]).rpc();
         if (p.predict === doomed) log(`  ${a.name} called it (+1 skill point)`);
       } catch {}
     }
@@ -227,7 +253,7 @@ async function playGame(gameNo) {
         const target = alive.sort((x, y) => fog[y] - fog[x])[0];
         try {
           await program.methods.land(target)
-            .accounts({ game: gamePda, player: playerPda(a.kp.publicKey), fromCircle: circlePda(doomed), toCircle: circlePda(target), owner: a.kp.publicKey })
+            .accountsPartial({ game: gamePda, player: playerPda(a.kp.publicKey), fromCircle: circlePda(doomed), toCircle: circlePda(target), owner: a.kp.publicKey })
             .signers([a.kp]).rpc();
           a.circle = target;
           log(`  ${a.name} landed in circle ${target} (haircut applied)`);
@@ -237,16 +263,17 @@ async function playGame(gameNo) {
       a.dead = true;
     }
     await waitPhaseEnd(gamePda);
-    await program.methods.advanceInstance().accounts({ game: gamePda, cranker: payer.publicKey }).rpc();
+    await program.methods.advanceInstance().accountsPartial({ game: gamePda, cranker: payer.publicKey }).rpc();
 
     g = await fetchGame(gamePda);
     if (g.status.running && g.instance >= g.lockInstance && !g.insaneRolled) {
-      const treasuryPda = pda(Buffer.from("treasury"));
-      const treasuryVaultPda = pda(Buffer.from("treasury_vault"));
       await sleep(3000);
       try {
-        await program.methods.rollInsane()
-          .accounts({ config: configPda, game: gamePda, vault: vaultPda, treasury: treasuryPda, treasuryVault: treasuryVaultPda, recentSlotHashes: SYSVAR_SLOT_HASHES_PUBKEY, cranker: payer.publicKey, systemProgram: SystemProgram.programId })
+        await program.methods.rollInsane().accountsPartial({
+            config: configPda, game: gamePda, vault: vaultPda, treasury: treasuryPda,
+            treasuryVault: tvaultPda, stakeMint: asset.mint, tokenProgram: asset.tokenProgram,
+            recentSlotHashes: SYSVAR_SLOT_HASHES_PUBKEY, randomness: null,
+            cranker: payer.publicKey, systemProgram: SystemProgram.programId })
           .rpc();
         if ((await fetchGame(gamePda)).insane) log(`game ${gid}: 🔥 INSANE ROUND — jackpot injected`);
       } catch {}
@@ -264,7 +291,8 @@ async function playGame(gameNo) {
     if (winnerCreator) {
       try {
         await program.methods.claimCreatorCut()
-          .accounts({ game: gamePda, vault: vaultPda, winningCircle: circlePda(winner), owner: winnerCreator.kp.publicKey, systemProgram: SystemProgram.programId })
+          .accountsPartial({ game: gamePda, vault: vaultPda, winningCircle: circlePda(winner), owner: winnerCreator.kp.publicKey,
+            stakeMint: asset.mint, ownerToken: winnerCreator.ata, tokenProgram: asset.tokenProgram, systemProgram: SystemProgram.programId })
           .signers([winnerCreator.kp]).rpc();
       } catch (e) { log(`  creator-cut claim failed: ${e.message?.slice(0, 80)}`); }
     }
@@ -273,25 +301,32 @@ async function playGame(gameNo) {
       const st = await program.account.player.fetch(P);
       try {
         if (st.status.active && st.currentCircle === winner)
-          await program.methods.claimWinnings().accounts({ game: gamePda, vault: vaultPda, winningCircle: circlePda(winner), player: P, owner: a.kp.publicKey, systemProgram: SystemProgram.programId }).signers([a.kp]).rpc();
+          await program.methods.claimWinnings().accountsPartial({ game: gamePda, vault: vaultPda, winningCircle: circlePda(winner), player: P, owner: a.kp.publicKey,
+            stakeMint: asset.mint, ownerToken: a.ata, tokenProgram: asset.tokenProgram, systemProgram: SystemProgram.programId }).signers([a.kp]).rpc();
         else if (st.status.active)
-          await program.methods.cashOut().accounts({ game: gamePda, vault: vaultPda, circle: circlePda(st.currentCircle), player: P, owner: a.kp.publicKey, systemProgram: SystemProgram.programId }).signers([a.kp]).rpc();
+          await program.methods.cashOut().accountsPartial({ game: gamePda, vault: vaultPda, circle: circlePda(st.currentCircle), player: P, owner: a.kp.publicKey,
+            stakeMint: asset.mint, ownerToken: a.ata, tokenProgram: asset.tokenProgram, systemProgram: SystemProgram.programId }).signers([a.kp]).rpc();
         if (st.points > 0)
-          await program.methods.claimSkill().accounts({ game: gamePda, vault: vaultPda, player: P, owner: a.kp.publicKey, systemProgram: SystemProgram.programId }).signers([a.kp]).rpc();
+          await program.methods.claimSkill().accountsPartial({ game: gamePda, vault: vaultPda, player: P, owner: a.kp.publicKey,
+            stakeMint: asset.mint, ownerToken: a.ata, tokenProgram: asset.tokenProgram, systemProgram: SystemProgram.programId }).signers([a.kp]).rpc();
         log(`  ${a.name}: settled (${st.points} skill pts)`);
       } catch (e) { log(`  ${a.name} settle failed: ${e.message?.slice(0, 80)}`); }
     }
     try {
-      const treasuryPda = pda(Buffer.from("treasury"));
-      const treasuryVaultPda = pda(Buffer.from("treasury_vault"));
-      await program.methods.collectFees().accounts({ config: configPda, game: gamePda, vault: vaultPda, treasury: treasuryPda, treasuryVault: treasuryVaultPda, cranker: payer.publicKey, systemProgram: SystemProgram.programId }).rpc();
+      await program.methods.collectFees().accountsPartial({ config: configPda, game: gamePda, vault: vaultPda,
+        treasury: treasuryPda, treasuryVault: tvaultPda, stakeMint: asset.mint,
+        tokenProgram: asset.tokenProgram, cranker: payer.publicKey, systemProgram: SystemProgram.programId }).rpc();
       // reclaim the house half of the rake (payer is the treasury authority);
       // the jackpot half stays and funds future INSANE rounds.
       const t = await program.account.treasury.fetch(treasuryPda);
       if (t.houseBalance.toNumber() > 0) {
-        await program.methods.withdrawHouse(t.houseBalance)
-          .accounts({ treasury: treasuryPda, treasuryVault: treasuryVaultPda, authority: payer.publicKey, systemProgram: SystemProgram.programId }).rpc();
-        log(`  house cut reclaimed: ${t.houseBalance.toNumber() / LAMPORTS_PER_SOL} SOL`);
+        const houseAta = await getOrCreateAssociatedTokenAccount(connection, payer, asset.mint,
+          payer.publicKey, false, undefined, undefined, asset.tokenProgram);
+        await program.methods.withdrawHouse(t.houseBalance).accountsPartial({
+          treasury: treasuryPda, treasuryVault: tvaultPda, stakeMint: asset.mint,
+          authorityToken: houseAta.address, authority: payer.publicKey,
+          tokenProgram: asset.tokenProgram, systemProgram: SystemProgram.programId }).rpc();
+        log(`  house cut reclaimed: ${t.houseBalance.toNumber()} ${asset.name}`);
       }
     } catch {}
     // RENT RECOVERY: close every per-game PDA so its rent-exempt lamports come
@@ -301,7 +336,7 @@ async function playGame(gameNo) {
       for (const a of agents) {
         try {
           await program.methods.closePlayer()
-            .accounts({ game: gamePda, player: playerPda(a.kp.publicKey), owner: a.kp.publicKey, cranker: payer.publicKey })
+            .accountsPartial({ game: gamePda, player: playerPda(a.kp.publicKey), owner: a.kp.publicKey, cranker: payer.publicKey })
             .rpc(); // permissionless: agents are fully settled by this point
         } catch (e) { log(`  close player ${a.name}: ${String(e.message).slice(0, 50)}`); }
       }
@@ -310,13 +345,14 @@ async function playGame(gameNo) {
         if (!creator) continue;
         try {
           await program.methods.closeCircle()
-            .accounts({ game: gamePda, circle: circlePda(id), creator: creator.kp.publicKey, cranker: payer.publicKey })
+            .accountsPartial({ game: gamePda, circle: circlePda(id), creator: creator.kp.publicKey, cranker: payer.publicKey })
             .rpc(); // permissionless: kappa already claimed / circle dead
         } catch (e) { log(`  close circle ${id}: ${String(e.message).slice(0, 50)}`); }
       }
-      const treasuryPda2 = pda(Buffer.from("treasury"));
-      await program.methods.closeGame()
-        .accounts({ game: gamePda, vault: vaultPda, treasury: treasuryPda2, treasuryVault: pda(Buffer.from("treasury_vault")), authority: payer.publicKey, cranker: payer.publicKey, systemProgram: SystemProgram.programId })
+      await program.methods.closeGame().accountsPartial({
+          game: gamePda, vault: vaultPda, treasury: treasuryPda, treasuryVault: tvaultPda,
+          stakeMint: asset.mint, tokenProgram: asset.tokenProgram,
+          authority: payer.publicKey, cranker: payer.publicKey, systemProgram: SystemProgram.programId })
         .rpc();
       log(`  rent reclaimed (all per-game accounts closed)`);
     } catch (e) { log(`  close sweep: ${String(e.message).slice(0, 60)}`); }
@@ -326,21 +362,16 @@ async function playGame(gameNo) {
   log(`game ${gid}: done — funds + rent swept back to swarm payer`);
 }
 
-// one-time setup if this cluster has no config/treasury yet
+// Config, mints and per-mint treasuries are created once by setup-devnet.mjs.
+// Verify they exist rather than half-creating them here.
 async function ensureSetup() {
   try { await program.account.gameConfig.fetch(configPda); }
-  catch {
-    log("initializing config…");
-    const instanceSecs = Number(process.env.INSTANCE_SECONDS ?? 20);
-    await program.methods.initializeConfig(400, 5000, new BN(0.01 * LAMPORTS_PER_SOL), new BN(5 * LAMPORTS_PER_SOL), instanceSecs, 200)
-      .accounts({ config: configPda, authority: payer.publicKey, systemProgram: SystemProgram.programId }).rpc();
+  catch { throw new Error("config missing: run `node agents/setup-devnet.mjs` first"); }
+  for (const a of ASSETS) {
+    try { await program.account.treasury.fetch(pda(Buffer.from("treasury"), a.mint.toBuffer())); }
+    catch { throw new Error(`treasury missing for ${a.name}: run setup-devnet.mjs`); }
   }
-  const treasuryPda = pda(Buffer.from("treasury"));
-  try { await program.account.treasury.fetch(treasuryPda); }
-  catch {
-    log("initializing treasury…");
-    await program.methods.initTreasury().accounts({ treasury: treasuryPda, treasuryVault: pda(Buffer.from("treasury_vault")), authority: payer.publicKey, systemProgram: SystemProgram.programId }).rpc();
-  }
+  log(`assets in play: ${ASSETS.map((a) => a.name).join(", ")}`);
 }
 
 const bal = await connection.getBalance(payer.publicKey);
