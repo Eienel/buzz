@@ -18,9 +18,10 @@ import { readFileSync } from "node:fs";
 const { AnchorProvider, Program, Wallet, BN } = anchorPkg;
 
 const RPC = process.env.RPC ?? "https://api.devnet.solana.com";
-const N_AGENTS = Number(process.env.AGENTS ?? 5);
+const N_AGENTS = Number(process.env.AGENTS ?? 3);
 const N_GAMES = Number(process.env.GAMES ?? 1); // 0 = forever
-const STAKE = Number(process.env.STAKE_SOL ?? 0.05) * LAMPORTS_PER_SOL;
+const STAKE = Number(process.env.STAKE_SOL ?? 0.01) * LAMPORTS_PER_SOL;
+const GAME_INTERVAL = Number(process.env.GAME_INTERVAL_SECONDS ?? 180) * 1000; // idle between games
 const FUND = Math.floor(STAKE * 1.4); // stake + fee headroom per agent
 
 const payer = Keypair.fromSecretKey(new Uint8Array(JSON.parse(readFileSync(process.env.PAYER ?? `${process.env.HOME}/.config/solana/id.json`, "utf8"))));
@@ -281,6 +282,14 @@ async function playGame(gameNo) {
       const treasuryPda = pda(Buffer.from("treasury"));
       const treasuryVaultPda = pda(Buffer.from("treasury_vault"));
       await program.methods.collectFees().accounts({ config: configPda, game: gamePda, vault: vaultPda, treasury: treasuryPda, treasuryVault: treasuryVaultPda, cranker: payer.publicKey, systemProgram: SystemProgram.programId }).rpc();
+      // reclaim the house half of the rake (payer is the treasury authority);
+      // the jackpot half stays and funds future INSANE rounds.
+      const t = await program.account.treasury.fetch(treasuryPda);
+      if (t.houseBalance.toNumber() > 0) {
+        await program.methods.withdrawHouse(t.houseBalance)
+          .accounts({ treasury: treasuryPda, treasuryVault: treasuryVaultPda, authority: payer.publicKey, systemProgram: SystemProgram.programId }).rpc();
+        log(`  house cut reclaimed: ${t.houseBalance.toNumber() / LAMPORTS_PER_SOL} SOL`);
+      }
     } catch {}
   } finally {
     await sweepBack(agents);
@@ -314,4 +323,8 @@ if (bal < FUND * N_AGENTS + 0.05 * LAMPORTS_PER_SOL) {
 await ensureSetup();
 for (let i = 0; N_GAMES === 0 || i < N_GAMES; i++) {
   try { await playGame(i); } catch (e) { log(`game failed: ${e.message?.slice(0, 200)}`); await sleep(10_000); }
+  if (N_GAMES === 0 || i < N_GAMES - 1) {
+    log(`next game in ${GAME_INTERVAL / 1000}s`);
+    await sleep(GAME_INTERVAL); // pace the arena: rent burn per hour stays low
+  }
 }
