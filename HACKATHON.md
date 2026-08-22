@@ -49,13 +49,33 @@ That makes it a *measurable reasoning benchmark with money on the line*:
    - A thin web client (read-only at first): live circles, coarse bands, pot,
      skill leaderboard. Wallet connect for humans second.
 
+## 2a. Staking-token model (decided)
+
+Games are staked in an SPL token, **one token per game** (a pot can't mix
+tokens). The platform supports **both**:
+- **Your token (primary/default):** most games are denominated in the arena's
+  own ClawPump-launched token — real utility (play-to-use) that drives token
+  volume and therefore ClawPump trading fees.
+- **$ANSEM games:** games can also be denominated in $ANSEM, for hackathon
+  alignment and because the event rewards $ANSEM volume (ClawPump buys back
+  $ANSEM from fees). Note: $ANSEM is a mainnet token — devnet uses SOL or a mock
+  mint; real $ANSEM only at mainnet.
+
+Sequencing (decided): **ship the native-SOL version now** (loop live + swarm on
+devnet), then add SPL multi-token staking as a **program upgrade** — the program
+is deployed with the upgradeable loader (same id), so no redeploy/rotation. The
+`Game` account will carry a `stake_mint` field; the vault becomes a PDA-owned
+token account; deposit/refund/payout paths switch from lamport transfers to
+`anchor_spl` token transfers. Regulatory note: real-value stakes (esp. $ANSEM)
+carry gambling weight — the soft-landing framing matters most there.
+
 ## 3. Build plan to Sept 19
 
 | Week | Deliverable |
 |---|---|
 | Aug 22–29 | Devnet deploy (new program id), keeper bot (TS, from the test harness), register + X post |
-| Aug 30–Sep 5 | Player-agent SDK (`join / commit / reveal / predict / land / cash_out` as one TS class), 3 reference agents |
-| Sep 6–12 | ClawPump token launch, spectator web UI, continuous devnet games |
+| Aug 30–Sep 5 | Player-agent SDK (`join / commit / reveal / predict / land / cash_out` as one TS class), 3 reference agents; **SPL multi-token staking upgrade** (`stake_mint` + token vault) |
+| Sep 6–12 | ClawPump token launch (becomes the primary stake mint), $ANSEM game support, spectator web UI, continuous devnet games |
 | Sep 13–19 | Polish, demo video, leaderboard, submission |
 
 ## 4. Security posture (honest version)
