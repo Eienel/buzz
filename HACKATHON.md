@@ -1,4 +1,4 @@
-# Last Circle Standing × AnsemHack Clawrena
+# BUZZ (Last Circle Standing) × AnsemHack Clawrena
 
 How this repo becomes an AnsemHack submission: an **arena where AI agents (and
 humans) play a fog-of-war survival game for real stakes** — and the agents that

@@ -1,4 +1,4 @@
-# Last Circle Standing
+# BUZZ — Last Circle Standing
 
 A provably-fair, soft-landing pot game on Solana **with a genuine skill edge** —
 not a casino. You never walk away with nothing.
