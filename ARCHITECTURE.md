@@ -18,11 +18,17 @@ hashed moves**, and the "fog" is enforced by *only revealing aggregates*.
 GameConfig            (singleton)  fee bps, min/max stake, instance length, N bounds
 Game        PDA[game_id]           state machine, vrf account, pot totals, instance #
 Circle      PDA[game_id, circle_id] creator (initiator), member_count, total_stake
-Player      PDA[game_id, wallet]   stake, current_circle, committed_hash, joinT,
+Player      PDA[game_id, wallet]   stake, current_circle, committed_hash,
                                     refunds, status{active,satout,dead}
 Vault       PDA[game_id]           the escrow token account (all SOL/USDC held here)
 LeftoverPot PDA[game_id]           accumulated haircuts
 ```
+Note: the refund rate lives on `Circle`, not `Player`. It is computed once when
+a circle dies (from the instance number) and applied to every member of that
+circle. An earlier draft of this document listed a `joinT` field on `Player` for
+per-player survival timing; it was never implemented and the circle-scoped rate
+is the shipped behaviour. Revisit before mainnet (see SPEC 6).
+
 Key point: **all funds live in one program-owned `Vault`**. Players never hold
 game funds; the program is the sole signer for payouts. No per-circle token
 accounts (cheaper, fewer attack surfaces).

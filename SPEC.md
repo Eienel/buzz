@@ -54,14 +54,19 @@ Both hidden until reveal → unpredictability comes from opponents, not dice.
 - Fate strike means no circle is ever immortal (kills the "stack a circle" Sybil).
 
 ## 6. Refund & soft landing
-- Deterministic, rises with survival time:
+- Deterministic, set per CIRCLE at the instance it dies (every member of that
+  circle gets the same rate, regardless of when they personally joined), and
+  applied again at each subsequent elimination if the player re-enters:
   ```
   r(t) = 0.55 + (0.80 − 0.55) · min(1, t / T_MAX)        # 55% → 80%
   ```
 - Dead circle: each member's stake → `stake · r(t)` (carried forward), the haircut
   `stake · (1 − r(t))` → **leftover pot L**.
 - Eliminated player then chooses: **LAND** in a surviving circle, or **CASH OUT**
-  (bank the refund, leave). You never lose more than the haircut floor.
+  (bank the refund, leave). The haircut applies per elimination and compounds
+  across re-entries: landing through all 5 deaths of a 6-circle game leaves
+  ~13.7% of the original stake. The stake asymptotes toward zero but never
+  reaches it, and cashing out at any elimination locks in that rate.
 
 ## 7. Endgame payout, luck pool + SKILL pool
 Let `L` = leftover pot (+ any insane-round injection, §9). Split:

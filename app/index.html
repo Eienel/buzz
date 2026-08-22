@@ -134,8 +134,8 @@
   <div class="kicker">Last Circle Standing / Solana</div>
   <h1>Nobody walks away<br>with nothing.</h1>
   <p class="tagline">BUZZ is a survival pot game. <b>Money sets your ceiling. Skill sets your
-  take.</b> Luck decides any single round. Lose your circle and you keep 55 to 80 percent of your
-  stake, then choose to fight on or cash out.</p>
+  take.</b> Luck decides any single round. When your circle dies you keep 55 to 80 percent of
+  your stake, then choose to fight on or cash out.</p>
   <p class="tagline">Humans and autonomous AI agents play the same board under the same
   cryptographic fog.</p>
   <div class="cta">
@@ -153,8 +153,9 @@
   <div class="grid g3">
     <div class="card">
       <h4>Soft landing</h4>
-      <p>Elimination is not ruin. A fixed formula returns 55 to 80 percent of your stake, rising
-      the longer you survive. You re-enter with what is left, or you withdraw it.</p>
+      <p>Elimination is not ruin. When a circle dies its members are refunded 55 to 80 percent
+      of their stake, set by how deep into the game that circle lasted. You re-enter with what is
+      left, or you withdraw it.</p>
     </div>
     <div class="card">
       <h4>A real skill edge</h4>
@@ -222,11 +223,33 @@ else:            dead = circle with FEWEST players
   by the interface.</p>
 
   <h3>Soft landing</h3>
-  <p>When your circle dies you are refunded at a rate that rises with how long you lasted.</p>
-  <div class="eq">r(t) = 0.55 + 0.25 * min(1, t / T_max)      55% early, 80% late</div>
+  <p>The refund rate is a property of the circle, not of you. When a circle dies, one rate is
+  computed from the instance it died at and applied to every member of that circle, whether they
+  founded it or joined a minute ago. Circles that die later pay more.</p>
+  <div class="eq">r(t) = 0.55 + 0.25 * min(1, t / T_max)      t = instance the circle died
+                                           55% early, 80% late</div>
   <p>The slice you do not get back becomes the leftover pot everyone is playing for. You then pick
   one: land in a surviving circle and keep playing with your refund, or cash out and leave with
-  it. There is no path to zero.</p>
+  it.</p>
+
+  <h3>The haircut compounds</h3>
+  <p>This is the part worth understanding before you play. The rate applies <b>per elimination</b>,
+  not once per game. Land in a new circle and that refunded stake is what gets cut next time. In a
+  6-circle game, a player who keeps re-entering through every death ends up here.</p>
+  <div class="tw"><table>
+    <thead><tr><th>Eliminations survived</th><th>Rate at that death</th><th>Left of original stake</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>59.2%</td><td>59.2%</td></tr>
+      <tr><td>2</td><td>63.3%</td><td>37.5%</td></tr>
+      <tr><td>3</td><td>67.5%</td><td>25.3%</td></tr>
+      <tr><td>4</td><td>71.7%</td><td>18.1%</td></tr>
+      <tr><td>5</td><td>75.8%</td><td>13.7%</td></tr>
+    </tbody>
+  </table></div>
+  <p>So "nobody hits zero" is literal, not a promise that you keep most of your stake no matter
+  what. Re-entering is a decision to put the remainder back at risk, and you can always take the
+  refund and leave instead. The upside is that every re-entry keeps you eligible for the pot, and
+  the skill pool pays you for reading the board whether or not you are still alive.</p>
 
   <h3>Endgame payout</h3>
   <p>When one circle stands, the leftover pot splits three ways.</p>
@@ -351,6 +374,12 @@ else:            dead = circle with FEWEST players
     <li><b>Real VRF.</b> Randomness currently derives from a pre-committed slot hash. That defeats player and cranker grinding, but the leader of that slot keeps some influence. Switchboard On-Demand replaces it behind one isolated function.</li>
     <li><b>Lobby-abort refund.</b> If a game never starts, deposits should be reclaimable on a timeout.</li>
     <li><b>Independent audit.</b> Not done yet.</li>
+    <li><b>Refund scoping review.</b> The refund rate is per circle, so a player who joined during
+    the open window is refunded at the same rate as a founder. Reasonable while joins close at the
+    halfway lock, but it is on the list to re-examine with a per-player join time before mainnet.</li>
+    <li><b>Compounding review.</b> Repeat re-entry drives the surviving fraction well below the
+    55 percent single-elimination floor. Documented above and kept deliberately, but the parameters
+    get re-run against the simulations before real value is staked.</li>
   </ul>
 
   <div class="callout warn">
@@ -432,10 +461,12 @@ source:      github.com/Eienel/buzz</div>
   bot cannot see anything a human cannot. It can only reason better about the same hidden
   information.</p>
 
-  <h3>Why play if I can lose 20 to 45 percent?</h3>
-  <p>The haircut is the price of entry to the pot. It is bounded, it shrinks the longer you last,
-  and it funds a payout you have two independent ways to win: stake-weighted luck and
-  points-weighted skill. In a conventional last-man-standing pot the same loss is 100 percent.</p>
+  <h3>What is the worst case?</h3>
+  <p>Each elimination costs you 20 to 45 percent, and it compounds if you keep re-entering. A
+  player who lands through all five deaths of a 6-circle game ends with about 14 percent of their
+  original stake. That is the floor, and reaching it takes five consecutive decisions to put the
+  remainder back in. Cash out at any elimination and you keep that rate instead. In a conventional
+  last-man-standing pot, one loss costs you everything.</p>
 </section>
 
 <footer>
