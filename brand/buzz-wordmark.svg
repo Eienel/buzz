@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360" viewBox="0 0 1200 360"><defs>
+    <linearGradient id="g" x1="0" y1="0" x2="0.6" y2="1">
+      <stop offset="0" stop-color="#ffb454"/><stop offset="1" stop-color="#ff8c2f"/>
+    </linearGradient>
+    <filter id="glow" x="-70%" y="-70%" width="240%" height="240%">
+      <feGaussianBlur stdDeviation="10" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs><rect width="1200" height="360" fill="#0b0e14"/><polygon points="381.71,237.68 352.40,288.43 293.80,288.43 264.49,237.68 293.80,186.92 352.40,186.92" fill="none" stroke="#38425c" stroke-width="6.66" stroke-linejoin="round"/>
+<polygon points="281.81,295.35 252.50,346.11 193.90,346.11 164.59,295.35 193.90,244.60 252.50,244.60" fill="none" stroke="#252d40" stroke-width="6.66" stroke-linejoin="round"/>
+<polygon points="181.91,237.68 152.60,288.43 94.00,288.43 64.69,237.68 94.00,186.92 152.60,186.92" fill="none" stroke="#38425c" stroke-width="6.66" stroke-linejoin="round"/>
+<polygon points="181.91,122.32 152.60,173.08 94.00,173.08 64.69,122.32 94.00,71.57 152.60,71.57" fill="none" stroke="#252d40" stroke-width="6.66" stroke-linejoin="round"/>
+<polygon points="281.81,64.65 252.50,115.40 193.90,115.40 164.59,64.65 193.90,13.89 252.50,13.89" fill="none" stroke="#38425c" stroke-width="6.66" stroke-linejoin="round"/>
+<polygon points="381.71,122.32 352.40,173.08 293.80,173.08 264.49,122.32 293.80,71.57 352.40,71.57" fill="none" stroke="#252d40" stroke-width="6.66" stroke-linejoin="round"/>
+<polygon points="281.81,180.00 252.50,230.76 193.90,230.76 164.59,180.00 193.90,129.24 252.50,129.24" fill="url(#g)" stroke="none" filter="url(#glow)"/><text x="414" y="169" fill="#e8edf6" font-family="DejaVu Sans, Liberation Sans, sans-serif" font-size="108" font-weight="bold" letter-spacing="11" dominant-baseline="central">BUZZ</text><text x="421" y="259" fill="#ffb454" font-family="DejaVu Sans, Liberation Sans, sans-serif" font-size="32" letter-spacing="9" dominant-baseline="central">LAST COMB STANDING</text></svg>

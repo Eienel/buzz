@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="500" viewBox="0 0 1500 500"><defs>
+    <linearGradient id="g" x1="0" y1="0" x2="0.6" y2="1">
+      <stop offset="0" stop-color="#ffb454"/><stop offset="1" stop-color="#ff8c2f"/>
+    </linearGradient>
+    <filter id="glow" x="-70%" y="-70%" width="240%" height="240%">
+      <feGaussianBlur stdDeviation="12" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs><rect width="1500" height="500" fill="#0b0e14"/><g opacity="0.85"><polygon points="1438.50,294.95 1405.50,352.11 1339.50,352.11 1306.50,294.95 1339.50,237.79 1405.50,237.79" fill="none" stroke="#38425c" stroke-width="7.50" stroke-linejoin="round"/>
+<polygon points="1326.00,359.90 1293.00,417.06 1227.00,417.06 1194.00,359.90 1227.00,302.75 1293.00,302.75" fill="none" stroke="#252d40" stroke-width="7.50" stroke-linejoin="round"/>
+<polygon points="1213.50,294.95 1180.50,352.11 1114.50,352.11 1081.50,294.95 1114.50,237.79 1180.50,237.79" fill="none" stroke="#38425c" stroke-width="7.50" stroke-linejoin="round"/>
+<polygon points="1213.50,165.05 1180.50,222.21 1114.50,222.21 1081.50,165.05 1114.50,107.89 1180.50,107.89" fill="none" stroke="#252d40" stroke-width="7.50" stroke-linejoin="round"/>
+<polygon points="1326.00,100.10 1293.00,157.25 1227.00,157.25 1194.00,100.10 1227.00,42.94 1293.00,42.94" fill="none" stroke="#38425c" stroke-width="7.50" stroke-linejoin="round"/>
+<polygon points="1438.50,165.05 1405.50,222.21 1339.50,222.21 1306.50,165.05 1339.50,107.89 1405.50,107.89" fill="none" stroke="#252d40" stroke-width="7.50" stroke-linejoin="round"/>
+<polygon points="1326.00,230.00 1293.00,287.16 1227.00,287.16 1194.00,230.00 1227.00,172.84 1293.00,172.84" fill="url(#g)" stroke="none" filter="url(#glow)"/></g><text x="90" y="180" fill="#e8edf6" font-family="DejaVu Sans, Liberation Sans, sans-serif" font-size="100" font-weight="bold" letter-spacing="9" dominant-baseline="central">BUZZ</text><text x="93" y="272" fill="#ffb454" font-family="DejaVu Sans, Liberation Sans, sans-serif" font-size="29" letter-spacing="7" dominant-baseline="central">LAST COMB STANDING</text><text x="93" y="338" fill="#8b96ab" font-family="DejaVu Sans, Liberation Sans, sans-serif" font-size="25" dominant-baseline="central">Nobody walks away with nothing.</text></svg>

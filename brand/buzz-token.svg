@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="1000" viewBox="0 0 1000 1000"><defs>
+    <linearGradient id="g" x1="0" y1="0" x2="0.6" y2="1">
+      <stop offset="0" stop-color="#ffb454"/><stop offset="1" stop-color="#ff8c2f"/>
+    </linearGradient>
+    <filter id="glow" x="-70%" y="-70%" width="240%" height="240%">
+      <feGaussianBlur stdDeviation="16" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs><rect width="1000" height="1000" rx="200" fill="#0b0e14"/><polygon points="797.50,608.25 742.50,703.52 632.50,703.52 577.50,608.25 632.50,512.99 742.50,512.99" fill="none" stroke="#38425c" stroke-width="12.50" stroke-linejoin="round"/>
+<polygon points="610.00,716.51 555.00,811.77 445.00,811.77 390.00,716.51 445.00,621.24 555.00,621.24" fill="none" stroke="#252d40" stroke-width="12.50" stroke-linejoin="round"/>
+<polygon points="422.50,608.25 367.50,703.52 257.50,703.52 202.50,608.25 257.50,512.99 367.50,512.99" fill="none" stroke="#38425c" stroke-width="12.50" stroke-linejoin="round"/>
+<polygon points="422.50,391.75 367.50,487.01 257.50,487.01 202.50,391.75 257.50,296.48 367.50,296.48" fill="none" stroke="#252d40" stroke-width="12.50" stroke-linejoin="round"/>
+<polygon points="610.00,283.49 555.00,378.76 445.00,378.76 390.00,283.49 445.00,188.23 555.00,188.23" fill="none" stroke="#38425c" stroke-width="12.50" stroke-linejoin="round"/>
+<polygon points="797.50,391.75 742.50,487.01 632.50,487.01 577.50,391.75 632.50,296.48 742.50,296.48" fill="none" stroke="#252d40" stroke-width="12.50" stroke-linejoin="round"/>
+<polygon points="610.00,500.00 555.00,595.26 445.00,595.26 390.00,500.00 445.00,404.74 555.00,404.74" fill="url(#g)" stroke="none" filter="url(#glow)"/></svg>
