@@ -115,7 +115,7 @@ const sd = a => { const m = mean(a); return Math.sqrt(mean(a.map(x => (x - m) **
 const corr = mean(sk.map((s, i) => (s - ms) * (rs[i] - mr))) / (sd(sk) * sd(rs));
 
 const pass = (c) => c ? "PASS ✓" : "FAIL ✗";
-console.log(`=== REFERENCE ENGINE — ${GAMES} games, ${POP} traders ===\n`);
+console.log(`=== REFERENCE ENGINE, ${GAMES} games, ${POP} traders ===\n`);
 console.log(`[1] money invariant     max error = ${casino.invariantMaxErr.toExponential(2)}   ${pass(casino.invariantMaxErr < 1e-6)}`);
 console.log(`[2] soft-landing floor  avg worst-case keeps ${mean(keepFloors).toFixed(0)}% of stake   ${pass(mean(keepFloors) > 30)}`);
 console.log(`[3] house profit        $${casino.houseProfit.toFixed(0)} on $${casino.volume.toFixed(0)} volume = ${(casino.houseProfit/casino.volume*100).toFixed(1)}%   ${pass(Math.abs(casino.houseProfit/casino.volume-0.02)<0.002)}`);

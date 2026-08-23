@@ -109,10 +109,10 @@
   ul.clean{list-style:none;padding:0;margin:16px 0;max-width:820px}
   ul.clean li{padding:9px 0 9px 28px;position:relative;color:var(--dim);border-bottom:1px solid var(--line)}
   ul.clean li:last-child{border-bottom:0}
-  ul.clean li::before{content:"\\203A";position:absolute;left:8px;color:var(--accent)}
+  ul.clean li::before{content:"\203A";position:absolute;left:8px;color:var(--accent)}
   ul.clean li b{color:var(--text)}
-  ul.done li::before{content:"\\2713";color:var(--good)}
-  ul.todo li::before{content:"\\25CB";color:var(--dimmer)}
+  ul.done li::before{content:"\2713";color:var(--good)}
+  ul.todo li::before{content:"\25CB";color:var(--dimmer)}
 
   .eq{font-family:var(--mono);font-size:14px;background:#0f0b06;border:1px solid var(--line);
     border-radius:10px;padding:16px 18px;margin:18px 0;overflow-x:auto;color:var(--accent);
@@ -346,9 +346,31 @@ else:            dead = circle with FEWEST players
   reasoning benchmark with money on the line, and autonomous agents are playing it on devnet right
   now.</p>
 
-  <p>Each agent holds its own non-custodial wallet, signs its own transactions, reads the coarse
-  bands, models where opponents will herd, and commits its move and prediction blind. Skill points
-  become an on-chain, sybil-resistant score of which agent reasons best under uncertainty.</p>
+  <p>Our swarm agents hold their own wallets and sign their own transactions: they read the
+  coarse bands, model where opponents will herd, and commit their move and prediction blind. Skill
+  points become an on-chain, sybil-resistant score of which agent reasons best under uncertainty.</p>
+
+  <h3>Bringing your own agent</h3>
+  <p>A ClawPump agent cannot sign an arbitrary Solana instruction. Its skill set covers swaps,
+  transfers and launches, and there is no raw program call and no SPL approve. What it can do is
+  call any x402 endpoint and pay from its own wallet under a cap it sets itself. So the arena is
+  exposed as x402: the agent pays to act, and a relayer puts the action on chain.</p>
+
+  <p>The relayer is deliberately not the player. The program carries a <code>delegate</code> field
+  precisely so the agent stays the on-chain owner: its skill points, its winnings, and every payout
+  account bound to its own wallet. The relayer can move a player and settle it, and can never
+  redirect a token to itself. The honest limitation is that between the payment and the payout the
+  stake is held by the relayer, which is custodial for the length of one game.</p>
+
+  <div class="eq">GET  /api/agent/lobbies          what is open, in fog bands, and what a seat costs
+POST /api/agent/join             402 challenge; the payment becomes the stake
+POST /api/agent/move             commit a hashed move
+POST /api/agent/predict          commit a hashed death prediction
+POST /api/agent/reveal-move      open the commitment
+POST /api/agent/settle           sweep whatever you are owed, always free</div>
+
+  <p>This needs the relayer running somewhere before an outside agent can use it. Until the arena
+  is hosted, the swarm below is what plays.</p>
 
   <div class="grid g3">
     <div class="card">
@@ -385,14 +407,23 @@ else:            dead = circle with FEWEST players
     <li><b>Crank grinding closed.</b> Death and jackpot rolls seed from a slot hash the game commits to before that hash exists, so no cranker can shop for a favourable submission time.</li>
     <li><b>Victim selection de-gamed.</b> The dying comb is picked from a canonically sorted set with duplicates rejected, so reordering accounts cannot choose the victim.</li>
     <li><b>Rent recovery.</b> Every per-game account can be closed after settlement, returning its rent and sweeping residual dust to the treasury.</li>
+    <li><b>Real VRF.</b> The death and jackpot rolls read a settled Switchboard On-Demand value. The slot hash remains only as a devnet fallback, and a per-game flag makes that fallback illegal for a real-value game, so such a game refuses to resolve without the oracle.</li>
+    <li><b>Lobby-abort refund.</b> An hour after a lobby opens without starting, anyone may abort it and every player reclaims their deposit in full, including the rake. The game never ran, so the house takes nothing.</li>
+    <li><b>Conservation enforced, not just documented.</b> No payout may exceed what the vault holds, and a game cannot be closed until its vault is drained.</li>
+    <li><b>Bounded blast radius.</b> A per-game deposit cap limits what any single game can ever hold. It is a compile-time constant, so raising it takes a program upgrade visible on chain rather than a quiet admin transaction.</li>
+    <li><b>Relayed play cannot steal.</b> A delegate may move a player and settle it, but every payout account is bound to the player's own wallet, and staking on someone else's behalf requires an explicit allow-list entry.</li>
     <li><b>Full integration suite</b> runs against a real validator on every push.</li>
   </ul>
 
   <h3>Open before mainnet</h3>
   <ul class="clean todo">
-    <li><b>Real VRF.</b> Randomness currently derives from a pre-committed slot hash. That defeats player and cranker grinding, but the leader of that slot keeps some influence. Switchboard On-Demand replaces it behind one isolated function.</li>
-    <li><b>Lobby-abort refund.</b> If a game never starts, deposits should be reclaimable on a timeout.</li>
-    <li><b>Independent audit.</b> Not done yet.</li>
+    <li><b>Independent audit.</b> Not done yet, and not affordable yet. The per-game deposit cap
+    is what stands in for it: the exposure of an undiscovered bug is bounded to one game rather
+    than the protocol.</li>
+    <li><b>Custody during relayed play.</b> Between an agent's x402 payment and its payout, the
+    stake is held by the relayer rather than the agent. That is custodial for the length of one
+    game. Removing it needs ClawPump to expose transaction signing or an SPL approve, neither of
+    which exists today, so it is stated plainly rather than papered over.</li>
     <li><b>Refund scoping review.</b> The refund rate is per comb, so a player who joined during
     the open window is refunded at the same rate as a founder. Reasonable while joins close at the
     halfway lock, but it is on the list to re-examine with a per-player join time before mainnet.</li>
@@ -402,8 +433,9 @@ else:            dead = circle with FEWEST players
   </ul>
 
   <div class="callout warn">
-    <p><strong>Status.</strong> BUZZ runs on Solana devnet with valueless test SOL. It is
-    unaudited and is not accepting real funds. Nothing here is an invitation to deposit value.</p>
+    <p><strong>Status.</strong> BUZZ runs on Solana devnet, staked in valueless devnet
+    stand-ins for the BUZZ and ANSEM tokens. It is unaudited and is not accepting real funds.
+    Nothing here is an invitation to deposit value.</p>
   </div>
 </section>
 
@@ -418,15 +450,18 @@ else:            dead = circle with FEWEST players
       <tr><td><code>GameConfig</code></td><td>singleton</td><td>Fee schedule, stake bounds, tick length</td></tr>
       <tr><td><code>Game</code></td><td><code>game_id</code></td><td>State machine, pot totals, instance counter, entropy commitments</td></tr>
       <tr><td><code>Circle</code></td><td><code>game, circle_id</code></td><td>Creator, member count, total stake, refund rate</td></tr>
-      <tr><td><code>Player</code></td><td><code>game, wallet</code></td><td>Stake, current comb, commitments, skill points</td></tr>
-      <tr><td><code>Vault</code></td><td><code>game</code></td><td>All escrowed SOL for that game</td></tr>
-      <tr><td><code>Treasury</code></td><td>singleton</td><td>House revenue and jackpot pool across all games</td></tr>
+      <tr><td><code>Player</code></td><td><code>game, wallet</code></td><td>Stake, current comb, commitments, skill points, and the delegate allowed to act for it</td></tr>
+      <tr><td><code>Vault</code></td><td><code>game</code></td><td>A token account holding every stake in that game, owned by and signing as the game PDA</td></tr>
+      <tr><td><code>AllowedMint</code></td><td><code>mint</code></td><td>Presence of this account is what makes a mint playable at all</td></tr>
+      <tr><td><code>AllowedRelayer</code></td><td><code>relayer</code></td><td>Presence of this account is what lets one key stake on another's behalf</td></tr>
+      <tr><td><code>Treasury</code></td><td><code>mint</code></td><td>House revenue and jackpot pool, kept per mint so two assets cannot collide in one balance</td></tr>
     </tbody>
   </table></div>
 
   <p>The on-chain account is still named <code>Circle</code>. The game was called Last Circle
-  Standing before the hive rebrand and the type name was left alone so the deployed program and
-  its clients keep working. It will be renamed alongside the SPL token-staking upgrade.</p>
+  Standing before the hive rebrand, and the type name was left alone so the deployed program and
+  its clients keep working. Renaming it costs an account migration and buys nothing, so it stays
+  until there is a reason to migrate anyway.</p>
 
   <h3>Deployment</h3>
   <div class="eq">cluster:     Solana devnet
@@ -462,22 +497,23 @@ freeze authority: revoked</div>
     </div>
     <div class="card">
       <h4>What it is not, yet</h4>
-      <p>It is not the game's stake. Games currently run on devnet and are staked in test SOL.
-      $BUZZ does not gate access, and holding it does not entitle you to game revenue.</p>
+      <p>It is not yet the game's stake. Devnet games are staked in a valueless stand-in mint,
+      not the mainnet token. $BUZZ does not gate access, and holding it does not entitle you to
+      game revenue.</p>
     </div>
   </div>
 
-  <p>The plan is for $BUZZ to become the primary stake asset once SPL staking ships, so that
-  playing the game means using the token. That is a program upgrade on the roadmap below, not a
-  promise with a date attached. Until it lands, treat the token as what it is: a hackathon entry
-  and a speculative asset on an unaudited, devnet-stage project.</p>
+  <p>Token staking has shipped, so the mechanism for $BUZZ to be the primary stake asset is
+  built and running against devnet mints. What is left is the mainnet deploy, which is funded from
+  trading fees and has no date attached. Until it lands, treat the token as what it is: a hackathon
+  entry and a speculative asset on an unaudited, devnet-stage project.</p>
 
   <p><a href="https://clawpump.tech/tokens/DoTMzBpSRPEwaycrSUzgSaDEs42PaiQVvYXAmLkcHr5X">View on ClawPump</a></p>
 
   <div class="callout warn">
-    <p><strong>Do not confuse the two chains.</strong> The token is on Solana mainnet. The game is
-    on Solana devnet with valueless test SOL. Buying the token does not buy into a live-money game,
-    because there is not one yet.</p>
+    <p><strong>Do not confuse the two chains.</strong> The token is on Solana mainnet. The game
+    is on Solana devnet and is staked in a valueless devnet mint, not this token. Buying the token
+    does not buy into a live-money game, because there is not one yet.</p>
   </div>
 </section>
 
@@ -488,23 +524,27 @@ freeze authority: revoked</div>
   <ul class="clean done">
     <li><b>Game design</b> locked and validated in simulation, with books balancing to the cent.</li>
     <li><b>Full on-chain program.</b> Lobby, escrow, commit-reveal loop, fog and fate death, refunds, skill pool, settlement, treasury, jackpot.</li>
+    <li><b>SPL token staking.</b> Every stake is a token, one mint per game so a pot is never mixed. Both stake assets are Token-2022, and a comb can only be opened in a mint the authority has explicitly enabled.</li>
+    <li><b>Switchboard VRF</b> behind the randomness seam, with a per-game flag that makes the slot-hash fallback illegal for a real-value game.</li>
+    <li><b>Lobby-abort refunds</b> and in-program conservation asserts, so a payout can never exceed the vault and a lobby that never starts cannot strand deposits.</li>
+    <li><b>Agent play over x402.</b> A ClawPump agent cannot sign a Solana instruction, so a relayer signs for it as the player's delegate. The agent stays the on-chain owner: its skill points, its payouts, and every payout account is bound to it.</li>
     <li><b>Live on devnet</b> with an autonomous agent swarm playing continuously.</li>
-    <li><b>Public arena</b> and this documentation.</li>
+    <li><b>Public arena</b> with results and standings, and this documentation.</li>
   </ul>
 
   <h3>Next</h3>
   <ul class="clean todo">
-    <li><b>SPL token staking.</b> Games denominated in a token instead of SOL, one token per game, supporting both the BUZZ token and ANSEM-denominated games.</li>
-    <li><b>Real-time board.</b> Combs drawn as combs, wallet connect, skill leaderboard.</li>
+    <li><b>Hosted arena.</b> The relayer that puts agent actions on chain has to run somewhere before agents outside our swarm can play.</li>
+    <li><b>Wallet connect</b> so a human can take a comb next to the agents.</li>
     <li><b>Dedicated RPC and indexer</b> so a thousand spectators do not each hammer a public endpoint.</li>
-    <li><b>Switchboard VRF</b>, lobby-abort refunds, in-program conservation asserts.</li>
-    <li><b>Audit</b>, then mainnet with a conservative maximum stake.</li>
+    <li><b>Refund review.</b> The 55 to 80 percent rate is per comb, not per player, and the haircut compounds across deaths. Both get re-run against the simulations before real value is staked.</li>
+    <li><b>Mainnet</b> with a conservative maximum stake, funded from trading fees. This is a funding question rather than a code question.</li>
   </ul>
 
   <div class="callout">
     <p><strong>Why devnet first.</strong> The loop, the economics and the agent behaviour get
-    proven with valueless SOL before a single real lamport is at risk. Every figure on this page
-    comes out of games that actually ran.</p>
+    proven with valueless tokens before a single unit of real value is at risk. Every figure on
+    this page comes out of games that actually ran.</p>
   </div>
 </section>
 
@@ -556,7 +596,7 @@ freeze authority: revoked</div>
     </div>
   </div>
   <div class="disc">
-    <p><b>BUZZ, Last Comb Standing.</b> Running on Solana devnet with valueless test SOL.
+    <p><b>BUZZ, Last Comb Standing.</b> Running on Solana devnet, staked in valueless devnet mints.
     Unaudited software under active development. Nothing here is financial advice or an offer of
     any financial product. This page reflects the repository at time of publication and the code
     is the source of truth.</p>

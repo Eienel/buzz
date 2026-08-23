@@ -1,4 +1,4 @@
-// Last Circle Standing — devnet agent swarm.
+// BUZZ (Last Comb Standing), devnet agent swarm.
 // One process = keeper + N player agents with distinct strategies, playing
 // continuous games so spectators (app/) always have something live to watch.
 //
@@ -31,7 +31,7 @@ const ASSETS = Object.entries(mints).map(([name, m]) => ({
 const GAME_INTERVAL = Number(process.env.GAME_INTERVAL_SECONDS ?? 180) * 1000; // idle between games
 // Per-agent funding: stake + fixed headroom for Circle/Player PDA rent
 // (~0.0036), tx fees, and the agent wallet's own rent-exempt minimum (~0.0009).
-// A multiplier breaks at small stakes — the headroom cost is constant.
+// A multiplier breaks at small stakes, the headroom cost is constant.
 const FUND = 8_000_000; // SOL for fees and PDA rent only; the stake is a token
 
 const payer = Keypair.fromSecretKey(new Uint8Array(JSON.parse(readFileSync(process.env.PAYER ?? `${process.env.HOME}/.config/solana/id.json`, "utf8"))));
@@ -141,7 +141,7 @@ async function playGame(gameNo) {
   log(`game ${gid}: ${asset.name} game, funding ${N_AGENTS} agents…`);
   await fundAgents(agents, asset);
 
-  // Everything after funding is wrapped so sweepBack ALWAYS runs — a throw
+  // Everything after funding is wrapped so sweepBack ALWAYS runs, a throw
   // anywhere in the lobby, instance loop, or settlement would otherwise strand
   // the ephemeral agent wallets' balances (their keypairs live only in memory).
   try {
@@ -233,7 +233,7 @@ async function playGame(gameNo) {
     g = await fetchGame(gamePda);
     const doomed = g.doomedCircle;
     await program.methods.executeDeath(doomed).accountsPartial({ game: gamePda, circle: circlePda(doomed), cranker: payer.publicKey }).rpc();
-    log(`game ${gid}: instance ${instance} — circle ${doomed} died`);
+    log(`game ${gid}: instance ${instance}, circle ${doomed} died`);
 
     // scoring: reveal predictions; casualties land in the fullest surviving circle
     for (const [a, p] of plans) {
@@ -275,7 +275,7 @@ async function playGame(gameNo) {
             recentSlotHashes: SYSVAR_SLOT_HASHES_PUBKEY, randomness: null,
             cranker: payer.publicKey, systemProgram: SystemProgram.programId })
           .rpc();
-        if ((await fetchGame(gamePda)).insane) log(`game ${gid}: 🔥 INSANE ROUND — jackpot injected`);
+        if ((await fetchGame(gamePda)).insane) log(`game ${gid}: INSANE ROUND, jackpot injected`);
       } catch {}
     }
     await readFog();
@@ -359,7 +359,7 @@ async function playGame(gameNo) {
   } finally {
     await sweepBack(agents);
   }
-  log(`game ${gid}: done — funds + rent swept back to swarm payer`);
+  log(`game ${gid}: done. funds + rent swept back to swarm payer`);
 }
 
 // Config, mints and per-mint treasuries are created once by setup-devnet.mjs.
@@ -375,7 +375,7 @@ async function ensureSetup() {
 }
 
 const bal = await connection.getBalance(payer.publicKey);
-log(`swarm payer ${payer.publicKey.toBase58()} — ${bal / LAMPORTS_PER_SOL} SOL`);
+log(`swarm payer ${payer.publicKey.toBase58()}, ${bal / LAMPORTS_PER_SOL} SOL`);
 if (bal < FUND * N_AGENTS + 0.05 * LAMPORTS_PER_SOL) {
   console.error("payer underfunded; airdrop to it first: solana airdrop 2 " + payer.publicKey.toBase58() + " -u devnet");
   process.exit(1);

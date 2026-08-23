@@ -1,9 +1,9 @@
-//! Last Circle Standing — on-chain program (Solana / Anchor).
+//! BUZZ (Last Comb Standing), on-chain program (Solana / Anchor).
 //!
 //! Build milestone 1: config + SOL escrow + lobby state machine.
 //! (create_game / create_circle / join_circle / start_game)
 //! Instance loop, commit-reveal, fog/fate death, prediction skill-pool, and
-//! settlement land in subsequent milestones — see /SPEC.md and /ARCHITECTURE.md.
+//! settlement land in subsequent milestones. See /SPEC.md and /ARCHITECTURE.md.
 //!
 //! Economic identity (asserted as invariants as logic is added):
 //!   Σ deposits == Σ payouts + house_profit + Δ(jackpot_pool)   (exact to the lamport)
@@ -146,7 +146,7 @@ pub mod last_circle {
     /// the 50% lock (`instance < lock_instance`); frozen from the lock instance
     /// onward. The strict bound leaves no instance where joins are open at the
     /// same time the post-lock insane roll (armed at `instance >= lock_instance`)
-    /// is computable — so the jackpot outcome can never be targeted at deposit.
+    /// is computable, so the jackpot outcome can never be targeted at deposit.
     pub fn join_circle(ctx: Context<JoinCircle>, stake: u64) -> Result<()> {
         let g = &mut ctx.accounts.game;
         let open = g.status == GameStatus::Lobby
@@ -252,7 +252,7 @@ pub mod last_circle {
         let to = &mut ctx.accounts.to_circle;
         require!(from.circle_id == p.current_circle, GameError::BadParam);
         // A member of a dead circle must exit via land/cash_out (which applies
-        // the refund haircut) — moving out with the full stake would double-count
+        // the refund haircut), moving out with the full stake would double-count
         // the haircut already swept into the leftover pot.
         require!(from.alive, GameError::CircleDead);
         require!(to.circle_id == target_circle, GameError::BadParam);
@@ -274,7 +274,8 @@ pub mod last_circle {
     /// dies (tie → least stake → pseudo-random). Stores the doomed id; the
     /// mutation happens in execute_death.
     ///
-    /// NOTE: randomness here is a placeholder slot/clock hash — a later milestone
+    /// Randomness comes from a settled Switchboard value when one is supplied, and
+    /// otherwise from the slot hash the game committed to in advance. `require_vrf`
     /// swaps in a real VRF before mainnet.
     pub fn select_death<'info>(
         ctx: Context<'_, '_, 'info, 'info, SelectDeath<'info>>,
@@ -288,7 +289,7 @@ pub mod last_circle {
         // on-chain and the cranker cannot pick a favorable submission slot.
         // strict >: at slot == entropy_slot the SlotHashes sysvar's newest entry
         // is still entropy_slot-1, so we must wait until entropy_slot itself is
-        // recorded — otherwise the seed varies by one slot of submission timing.
+        // recorded, otherwise the seed varies by one slot of submission timing.
         require!(g.entropy_slot > 0 && clock.slot > g.entropy_slot, GameError::PhaseNotOver);
 
         // Collect all alive circles from the remaining accounts.
@@ -304,7 +305,7 @@ pub mod last_circle {
         // the cranker passed the accounts in (with fixed entropy that would let
         // them deterministically choose the victim). Sorting + a strict
         // no-duplicates check also guarantees the set is exactly the alive
-        // circles — a dup like [A,A,B] can no longer pass the count check while
+        // circles, a dup like [A,A,B] can no longer pass the count check while
         // silently excluding C.
         alive.sort_by_key(|x| x.0);
         for w in alive.windows(2) {
@@ -316,8 +317,8 @@ pub mod last_circle {
 
         // Entropy = the SlotHashes entry at (or nearest before) the slot we
         // committed to in advance_to_reveal, mixed with game/instance for
-        // domain separation. NOTE: deliberately no clock.slot in the seed —
-        // the seed must not vary with WHEN the crank lands.
+        // domain separation. Deliberately no clock.slot in the seed: it must
+        // not vary with WHEN the crank lands.
         let entropy = randomness_seed(
             ctx.accounts.randomness.as_ref().map(|a| a.as_ref()),
             &ctx.accounts.recent_slot_hashes,
@@ -669,7 +670,8 @@ pub mod last_circle {
     /// pool is injected into this game's leftover pot (and the pool resets).
     /// Revealed after the 50% lock so it can't be targeted at deposit time.
     ///
-    /// NOTE: placeholder randomness (slot/clock hash) — swap in VRF before mainnet.
+    /// Same randomness seam as the death roll: a settled Switchboard value when supplied,
+    /// the pre-committed slot hash otherwise, and `require_vrf` forbids the fallback.
     pub fn roll_insane(ctx: Context<RollInsane>) -> Result<()> {
         let (status, instance, lock, rolled, entropy_slot, require_vrf, gkey, gvbump) = {
             let g = &ctx.accounts.game;
@@ -822,7 +824,7 @@ pub mod last_circle {
     /// Close a Player account; its rent returns to the player's wallet.
     /// Permissionless once the player has nothing left to claim. If they still
     /// have an unclaimed win (status Active) or an unclaimed skill share, only
-    /// the owner may close — their signature is an explicit forfeit.
+    /// the owner may close, their signature is an explicit forfeit.
     pub fn close_player(ctx: Context<ClosePlayer>) -> Result<()> {
         let g = &mut ctx.accounts.game;
         require!(g.status == GameStatus::Settling, GameError::WrongPhase);

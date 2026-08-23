@@ -1,4 +1,4 @@
-// Last Circle Standing — reference engine (Spec v1.0)
+// BUZZ (Last Comb Standing), reference engine (Spec v1.0)
 // Pure state machine. Each public method maps 1:1 to a planned on-chain instruction.
 // No agent logic here (that lives in the test harness / client). The engine only
 // enforces rules and money conservation.
@@ -162,7 +162,7 @@ export class Game {
     if (totPts > 0) {
       for (const [id, p] of this.players) if (p.points) add(id, skillPool * (p.points / totPts));
     } else {
-      add(creatorId, skillPool); // degenerate: nobody predicted — give to creator
+      add(creatorId, skillPool); // degenerate: nobody predicted, give to creator
     }
 
     this.phase = "closed";

@@ -26,7 +26,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const PAUSE = Number(process.env.PAUSE_MS ?? 400); // be gentle with the public RPC
 
 const before = await connection.getBalance(payer.publicKey);
-// ONE scan of each account type, then group locally — scanning per game
+// ONE scan of each account type, then group locally, scanning per game
 // rate-limits the public RPC instantly.
 const games = await program.account.game.all();
 await sleep(PAUSE);
