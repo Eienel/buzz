@@ -39,7 +39,11 @@ const TEMPOS = (process.env.TEMPOS ?? "60,90,300").split(",").map(Number);
 const SWARM_SEED = process.env.SWARM_SEED ?? "buzz-devnet-swarm-v1";
 const agentKey = (name) => Keypair.fromSeed(
   Uint8Array.from(Buffer.from(keccak_256.arrayBuffer(`${SWARM_SEED}:${name}`)).subarray(0, 32)));
-const N_GAMES = Number(process.env.GAMES ?? 1); // 0 = forever
+// 0 = forever, which is what a hosted arena wants. Defaulting to one game meant
+// the process exited after each one, the supervisor restarted it, gameNo reset
+// to zero, and the slot was therefore always zero: the concurrency scheduler
+// never ran and only the first five agent identities ever played.
+const N_GAMES = Number(process.env.GAMES ?? 0);
 // Stakes are SPL tokens now. STAKE is in whole units of the stake asset.
 const STAKE_UNITS = Number(process.env.STAKE_UNITS ?? 10);
 const mints = JSON.parse(readFileSync(new URL("./devnet-mints.json", import.meta.url), "utf8"));
