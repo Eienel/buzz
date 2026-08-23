@@ -22,12 +22,23 @@ export const LIMITS = {
   maxQueued: Number(process.env.LIMIT_MAX_QUEUED ?? 400),
   // Stop accepting joins while the relayer is this close to empty.
   minRelayerSol: Number(process.env.LIMIT_MIN_RELAYER_SOL ?? 0.05),
+  // What one wallet may ever cost the relayer. The count caps above happen to
+  // work out near this, but that is arithmetic rather than a promise: state the
+  // budget directly so it holds even if the cost of a seat changes.
+  solBudgetPerAgent: Number(process.env.LIMIT_SOL_PER_AGENT ?? 0.1),
+};
+
+// What the relayer actually pays out, measured on devnet rather than guessed.
+export const COST = {
+  join: 0.005754,     // player PDA + associated token account + comb PDA + fee
+  action: 0.000005,   // one signature
 };
 
 export function makeLimiter() {
   const joins = new Map();      // wallet -> [timestamps]
   const acts = new Map();       // wallet -> [timestamps]
   const joined = new Map();     // wallet -> Set(gameId)
+  const spent = new Map();      // wallet -> SOL the relayer has paid on its behalf
 
   const prune = (list, window) => {
     const cut = Date.now() - window;
@@ -41,6 +52,16 @@ export function makeLimiter() {
   function check(kind, wallet, gameId, ctx = {}) {
     if (ctx.queued >= LIMITS.maxQueued) {
       return { ok: false, error: "arena is saturated, try again shortly" };
+    }
+
+    // A wallet's lifetime budget. Checked before the cheaper limits so an agent
+    // that has used its allowance is told that, rather than a rate limit that
+    // implies waiting would help.
+    const used = spent.get(wallet) ?? 0;
+    const cost = kind === "join" ? COST.join : COST.action;
+    if (used + cost > LIMITS.solBudgetPerAgent) {
+      return { ok: false, error:
+        `spend limit reached: this wallet has used its ${LIMITS.solBudgetPerAgent} SOL relayer allowance` };
     }
 
     const a = prune(acts.get(wallet) ?? [], WINDOW_MS);
@@ -72,6 +93,7 @@ export function makeLimiter() {
       seen.add(String(gameId));
       joined.set(wallet, seen);
     }
+    spent.set(wallet, used + cost);
     return { ok: true };
   }
 
@@ -89,6 +111,14 @@ export function makeLimiter() {
     }
   }
 
-  const stats = () => ({ wallets: acts.size, seated: joined.size });
-  return { check, release, reconcile, stats };
+  const stats = () => ({
+    wallets: acts.size,
+    seated: joined.size,
+    solCommitted: Number([...spent.values()].reduce((a, b) => a + b, 0).toFixed(4)),
+  });
+  const budget = (wallet) => ({
+    used: Number((spent.get(wallet) ?? 0).toFixed(6)),
+    limit: LIMITS.solBudgetPerAgent,
+  });
+  return { check, release, reconcile, stats, budget };
 }

@@ -18,6 +18,7 @@ import { Connection, PublicKey } from "@solana/web3.js";
 import { makeArena, PRICE, challenge, registerAgent, authed } from "./arena-api.mjs";
 import { makeAutoplay } from "./autoplay.mjs";
 import { makeLimiter, LIMITS } from "./limits.mjs";
+import { makeCranker } from "./cranker.mjs";
 import { verifyPayment } from "./x402.mjs";
 import { loadRelayer, startDrain } from "./relayer.mjs";
 import { DATA_DIR } from "./keypair.mjs";
@@ -54,6 +55,11 @@ function decodeGame(d){let o=8;const g={};
   // Three Game layouts are live on devnet: pre-multi-mint (no stake_mint),
   // pre-fee-snapshot (no fee_bps), and current. Decode by size rather than
   // assuming the newest, or every older account throws the poller off.
+  // Games written before the multi-mint upgrade cannot be deserialized by the
+  // current program at all: they are stranded, not merely old. Flag them so the
+  // cranker stops retrying them forever and the public board stops showing them
+  // as live games that never advance.
+  g.legacy = d.length < 170;
   if(d.length>=166){
     g.createdAt=Number(u64(d,o));o+=8;
     g.stakeMint=b58(d.slice(o,o+32));o+=32; // one mint per game; the pot never mixes
@@ -154,10 +160,11 @@ async function poll(){
       catch(e){ console.log("history write failed:", e.message); }
     }
     snapshot = { ok:true, updatedAt:Date.now(), programId:PROGRAM_ID, cluster:RPC.includes("devnet")?"devnet":"mainnet",
-                 live:games.filter(g=>g.status===0||g.status===1), finished:history.length,
+                 live:games.filter(g=>(g.status===0||g.status===1) && !g.legacy), finished:history.length,
                  recent: history.slice(0, 10) };
     autoplay.tick(snapshot);          // walk easy-mode intents through the phases
     limiter.reconcile(games.filter(g=>g.status===0||g.status===1).map(g=>g.gameId));
+    cranker?.once(snapshot);
     pollRelayer();
   }catch(e){
     snapshot = { ...snapshot, ok:false, error:String(e.message).slice(0,120), updatedAt:Date.now() };
@@ -195,6 +202,10 @@ setInterval(() => {
 }, 300_000);
 
 const limiter = makeLimiter();
+// Nothing was advancing games this process did not create, so a restart left
+// them stalled with players inside. Every crank is permissionless; this just
+// uses that.
+let cranker = null;
 // The relayer's own balance, refreshed alongside the state poll. Joins stop
 // before it runs dry rather than after, because a game it cannot settle is
 // worse than a seat it refused.
@@ -220,6 +231,7 @@ const autoplay = makeAutoplay({ enqueue, gamePdaFor });
 // them up front instead of taking money for work we cannot do.
 const relayer = loadRelayer(connection);
 startDrain(relayer, actions);
+if (relayer) cranker = makeCranker({ program: relayer.program, payer: relayer.kp });
 if (relayer) relayer.ready().then((r) =>
   console.log(`relayer ${r.pubkey} ${r.allowed ? "allowed" : "NOT ON THE ALLOW-LIST: run agents/allow-relayer.mjs"}`));
 else console.log("no RELAYER_KEYPAIR: agent actions disabled");

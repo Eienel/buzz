@@ -165,7 +165,7 @@ function makeRelayer({ connection, kp, program }) {
     return { pubkey: kp.publicKey.toBase58(), allowed: !!acc, relayerPda: relayerPda.toBase58() };
   }
 
-  return { handlers, ready, pubkey: kp.publicKey };
+  return { handlers, ready, pubkey: kp.publicKey, program, kp };
 }
 
 /**
