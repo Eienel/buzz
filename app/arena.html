@@ -102,6 +102,41 @@
   .comb.dead .bee{opacity:.35;filter:grayscale(.7)}
   .fill{margin-top:10px;height:44px;width:100%}
 
+  /* hex view: combs drawn as a real tessellation rather than a card row.
+     Same data as the card view, arranged the way a hive actually is. */
+  .hive{padding:22px 18px 24px;display:flex;flex-direction:column;align-items:center}
+  .hrow{display:flex;gap:10px}
+  .hrow+.hrow{margin-top:-39px}      /* nest: pointy-top hexes overlap 25% */
+  .hrow.off{margin-left:74px}
+  .hex{width:138px;height:158px;position:relative;flex:0 0 auto;
+    clip-path:polygon(50% 0%,100% 25%,100% 75%,50% 100%,0% 75%,0% 25%);
+    background:var(--edge)}
+  .hex .in{position:absolute;inset:2px;
+    clip-path:polygon(50% 0%,100% 25%,100% 75%,50% 100%,0% 75%,0% 25%);
+    background:linear-gradient(160deg,#1d1509,#140f09);
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px}
+  .hex.thin{background:var(--honey)} .hex.crowded{background:var(--cool)}
+  .hex.alive{background:var(--alive)}
+  .hex.dead{background:#4a2029}
+  .hex.dead .in{background:linear-gradient(160deg,#1e0f12,#140b0d)}
+  .hex.doomed{background:var(--dead);animation:doom .8s infinite}
+  .hex .hid{font-family:var(--mono);font-size:11px;color:var(--dimmer);letter-spacing:.5px}
+  .hex .dots{display:flex;flex-wrap:wrap;gap:5px;justify-content:center;align-content:center;
+    max-width:84px;min-height:24px}
+  .hex .dots i{width:11px;height:11px;border-radius:50%;background:var(--honey);
+    box-shadow:0 0 9px rgba(255,179,0,.5)}
+  .hex .more{font-family:var(--mono);font-size:11px;color:var(--honey);align-self:center}
+  .hex .hband{font-size:13px;font-weight:700;letter-spacing:-.2px}
+  .hex.thin .hband{color:var(--honey)} .hex.crowded .hband{color:var(--cool)}
+  .hex.alive .hband{color:var(--alive)}
+  .hex.dead .hband,.hex.doomed .hband{color:var(--dead)}
+  .hex .hamt{font-family:var(--mono);font-size:10.5px;color:var(--dim)}
+
+  .view{display:flex;gap:0;border:1px solid var(--edge2);border-radius:99px;overflow:hidden}
+  .view button{font-family:var(--mono);font-size:11px;letter-spacing:.6px;text-transform:uppercase;
+    background:transparent;color:var(--dimmer);border:0;padding:6px 12px;cursor:pointer}
+  .view button.on{background:var(--honey);color:#1a1206;font-weight:600}
+
   .side{border-top:1px solid var(--edge);padding:12px 18px 16px}
   .side h4{margin:0 0 8px;font-size:11px;color:var(--dimmer);text-transform:uppercase;letter-spacing:.9px}
   .feed{list-style:none;margin:0;padding:0;font-size:13px;display:flex;flex-wrap:wrap;gap:6px 18px;
@@ -150,6 +185,9 @@
   </a>
   <span class="sub">last comb standing, live arena &nbsp;<a href="index.html">Docs</a></span>
   <div class="right">
+    <span class="view" id="view">
+      <button data-v="cards">cards</button><button data-v="hive">hive</button>
+    </span>
     <span class="chip">devnet</span>
     <span class="chip live" id="conn"><i></i>Live</span>
   </div>
@@ -266,6 +304,55 @@ const IC={
 };
 const band=m=>m===0?["empty","thin"]:m<=1?["thin","thin"]:m<=3?["healthy","alive"]:["crowded","crowded"];
 
+// ---- view mode -------------------------------------------------------------
+// Two ways to read the same board. Cards are easier to scan for numbers; the
+// hive shows the shape of the game, which comb is next to which and where the
+// crowd actually is. Remembered per viewer, so a refresh keeps your choice.
+let VIEW="cards";
+try{ VIEW=localStorage.getItem("buzz.view")||"cards"; }catch{}
+// ?view=hive wins over the stored choice, so a link can carry the view with it
+const qv=new URLSearchParams(location.search).get("view");
+if(qv==="hive"||qv==="cards") VIEW=qv;
+function setView(v){
+  VIEW=v;
+  try{ localStorage.setItem("buzz.view",v); }catch{}
+  for(const b of document.querySelectorAll("#view button")) b.classList.toggle("on",b.dataset.v===v);
+  tick();
+}
+
+/** Members as dots, capped so a busy comb stays legible rather than a wall. */
+function dots(n){
+  const shown=Math.min(n,10);
+  return `<div class="dots">${"<i></i>".repeat(shown)}</div>`+
+         (n>shown?`<div class="more">+${n-shown}</div>`:"");
+}
+
+/**
+ * Combs laid out as an actual tessellation. Rows nest by a quarter of the hex
+ * height, and every other row is offset by half a hex, which is what makes it
+ * read as a comb instead of a grid of hexagons.
+ */
+function hive(g,totalStake){
+  const cs=g.combs||[];
+  const per=cs.length>6?4:3;
+  const rows=[];
+  for(let i=0;i<cs.length;i+=per) rows.push(cs.slice(i,i+per));
+  return `<div class="hive">${rows.map((row,ri)=>
+    `<div class="hrow${ri%2?" off":""}">${row.map(cb=>{
+      const doomed=g.phase>=2&&g.doomed===cb.id&&cb.alive;
+      if(!cb.alive) return `<div class="hex dead"><div class="in">
+        <div class="hid">comb ${cb.id}</div>
+        <div class="hband">refund ${(cb.refundBps/100).toFixed(0)}%</div>
+        <div class="hamt">${sol(cb.stake)} ${sym(g.stakeMint)}</div></div></div>`;
+      const [lbl,cls]=band(cb.members);
+      return `<div class="hex ${cls}${doomed?" doomed":""}"><div class="in">
+        <div class="hid">comb ${cb.id}</div>
+        ${dots(cb.members)}
+        <div class="hband">${doomed?"dying":lbl}</div>
+        <div class="hamt">${sol(cb.stake)} ${sym(g.stakeMint)}</div></div></div>`;
+    }).join("")}</div>`).join("")}</div>`;
+}
+
 const feeds=new Map(), seen=new Map();
 function note(id,cls,text){const f=feeds.get(id)||[];
   f.unshift({t:new Date().toISOString().slice(11,19),cls,text});feeds.set(id,f.slice(0,6))}
@@ -297,7 +384,7 @@ function render(s){
     const span=Math.max(1,Math.round(g.instanceSeconds*(g.phase===0?.6:.4)));
     const pct=g.status===1?Math.max(0,Math.min(100,left/span*100)):0;
     const totalStake=(g.combs||[]).filter(z=>z.alive).reduce((a,z)=>a+Number(z.stake),0)||1;
-    const combs=(g.combs||[]).map(cb=>{
+    const combs=VIEW==="hive"?hive(g,totalStake):(g.combs||[]).map(cb=>{
       const doomed=g.phase>=2&&g.doomed===cb.id&&cb.alive;
       if(!cb.alive) return `<div class="comb dead">${BEE}
         <div class="cid">comb ${cb.id} &middot; dead</div>
@@ -326,12 +413,16 @@ function render(s){
         <span class="m">${IC.vol}volume <b>${sol(g.deposited)}</b></span>
       </div>
       <div class="bar"><i style="width:${pct}%"></i></div>
-      <div class="combs">${combs}</div>
+      ${VIEW==="hive"?combs:`<div class="combs">${combs}</div>`}
       <div class="side"><h4>Feed</h4><ul class="feed">${feed}</ul></div>
     </section>`;
   }).join("");
 }
 async function tick(){ try{ render(await fetchState()); }catch{ render({ok:false,live:[]}); } }
+document.getElementById("view").addEventListener("click",e=>{
+  const v=e.target.dataset&&e.target.dataset.v; if(v) setView(v);
+});
+for(const b of document.querySelectorAll("#view button")) b.classList.toggle("on",b.dataset.v===VIEW);
 tick(); setInterval(tick,2500);
 
 // ---- history: what already happened -----------------------------------------
