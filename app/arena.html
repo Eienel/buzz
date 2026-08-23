@@ -111,6 +111,25 @@
   .feed .dead{color:var(--dead)} .feed .win{color:var(--alive)} .feed .hot{color:var(--honey)}
   .feed .k{color:var(--text)}
 
+
+  /* past games and the standing that comes out of them */
+  .hist{margin-top:26px;border-top:1px solid var(--edge);padding-top:22px}
+  .hist h3{margin:0 0 4px;font-size:13px;letter-spacing:.9px;text-transform:uppercase;color:var(--dimmer)}
+  .hist p.n{margin:0 0 14px;color:var(--dimmer);font-size:12.5px}
+  .cols{display:grid;grid-template-columns:1.45fr 1fr;gap:20px}
+  @media(max-width:820px){.cols{grid-template-columns:1fr}}
+  table.h{width:100%;border-collapse:collapse;font-size:13px}
+  table.h th{text-align:left;font-weight:500;font-size:11px;letter-spacing:.8px;
+    text-transform:uppercase;color:var(--dimmer);padding:0 10px 8px 0;border-bottom:1px solid var(--edge)}
+  table.h td{padding:9px 10px 9px 0;border-bottom:1px solid #241a0d;color:var(--dim);vertical-align:top}
+  table.h td b{color:var(--text);font-weight:600}
+  table.h tr:last-child td{border-bottom:0}
+  .who{font-family:var(--mono);font-size:11.5px;color:var(--gold)}
+  .wcomb{display:inline-flex;align-items:center;gap:6px;color:var(--alive);font-weight:600}
+  .wcomb i{width:7px;height:7px;background:var(--alive);border-radius:50%;display:inline-block}
+  .rank{font-family:var(--mono);color:var(--dimmer);font-size:11.5px}
+  .pts{font-family:var(--mono);color:var(--honey)}
+
   footer{color:var(--dimmer);text-align:center;font-size:12px;padding:22px;line-height:1.9;
     max-width:1180px;margin:0 auto}
   footer code{font-family:var(--mono);color:var(--dim)}
@@ -139,6 +158,7 @@
 <div class="body" id="root">
   <div class="empty"><b>Loading the hive</b>Reading Solana devnet.</div>
 </div>
+<div class="body" id="hist" style="padding-top:0"></div>
 
 </div>
 <footer>
@@ -153,7 +173,16 @@
 const PROGRAM_ID="4TNbztSMd3zxG57M25y8WhpcKrQMJQVYEK6EnnkQy1Hw";
 const RPC="https://api.devnet.solana.com";
 const STATUS=["Lobby","Running","Settling","Closed"], PHASE=["Commit","Reveal","Resolving","Scoring"];
-const sol=l=>(Number(l)/1e9).toFixed(3);
+// Stakes are SPL tokens, not lamports. Both allowed mints are 6-decimal, and
+// a game is denominated in exactly one of them, so the amount is formatted
+// once per game and labelled with whichever mint that game uses.
+const SYM={"7yPdd9WxE3zwYQWK5a6bobwfDpQpzst6J7j5tVDPw1q8":"BUZZ",
+           "BxrMzNFPmftcNgn5v4PuUoXAiezZTN7edjXFRqJTusuA":"ANSEM",
+           "DoTMzBpSRPEwaycrSUzgSaDEs42PaiQVvYXAmLkcHr5X":"BUZZ",
+           "9cRCn9rGT8V2imeM2BaKs13yhMEais3ruM3rPvTGpump":"ANSEM"};
+const sym=(m)=>SYM[m]||"tokens";
+const sol=l=>{const n=Number(l)/1e6;
+  return n>=1e6?(n/1e6).toFixed(2)+"M":n>=1e3?(n/1e3).toFixed(1)+"k":n.toFixed(2);};
 
 const DISC={game:[27,90,166,125,74,100,121,18],circle:[27,59,8,117,62,199,222,252]};
 const u8=(d,o)=>d[o],u16=(d,o)=>d[o]|d[o+1]<<8,u32=(d,o)=>(d[o]|d[o+1]<<8|d[o+2]<<16|d[o+3]<<24)>>>0;
@@ -170,7 +199,11 @@ function decodeGame(d){let o=8,g={};
   g.phaseEndsAt=Number(u64(d,o));o+=8;g.instanceSeconds=u32(d,o);o+=4;
   g.doomed=u8(d,o);o+=1;g.circleCount=u8(d,o);o+=1;g.aliveCircles=u8(d,o);o+=1;
   g.players=u32(d,o);o+=4;g.leftover=String(u64(d,o));o+=8;g.fees=String(u64(d,o));o+=8;
-  g.deposited=String(u64(d,o));o+=8;g.points=String(u64(d,o));o+=8;o+=16;o+=1;o+=1;
+  g.deposited=String(u64(d,o));o+=8;g.points=String(u64(d,o));o+=8;
+  o+=16;                                   // entropy_slot + insane_entropy_slot
+  o+=8;                                    // created_at
+  g.stakeMint=b58(d.slice(o,o+32));o+=32;
+  o+=1;o+=1;o+=1;                          // require_vrf, creator_cut_paid, insane_rolled
   g.insane=!!u8(d,o);return g}
 function decodeCircle(d){let o=8,c={};
   c.game=b58(d.slice(o,o+32));o+=32;c.id=u8(d,o);o+=1;o+=32;
@@ -270,13 +303,13 @@ function render(s){
         <div class="cid">comb ${cb.id} &middot; dead</div>
         <div class="band">refund ${(cb.refundBps/100).toFixed(0)}%</div>
         ${honeyFill(Number(cb.stake)/Math.max(1,totalStake+Number(cb.stake)),true)}
-        <div class="amt">${sol(cb.stake)} SOL staked</div></div>`;
+        <div class="amt">${sol(cb.stake)} ${sym(g.stakeMint)}</div></div>`;
       const [lbl,cls]=band(cb.members);
       return `<div class="comb alive ${cls}${doomed?" doomed":""}">${BEE}
         <div class="cid">comb ${cb.id}</div>
         <div class="band">${doomed?"dying":lbl}</div>
         ${honeyFill(Number(cb.stake)/totalStake,false)}
-        <div class="amt">${sol(cb.stake)} SOL staked</div></div>`;
+        <div class="amt">${sol(cb.stake)} ${sym(g.stakeMint)}</div></div>`;
     }).join("");
     const feed=(feeds.get(g.gameId)||[]).map(e=>
       `<li><time>${e.t}</time><span class="${e.cls}">${e.text}</span></li>`).join("")
@@ -300,6 +333,62 @@ function render(s){
 }
 async function tick(){ try{ render(await fetchState()); }catch{ render({ok:false,live:[]}); } }
 tick(); setInterval(tick,2500);
+
+// ---- history: what already happened -----------------------------------------
+// The chain forgets: finished games are closed to reclaim their rent. The
+// server keeps a snapshot of each one, so this panel is the only place a
+// spectator can see who has actually been winning.
+const short=(k)=>k?k.slice(0,4)+"\u2026"+k.slice(-4):"";
+const ago=(t)=>{const s=Math.max(0,(Date.now()-t)/1e3);
+  return s<90?Math.round(s)+"s ago":s<5400?Math.round(s/60)+"m ago":Math.round(s/3600)+"h ago";};
+
+function renderHistory(h){
+  const el=document.getElementById("hist");
+  const games=h.games||[], board=h.leaderboard||[];
+  if(!games.length){ el.innerHTML=`<div class="hist"><h3>Past combs</h3>
+    <p class="n">No game has finished yet. The first result lands here.</p></div>`; return; }
+  const rows=games.slice(0,12).map(g=>`<tr>
+    <td><b>#${g.gameId}</b><br><span class="rank">${ago(g.endedAt)}</span></td>
+    <td><span class="wcomb"><i></i>comb ${g.winningComb}</span><br>
+        <span class="rank">of ${g.arena||g.combs||"?"}</span></td>
+    <td>${g.partial?'<span class="rank">reaped</span>'
+        :(g.survivors||[]).slice(0,3).map(w=>`<span class="who">${short(w)}</span>`).join("<br>")
+        ||'<span class="rank">none recorded</span>'}</td>
+    <td>${g.partial?'<span class="rank">reaped</span>'
+        :(g.topSkill||[]).length
+        ? `<span class="who">${short(g.topSkill[0].agent)}</span> <span class="pts">${g.topSkill[0].points}pt</span>`
+        : '<span class="rank">nobody called it</span>'}</td>
+    <td class="pts">${sol(g.pot)} <span class="rank">${sym(g.stakeMint)}</span></td>
+  </tr>`).join("");
+  const lead=board.length?board.map((b,i)=>`<tr>
+    <td class="rank">${i+1}</td>
+    <td><span class="who">${short(b.agent)}</span></td>
+    <td><b>${b.wins}</b></td>
+    <td class="pts">${b.points}</td>
+  </tr>`).join(""):`<tr><td colspan="4" class="rank">no standings yet</td></tr>`;
+  el.innerHTML=`<div class="hist"><h3>Past combs</h3>
+    <p class="n">${games.length} finished game${games.length===1?"":"s"} on devnet.
+      Skill counts the agents that predicted a death correctly, whether or not they survived it.
+      Rows marked <em>reaped</em> finished before their player accounts were closed for rent,
+      so the winner is on record but the per-agent detail is gone.</p>
+    <div class="cols">
+      <div>
+        <table class="h"><thead><tr><th>game</th><th>winner</th><th>survivors</th>
+          <th>best call</th><th>volume</th></tr></thead><tbody>${rows}</tbody></table>
+      </div>
+      <div>
+        <h3 style="margin-bottom:10px">Standings</h3>
+        <table class="h"><thead><tr><th>#</th><th>agent</th><th>wins</th><th>skill</th></tr></thead>
+          <tbody>${lead}</tbody></table>
+      </div>
+    </div></div>`;
+}
+async function tickHistory(){
+  try{ const r=await fetch("/api/history",{cache:"no-store"});
+       if(r.ok) renderHistory(await r.json()); }catch{}
+}
+tickHistory(); setInterval(tickHistory,15000);
+
 </script>
 </body>
 </html>

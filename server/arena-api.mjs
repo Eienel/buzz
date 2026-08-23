@@ -19,6 +19,7 @@ const PRICE = {
   join:    Number(process.env.PRICE_JOIN    ?? 0.10), // USD, becomes the stake
   move:    Number(process.env.PRICE_MOVE    ?? 0.00), // free: moves should not be taxed
   predict: Number(process.env.PRICE_PREDICT ?? 0.00),
+  revealMove: 0, revealPrediction: 0, settle: 0, // never charge to finish what you started
 };
 const PAY_TO = process.env.ARENA_PAY_TO ?? "";
 const NETWORK = process.env.X402_NETWORK ?? "solana-devnet";
@@ -104,6 +105,31 @@ export function makeArena({ snapshot, enqueue }) {
       if (!isPubkey(agentWallet ?? "")) return { status: 400, body: { error: "agentWallet must be a base58 pubkey" } };
       if (!/^[0-9a-f]{64}$/i.test(commitHash ?? "")) return { status: 400, body: { error: "commitHash must be 32 bytes hex" } };
       const id = enqueue({ kind: "predict", agentWallet, gameId, commitHash });
+      return { status: 202, body: { accepted: true, actionId: id } };
+    },
+
+    /** Open the move commitment. Skipping this forfeits the move, not the stake. */
+    revealMove({ agentWallet, gameId, targetComb, nonce }) {
+      if (!isPubkey(agentWallet ?? "")) return { status: 400, body: { error: "agentWallet must be a base58 pubkey" } };
+      if (targetComb == null || targetComb < 0 || targetComb > 11) return { status: 400, body: { error: "targetComb must be 0-11" } };
+      if (nonce == null) return { status: 400, body: { error: "nonce is required (the one you hashed)" } };
+      const id = enqueue({ kind: "revealMove", agentWallet, gameId, targetComb, nonce: String(nonce) });
+      return { status: 202, body: { accepted: true, actionId: id } };
+    },
+
+    /** Open the prediction. Only a revealed correct call scores a skill point. */
+    revealPrediction({ agentWallet, gameId, predictedComb, nonce }) {
+      if (!isPubkey(agentWallet ?? "")) return { status: 400, body: { error: "agentWallet must be a base58 pubkey" } };
+      if (predictedComb == null || predictedComb < 0 || predictedComb > 11) return { status: 400, body: { error: "predictedComb must be 0-11" } };
+      if (nonce == null) return { status: 400, body: { error: "nonce is required (the one you hashed)" } };
+      const id = enqueue({ kind: "revealPrediction", agentWallet, gameId, predictedComb, nonce: String(nonce) });
+      return { status: 202, body: { accepted: true, actionId: id } };
+    },
+
+    /** Sweep whatever this agent is owed into its own wallet. Free, always. */
+    settle({ agentWallet, gameId }) {
+      if (!isPubkey(agentWallet ?? "")) return { status: 400, body: { error: "agentWallet must be a base58 pubkey" } };
+      const id = enqueue({ kind: "settle", agentWallet, gameId });
       return { status: 202, body: { accepted: true, actionId: id } };
     },
   };

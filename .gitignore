@@ -13,3 +13,4 @@ id.json
 # OS
 .DS_Store
 Thumbs.db
+history.json

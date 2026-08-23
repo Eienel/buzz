@@ -10,24 +10,28 @@
 
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { Connection, PublicKey } from "@solana/web3.js";
 import { makeArena, PRICE, challenge } from "./arena-api.mjs";
+import { verifyPayment } from "./x402.mjs";
+import { loadRelayer, startDrain } from "./relayer.mjs";
 
 const ROOT = fileURLToPath(new URL("../app/", import.meta.url));
 const PORT = Number(process.env.PORT ?? 3000);
 const RPC = process.env.RPC ?? "https://api.devnet.solana.com";
 const PROGRAM_ID = process.env.PROGRAM_ID ?? "4TNbztSMd3zxG57M25y8WhpcKrQMJQVYEK6EnnkQy1Hw";
 const POLL_MS = Number(process.env.POLL_MS ?? 2000);
+const USDC_DEFAULT = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"; // devnet USDC
 
 const connection = new Connection(RPC, "confirmed");
 const PID = new PublicKey(PROGRAM_ID);
 
 // ---- account decoding (manual borsh; avoids pulling anchor into the server) --
-const DISC = { game: [27,90,166,125,74,100,121,18], circle: [27,59,8,117,62,199,222,252] };
+const DISC = { game: [27,90,166,125,74,100,121,18], circle: [27,59,8,117,62,199,222,252],
+               player: [205,222,112,7,165,155,206,218] };
 const u8=(d,o)=>d[o], u16=(d,o)=>d[o]|d[o+1]<<8, u32=(d,o)=>(d[o]|d[o+1]<<8|d[o+2]<<16|d[o+3]<<24)>>>0;
 const u64=(d,o)=>{let n=0n;for(let i=7;i>=0;i--)n=n<<8n|BigInt(d[o+i]);return n};
 const eq=(a,b)=>a.length===b.length&&a.every((v,i)=>v===b[i]);
@@ -42,8 +46,18 @@ function decodeGame(d){let o=8;const g={};
   g.phaseEndsAt=Number(u64(d,o));o+=8;g.instanceSeconds=u32(d,o);o+=4;
   g.doomed=u8(d,o);o+=1;g.circleCount=u8(d,o);o+=1;g.aliveCircles=u8(d,o);o+=1;
   g.players=u32(d,o);o+=4;g.leftover=String(u64(d,o));o+=8;g.fees=String(u64(d,o));o+=8;
-  g.deposited=String(u64(d,o));o+=8;g.points=String(u64(d,o));o+=8;o+=16;
-  o+=1;o+=1;g.insane=!!u8(d,o);return g;}
+  g.deposited=String(u64(d,o));o+=8;g.points=String(u64(d,o));o+=8;
+  o+=16;                                   // entropy_slot + insane_entropy_slot
+  // Games predating the multi-mint upgrade are still on chain and 41 bytes
+  // shorter. Decoding by length rather than assuming the current layout keeps
+  // the whole poller alive instead of throwing on the first old account.
+  if(d.length>=166){
+    g.createdAt=Number(u64(d,o));o+=8;
+    g.stakeMint=b58(d.slice(o,o+32));o+=32; // one mint per game; the pot never mixes
+    o+=1;o+=1;o+=1;                         // require_vrf, creator_cut_paid, insane_rolled
+    g.insane=!!u8(d,o);
+  }
+  return g;}
 
 function decodeCircle(d){let o=8;const c={};
   c.game=b58(d.slice(o,o+32));o+=32;c.id=u8(d,o);o+=1;
@@ -51,23 +65,93 @@ function decodeCircle(d){let o=8;const c={};
   c.members=u32(d,o);o+=4;c.stake=String(u64(d,o));o+=8;c.alive=!!u8(d,o);o+=1;
   c.refundBps=u16(d,o);return c;}
 
+function decodePlayer(d){let o=8;const p={};
+  p.game=b58(d.slice(o,o+32));o+=32;p.owner=b58(d.slice(o,o+32));o+=32;
+  // Same story as Game: players staked before the delegate field exist without
+  // one, and every field after would be read 32 bytes off if we assumed it.
+  if(d.length>=188){ p.delegate=b58(d.slice(o,o+32));o+=32; }
+  else { p.delegate=p.owner; }
+  p.stake=String(u64(d,o));o+=8;p.comb=u8(d,o);o+=1;
+  p.points=u32(d,o);o+=4;p.status=u8(d,o);return p;}
+
+// ---- history: what happened, kept past the reaper ---------------------------
+// Finished games get closed for rent, taking their accounts with them. A
+// spectator arriving after that would see an arena with no past, so the poller
+// snapshots each game the first time it reads as decided, and that snapshot is
+// the record from then on.
+const HISTORY_FILE = fileURLToPath(new URL("./history.json", import.meta.url));
+const HISTORY_MAX = Number(process.env.HISTORY_MAX ?? 200);
+let history = [];
+try { history = JSON.parse(readFileSync(HISTORY_FILE, "utf8")); } catch {}
+const recorded = new Set(history.map((h) => h.gameId));
+let historyDirty = false;
+
+function record(g, players){
+  if(recorded.has(g.gameId)) return;
+  const winning = (g.combs ?? []).find((c) => c.alive);
+  if(!winning) return;                       // decided means exactly one comb left
+  const mine = players.filter((p) => p.game === g.pubkey);
+  recorded.add(g.gameId);
+  history.unshift({
+    gameId: g.gameId,
+    endedAt: Date.now(),
+    winningComb: winning.id,
+    stakeMint: g.stakeMint,
+    creator: winning.creator,
+    arena: g.numCircles,
+    players: Math.max(g.players, mine.length),
+    pot: g.deposited,
+    // True when the rent reaper closed the player accounts before we saw the
+    // game decided. The winner is still right (it comes off the game itself);
+    // the per-agent columns are simply gone, and saying so beats printing zero.
+    partial: mine.length === 0,
+    // Skill is the interesting column: it says who read the board, not who
+    // happened to sit in the comb that lived.
+    survivors: mine.filter((p) => p.comb === winning.id).map((p) => p.owner),
+    topSkill: mine.filter((p) => p.points > 0)
+      .sort((a, b) => b.points - a.points).slice(0, 5)
+      .map((p) => ({ agent: p.owner, points: p.points })),
+  });
+  history = history.slice(0, HISTORY_MAX);
+  historyDirty = true;
+}
+
+/** Wins and skill points per agent, derived from the recorded games. */
+function leaderboard(){
+  const board = new Map();
+  const bump = (k, f) => { const e = board.get(k) ?? { agent: k, games: 0, wins: 0, points: 0 }; f(e); board.set(k, e); };
+  for(const h of history){
+    for(const w of h.survivors ?? []) bump(w, (e) => { e.games++; e.wins++; });
+    for(const t of h.topSkill ?? []) bump(t.agent, (e) => { e.points += t.points; });
+  }
+  return [...board.values()].sort((a, b) => b.wins - a.wins || b.points - a.points).slice(0, 20);
+}
+
 // ---- poller: one RPC scan, cached for every viewer ---------------------------
 let snapshot = { ok:false, updatedAt:0, games:[], error:"starting" };
 
 async function poll(){
   try{
     const accs = await connection.getProgramAccounts(PID, { encoding:"base64" });
-    const games=[], circles=[];
+    const games=[], circles=[], players=[];
     for(const {pubkey, account} of accs){
       const d = account.data;
       const disc = Array.from(d.slice(0,8));
       if(eq(disc,DISC.game)) games.push({ pubkey: pubkey.toBase58(), ...decodeGame(d) });
       else if(eq(disc,DISC.circle)) circles.push(decodeCircle(d));
+      else if(eq(disc,DISC.player)) players.push(decodePlayer(d));
     }
     for(const g of games) g.combs = circles.filter(c=>c.game===g.pubkey).sort((a,b)=>a.id-b.id);
     games.sort((a,b)=>Number(BigInt(b.gameId)-BigInt(a.gameId)));
+    for(const g of games) if(g.status>=2) record(g, players);
+    if(historyDirty){
+      historyDirty = false;
+      try{ writeFileSync(HISTORY_FILE, JSON.stringify(history)); }
+      catch(e){ console.log("history write failed:", e.message); }
+    }
     snapshot = { ok:true, updatedAt:Date.now(), programId:PROGRAM_ID, cluster:RPC.includes("devnet")?"devnet":"mainnet",
-                 live:games.filter(g=>g.status===0||g.status===1), finished:games.filter(g=>g.status>=2).length };
+                 live:games.filter(g=>g.status===0||g.status===1), finished:history.length,
+                 recent: history.slice(0, 10) };
   }catch(e){
     snapshot = { ...snapshot, ok:false, error:String(e.message).slice(0,120), updatedAt:Date.now() };
   }
@@ -91,6 +175,18 @@ const enqueue = (a) => {
 };
 const arena = makeArena({ snapshot: () => snapshot, enqueue });
 
+// The relayer signs for agents that cannot. Without RELAYER_KEYPAIR the arena
+// still reads and quotes, but paid actions would queue forever, so we refuse
+// them up front instead of taking money for work we cannot do.
+const relayer = loadRelayer(connection);
+startDrain(relayer, actions);
+if (relayer) relayer.ready().then((r) =>
+  console.log(`relayer ${r.pubkey} ${r.allowed ? "allowed" : "NOT ON THE ALLOW-LIST: run agents/allow-relayer.mjs"}`));
+else console.log("no RELAYER_KEYPAIR: agent actions disabled");
+
+const ROUTES = new Set(["join", "move", "predict", "revealMove", "revealPrediction", "settle"]);
+const routeName = (seg) => seg.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+
 const readBody = (req) => new Promise((resolve) => {
   let b = ""; req.on("data", (c) => { b += c; if (b.length > 1e5) req.destroy(); });
   req.on("end", () => { try { resolve(b ? JSON.parse(b) : {}); } catch { resolve({}); } });
@@ -113,8 +209,13 @@ createServer(async (req,res)=>{
     const a = actions.get(p.split("/").pop());
     return a ? send(res,200,a) : send(res,404,{error:"unknown action"});
   }
-  if(p === "/api/agent/join" || p === "/api/agent/move" || p === "/api/agent/predict"){
-    const kind = p.split("/").pop();
+  if(p === "/api/agent/relayer"){
+    return relayer ? send(res, 200, await relayer.ready())
+                   : send(res, 503, { error: "no relayer configured" });
+  }
+  if(p.startsWith("/api/agent/") && ROUTES.has(routeName(p.split("/").pop()))){
+    const kind = routeName(p.split("/").pop());
+    if(!relayer) return send(res, 503, { error: "arena is read-only: no relayer configured" });
     const price = PRICE[kind] ?? 0;
     const paid = req.headers["x-payment"];        // x402 payment proof
     if(price > 0 && !paid){
@@ -122,12 +223,21 @@ createServer(async (req,res)=>{
         `BUZZ arena: ${kind}`);
     }
     const body = await readBody(req);
-    // NOTE: payment proof is accepted but not yet settled against chain. Until
-    // that verification lands this surface must stay on devnet only.
-    const r = arena[kind]({ ...body, paymentProof: paid ?? null });
+    if(price > 0){
+      const v = await verifyPayment(connection, paid, { usd: price,
+        payTo: process.env.ARENA_PAY_TO, usdcMint: process.env.USDC_MINT ?? USDC_DEFAULT,
+        agentWallet: body.agentWallet });
+      if(!v.ok) return send(res, 402, { error: v.error });
+      body.paymentSignature = v.signature;
+    }
+    const r = arena[kind](body);
+    if(r.status === 202) r.body.paymentSignature = body.paymentSignature ?? null;
     return send(res, r.status, r.body);
   }
 
+  if(p === "/api/history"){
+    return send(res, 200, { games: history.slice(0, 50), leaderboard: leaderboard() });
+  }
   if(p === "/api/state"){
     res.writeHead(200,{ "content-type":"application/json",
       "cache-control":"no-store", "access-control-allow-origin":"*" });
