@@ -11,15 +11,17 @@
 //   node agents/allow-relayer.mjs <relayer-pubkey>
 //
 //   RELAYER_KEYPAIR=path/to/key.json RPC=... node server/index.mjs
+// or, with no filesystem to lean on, RELAYER_KEYPAIR set to the key JSON itself.
 //
 // The stake a paid join buys is fixed (RELAY_STAKE_UNITS) rather than derived
 // from the USD paid: an on-chain token price would put an oracle in the path
 // of every join, and a stale one would misprice seats silently.
 
 import anchorPkg from "@coral-xyz/anchor";
-import { PublicKey, SystemProgram, Keypair } from "@solana/web3.js";
+import { PublicKey, SystemProgram } from "@solana/web3.js";
 import { getOrCreateAssociatedTokenAccount, getAssociatedTokenAddressSync } from "@solana/spl-token";
 import { readFileSync } from "node:fs";
+import { loadKeypair } from "./keypair.mjs";
 
 const { AnchorProvider, Program, Wallet, BN } = anchorPkg;
 
@@ -27,9 +29,8 @@ const STAKE_UNITS = Number(process.env.RELAY_STAKE_UNITS ?? 10);
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), "[relay]", ...a);
 
 export function loadRelayer(connection) {
-  const path = process.env.RELAYER_KEYPAIR;
-  if (!path) return null;
-  const kp = Keypair.fromSecretKey(new Uint8Array(JSON.parse(readFileSync(path, "utf8"))));
+  const kp = loadKeypair(process.env.RELAYER_KEYPAIR);
+  if (!kp) return null;
   const provider = new AnchorProvider(connection, new Wallet(kp), { commitment: "confirmed" });
   const idl = JSON.parse(readFileSync(new URL("../agents/idl/last_circle.json", import.meta.url), "utf8"));
   const program = new Program(idl, provider);

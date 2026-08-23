@@ -18,6 +18,7 @@ import { Connection, PublicKey } from "@solana/web3.js";
 import { makeArena, PRICE, challenge } from "./arena-api.mjs";
 import { verifyPayment } from "./x402.mjs";
 import { loadRelayer, startDrain } from "./relayer.mjs";
+import { DATA_DIR } from "./keypair.mjs";
 
 const ROOT = fileURLToPath(new URL("../app/", import.meta.url));
 const PORT = Number(process.env.PORT ?? 3000);
@@ -80,7 +81,7 @@ function decodePlayer(d){let o=8;const p={};
 // spectator arriving after that would see an arena with no past, so the poller
 // snapshots each game the first time it reads as decided, and that snapshot is
 // the record from then on.
-const HISTORY_FILE = fileURLToPath(new URL("./history.json", import.meta.url));
+const HISTORY_FILE = join(DATA_DIR, "history.json");   // DATA_DIR is a volume in production
 const HISTORY_MAX = Number(process.env.HISTORY_MAX ?? 200);
 let history = [];
 try { history = JSON.parse(readFileSync(HISTORY_FILE, "utf8")); } catch {}

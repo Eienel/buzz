@@ -15,6 +15,7 @@ import { getOrCreateAssociatedTokenAccount, mintTo, getAssociatedTokenAddressSyn
 import jsSha3 from "js-sha3";
 const { keccak_256 } = jsSha3;
 import { readFileSync } from "node:fs";
+import { loadKeypair } from "../server/keypair.mjs";
 
 const { AnchorProvider, Program, Wallet, BN } = anchorPkg;
 
@@ -44,7 +45,7 @@ const GAME_INTERVAL = Number(process.env.GAME_INTERVAL_SECONDS ?? 180) * 1000; /
 // A multiplier breaks at small stakes, the headroom cost is constant.
 const FUND = 8_000_000; // SOL for fees and PDA rent only; the stake is a token
 
-const payer = Keypair.fromSecretKey(new Uint8Array(JSON.parse(readFileSync(process.env.PAYER ?? `${process.env.HOME}/.config/solana/id.json`, "utf8"))));
+const payer = loadKeypair(process.env.PAYER, `${process.env.HOME}/.config/solana/id.json`);
 const connection = new Connection(RPC, "confirmed");
 const provider = new AnchorProvider(connection, new Wallet(payer), { commitment: "confirmed" });
 const idl = JSON.parse(readFileSync(new URL("./idl/last_circle.json", import.meta.url), "utf8"));

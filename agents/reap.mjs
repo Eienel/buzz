@@ -10,10 +10,11 @@
 import anchorPkg from "@coral-xyz/anchor";
 import { Connection, Keypair, PublicKey, SystemProgram, LAMPORTS_PER_SOL } from "@solana/web3.js";
 import { readFileSync } from "node:fs";
+import { loadKeypair } from "../server/keypair.mjs";
 
 const { AnchorProvider, Program, Wallet } = anchorPkg;
 const RPC = process.env.RPC ?? "https://api.devnet.solana.com";
-const payer = Keypair.fromSecretKey(new Uint8Array(JSON.parse(readFileSync(process.env.PAYER ?? `${process.env.HOME}/.config/solana/id.json`, "utf8"))));
+const payer = loadKeypair(process.env.PAYER, `${process.env.HOME}/.config/solana/id.json`);
 const connection = new Connection(RPC, "confirmed");
 const provider = new AnchorProvider(connection, new Wallet(payer), { commitment: "confirmed" });
 const idl = JSON.parse(readFileSync(new URL("./idl/last_circle.json", import.meta.url), "utf8"));
