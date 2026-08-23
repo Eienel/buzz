@@ -246,7 +246,10 @@ describe("buzz: a full game in tokens", () => {
     await program.methods.advanceToReveal().accountsPartial({ game: g, cranker: authority.publicKey }).rpc();
     await sleep(10000);
     await program.methods.selectDeath()
-      .accountsPartial({ game: g, recentSlotHashes: SYSVAR_SLOT_HASHES_PUBKEY, cranker: authority.publicKey })
+      // randomness: null takes the committed-slot-hash fallback, which is legal
+      // here because these games are created with require_vrf false.
+      .accountsPartial({ game: g, recentSlotHashes: SYSVAR_SLOT_HASHES_PUBKEY,
+                         randomness: null, cranker: authority.publicKey })
       .remainingAccounts([0, 1].map((i) => ({ pubkey: combPda(g, i), isSigner: false, isWritable: false })))
       .rpc();
     const doomed = (await program.account.game.fetch(g)).doomedCircle;
