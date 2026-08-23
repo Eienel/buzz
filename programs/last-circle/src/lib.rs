@@ -110,14 +110,15 @@ pub mod last_circle {
         let g = &mut ctx.accounts.game;
         require!(g.status == GameStatus::Lobby, GameError::WrongPhase);
         require!(circle_id < g.num_circles, GameError::BadParam);
+        let delegate = resolve_delegate(&ctx.accounts.owner, &ctx.accounts.payer, &ctx.accounts.relayer)?;
 
         let net = take_deposit(
             &ctx.accounts.config,
             stake,
-            &ctx.accounts.owner_token,
+            &ctx.accounts.payer_token,
             &ctx.accounts.vault,
             &ctx.accounts.stake_mint,
-            &ctx.accounts.owner,
+            &ctx.accounts.payer,
             &ctx.accounts.token_program,
         )?;
         record_deposit(g, stake, net)?;
@@ -132,7 +133,7 @@ pub mod last_circle {
         circle.refund_bps = 0;
         circle.bump = ctx.bumps.circle;
 
-        init_player(&mut ctx.accounts.player, g.key(), ctx.accounts.owner.key(), net, circle_id, ctx.bumps.player);
+        init_player(&mut ctx.accounts.player, g.key(), ctx.accounts.owner.key(), delegate, net, circle_id, ctx.bumps.player);
 
         g.circle_count += 1;
         g.alive_circles += 1;
@@ -155,14 +156,15 @@ pub mod last_circle {
                 && Clock::get()?.unix_timestamp < g.phase_ends_at);
         require!(open, GameError::JoinWindowClosed);
         require!(ctx.accounts.circle.alive, GameError::CircleDead);
+        let delegate = resolve_delegate(&ctx.accounts.owner, &ctx.accounts.payer, &ctx.accounts.relayer)?;
 
         let net = take_deposit(
             &ctx.accounts.config,
             stake,
-            &ctx.accounts.owner_token,
+            &ctx.accounts.payer_token,
             &ctx.accounts.vault,
             &ctx.accounts.stake_mint,
-            &ctx.accounts.owner,
+            &ctx.accounts.payer,
             &ctx.accounts.token_program,
         )?;
         record_deposit(g, stake, net)?;
@@ -171,7 +173,7 @@ pub mod last_circle {
         circle.member_count += 1;
         circle.total_stake = circle.total_stake.checked_add(net).ok_or(GameError::MathOverflow)?;
 
-        init_player(&mut ctx.accounts.player, g.key(), ctx.accounts.owner.key(), net, circle.circle_id, ctx.bumps.player);
+        init_player(&mut ctx.accounts.player, g.key(), ctx.accounts.owner.key(), delegate, net, circle.circle_id, ctx.bumps.player);
 
         g.player_count += 1;
         Ok(())
@@ -515,6 +517,10 @@ pub mod last_circle {
         let c = &ctx.accounts.winning_circle;
         require!(c.alive, GameError::BadParam);
         require!(c.creator == ctx.accounts.owner.key(), GameError::Unauthorized);
+        if ctx.accounts.actor.key() != ctx.accounts.owner.key() {
+            let p = ctx.accounts.player.as_ref().ok_or(GameError::Unauthorized)?;
+            require!(p.delegate == ctx.accounts.actor.key(), GameError::Unauthorized);
+        }
 
         let (creator_cut, _, _) = pot_split(leftover, total_points);
         ctx.accounts.game.creator_cut_paid = true;
@@ -730,6 +736,31 @@ pub mod last_circle {
         a.mint = ctx.accounts.mint.key();
         a.enabled = enabled;
         a.bump = ctx.bumps.allowed;
+        Ok(())
+    }
+
+    /// Authority-only: mark a key allowed to stake on another's behalf. This is
+    /// how the x402 relayer gets to open combs for ClawPump agents, which cannot
+    /// sign Solana instructions themselves. The relayer funds the stake and pays
+    /// the rent; the agent is still the on-chain `Player.owner`, so points and
+    /// every payout stay with the agent.
+    pub fn allow_relayer(ctx: Context<AllowRelayer>, enabled: bool) -> Result<()> {
+        require!(
+            ctx.accounts.config.authority == ctx.accounts.authority.key(),
+            GameError::Unauthorized
+        );
+        let a = &mut ctx.accounts.allowed;
+        a.relayer = ctx.accounts.relayer.key();
+        a.enabled = enabled;
+        a.bump = ctx.bumps.allowed;
+        Ok(())
+    }
+
+    /// Owner-only: hand acting rights to another key, or take them back by
+    /// passing the owner's own key. Independent of the relayer allow-list, an
+    /// agent that later gets its own signer can always cut the relayer out.
+    pub fn set_delegate(ctx: Context<SetDelegate>, delegate: Pubkey) -> Result<()> {
+        ctx.accounts.player.delegate = delegate;
         Ok(())
     }
 
@@ -1053,9 +1084,34 @@ fn transfer_from_vault<'info>(
     )
 }
 
-fn init_player(player: &mut Account<Player>, game: Pubkey, owner: Pubkey, stake: u64, circle_id: u8, bump: u8) {
+/// Who may act for a freshly created player. Self-play (payer == owner) needs
+/// nothing extra; staking for someone else requires an enabled relayer record,
+/// and that relayer becomes the delegate.
+fn resolve_delegate(
+    owner: &UncheckedAccount,
+    payer: &Signer,
+    relayer: &Option<Account<AllowedRelayer>>,
+) -> Result<Pubkey> {
+    if payer.key() == owner.key() {
+        return Ok(owner.key());
+    }
+    let r = relayer.as_ref().ok_or(GameError::Unauthorized)?;
+    require!(r.enabled && r.relayer == payer.key(), GameError::Unauthorized);
+    Ok(payer.key())
+}
+
+fn init_player(
+    player: &mut Account<Player>,
+    game: Pubkey,
+    owner: Pubkey,
+    delegate: Pubkey,
+    stake: u64,
+    circle_id: u8,
+    bump: u8,
+) {
     player.game = game;
     player.owner = owner;
+    player.delegate = delegate;
     player.stake = stake;
     player.current_circle = circle_id;
     player.points = 0;
@@ -1098,6 +1154,19 @@ pub struct AllowedMint {
     pub bump: u8,
 }
 impl AllowedMint {
+    pub const SPACE: usize = 8 + 32 + 1 + 1;
+}
+
+/// Presence of this account (with enabled = true) is what lets one key open or
+/// join a comb *on behalf of* another. Without it, staking for someone else is
+/// refused outright, so nobody can squat an agent's player PDA.
+#[account]
+pub struct AllowedRelayer {
+    pub relayer: Pubkey,
+    pub enabled: bool,
+    pub bump: u8,
+}
+impl AllowedRelayer {
     pub const SPACE: usize = 8 + 32 + 1 + 1;
 }
 
@@ -1190,6 +1259,11 @@ impl Circle {
 pub struct Player {
     pub game: Pubkey,
     pub owner: Pubkey,
+    /// May act for this player without holding its key: commit, reveal, predict
+    /// and settle. Equals `owner` for self-play; for relayed play it is the
+    /// allowed relayer that opened the comb. It can never redirect funds, every
+    /// payout account is bound to `owner`.
+    pub delegate: Pubkey,
     pub stake: u64,
     pub current_circle: u8,
     pub points: u32,
@@ -1207,7 +1281,7 @@ pub struct Player {
     pub bump: u8,
 }
 impl Player {
-    pub const SPACE: usize = 8 + 32 + 32 + 8 + 1 + 4 + 1 + 32 + 2 + 32 + 2 + 1 + 1;
+    pub const SPACE: usize = 8 + 32 + 32 + 32 + 8 + 1 + 4 + 1 + 32 + 2 + 32 + 2 + 1 + 1;
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq)]
@@ -1308,7 +1382,7 @@ pub struct CreateCircle<'info> {
     pub vault: InterfaceAccount<'info, TokenAccount>,
     #[account(
         init,
-        payer = owner,
+        payer = payer,
         space = Circle::SPACE,
         seeds = [b"circle", game.key().as_ref(), &[circle_id]],
         bump
@@ -1316,20 +1390,28 @@ pub struct CreateCircle<'info> {
     pub circle: Account<'info, Circle>,
     #[account(
         init,
-        payer = owner,
+        payer = payer,
         space = Player::SPACE,
         seeds = [b"player", game.key().as_ref(), owner.key().as_ref()],
         bump
     )]
     pub player: Account<'info, Player>,
+    /// CHECK: becomes `Player.owner`; the seat this stake buys.
+    pub owner: UncheckedAccount<'info>,
+    /// Funds the stake and the rent. Equals `owner` for self-play; for relayed
+    /// play it is a relayer from the allow-list below.
     #[account(mut)]
-    pub owner: Signer<'info>,
+    pub payer: Signer<'info>,
+    /// Required only when `payer != owner`: proof the payer is an allowed
+    /// relayer, so nobody can squat another key's player PDA.
+    #[account(seeds = [b"relayer", payer.key().as_ref()], bump = relayer.bump)]
+    pub relayer: Option<Account<'info, AllowedRelayer>>,
     /// stake mint for this game
     #[account(address = game.stake_mint @ GameError::BadParam)]
     pub stake_mint: InterfaceAccount<'info, Mint>,
-    /// the caller's token account for that mint
-    #[account(mut, token::mint = stake_mint, token::authority = owner)]
-    pub owner_token: InterfaceAccount<'info, TokenAccount>,
+    /// the payer's token account for that mint; the stake comes out of here
+    #[account(mut, token::mint = stake_mint, token::authority = payer)]
+    pub payer_token: InterfaceAccount<'info, TokenAccount>,
     pub token_program: Interface<'info, TokenInterface>,
     pub system_program: Program<'info, System>,
 }
@@ -1350,20 +1432,28 @@ pub struct JoinCircle<'info> {
     pub circle: Account<'info, Circle>,
     #[account(
         init,
-        payer = owner,
+        payer = payer,
         space = Player::SPACE,
         seeds = [b"player", game.key().as_ref(), owner.key().as_ref()],
         bump
     )]
     pub player: Account<'info, Player>,
+    /// CHECK: becomes `Player.owner`; the seat this stake buys.
+    pub owner: UncheckedAccount<'info>,
+    /// Funds the stake and the rent. Equals `owner` for self-play; for relayed
+    /// play it is a relayer from the allow-list below.
     #[account(mut)]
-    pub owner: Signer<'info>,
+    pub payer: Signer<'info>,
+    /// Required only when `payer != owner`: proof the payer is an allowed
+    /// relayer, so nobody can squat another key's player PDA.
+    #[account(seeds = [b"relayer", payer.key().as_ref()], bump = relayer.bump)]
+    pub relayer: Option<Account<'info, AllowedRelayer>>,
     /// stake mint for this game
     #[account(address = game.stake_mint @ GameError::BadParam)]
     pub stake_mint: InterfaceAccount<'info, Mint>,
-    /// the caller's token account for that mint
-    #[account(mut, token::mint = stake_mint, token::authority = owner)]
-    pub owner_token: InterfaceAccount<'info, TokenAccount>,
+    /// the payer's token account for that mint; the stake comes out of here
+    #[account(mut, token::mint = stake_mint, token::authority = payer)]
+    pub payer_token: InterfaceAccount<'info, TokenAccount>,
     pub token_program: Interface<'info, TokenInterface>,
     pub system_program: Program<'info, System>,
 }
@@ -1389,10 +1479,15 @@ pub struct CommitMove<'info> {
         seeds = [b"player", game.key().as_ref(), owner.key().as_ref()],
         bump = player.bump,
         has_one = owner @ GameError::Unauthorized,
+        constraint = actor.key() == player.owner || actor.key() == player.delegate @ GameError::Unauthorized,
         constraint = player.game == game.key() @ GameError::BadParam
     )]
     pub player: Account<'info, Player>,
-    pub owner: Signer<'info>,
+    /// CHECK: seed and payout binding only; `actor` carries the authority.
+    pub owner: UncheckedAccount<'info>,
+    /// The key actually signing: the owner itself, or its delegate.
+    #[account(mut)]
+    pub actor: Signer<'info>,
 }
 
 /// Permissionless phase crank (anyone may call once the window has elapsed).
@@ -1412,10 +1507,15 @@ pub struct RevealPrediction<'info> {
         seeds = [b"player", game.key().as_ref(), owner.key().as_ref()],
         bump = player.bump,
         has_one = owner @ GameError::Unauthorized,
+        constraint = actor.key() == player.owner || actor.key() == player.delegate @ GameError::Unauthorized,
         constraint = player.game == game.key() @ GameError::BadParam
     )]
     pub player: Account<'info, Player>,
-    pub owner: Signer<'info>,
+    /// CHECK: seed and payout binding only; `actor` carries the authority.
+    pub owner: UncheckedAccount<'info>,
+    /// The key actually signing: the owner itself, or its delegate.
+    #[account(mut)]
+    pub actor: Signer<'info>,
 }
 
 #[derive(Accounts)]
@@ -1428,6 +1528,7 @@ pub struct RevealMove<'info> {
         seeds = [b"player", game.key().as_ref(), owner.key().as_ref()],
         bump = player.bump,
         has_one = owner @ GameError::Unauthorized,
+        constraint = actor.key() == player.owner || actor.key() == player.delegate @ GameError::Unauthorized,
         constraint = player.game == game.key() @ GameError::BadParam
     )]
     pub player: Account<'info, Player>,
@@ -1443,7 +1544,11 @@ pub struct RevealMove<'info> {
         bump = to_circle.bump
     )]
     pub to_circle: Account<'info, Circle>,
-    pub owner: Signer<'info>,
+    /// CHECK: seed and payout binding only; `actor` carries the authority.
+    pub owner: UncheckedAccount<'info>,
+    /// The key actually signing: the owner itself, or its delegate.
+    #[account(mut)]
+    pub actor: Signer<'info>,
 }
 
 /// All alive circles are passed via `remaining_accounts` (read-only).
@@ -1489,11 +1594,15 @@ pub struct CashOut<'info> {
         seeds = [b"player", game.key().as_ref(), owner.key().as_ref()],
         bump = player.bump,
         has_one = owner @ GameError::Unauthorized,
+        constraint = actor.key() == player.owner || actor.key() == player.delegate @ GameError::Unauthorized,
         constraint = player.game == game.key() @ GameError::BadParam
     )]
     pub player: Account<'info, Player>,
+    /// CHECK: seed and payout binding only; `actor` carries the authority.
+    pub owner: UncheckedAccount<'info>,
+    /// The key actually signing: the owner itself, or its delegate.
     #[account(mut)]
-    pub owner: Signer<'info>,
+    pub actor: Signer<'info>,
     /// stake mint for this game
     #[account(address = game.stake_mint @ GameError::BadParam)]
     pub stake_mint: InterfaceAccount<'info, Mint>,
@@ -1515,8 +1624,21 @@ pub struct ClaimCreatorCut<'info> {
         bump = winning_circle.bump
     )]
     pub winning_circle: Account<'info, Circle>,
+    /// The creator's own player record, the source of the delegate right. Only
+    /// needed when a delegate is claiming; omitting it keeps the owner path
+    /// working even after the player account has been closed for rent.
+    #[account(
+        seeds = [b"player", game.key().as_ref(), owner.key().as_ref()],
+        bump = player.bump,
+        has_one = owner @ GameError::Unauthorized,
+        constraint = player.game == game.key() @ GameError::BadParam
+    )]
+    pub player: Option<Account<'info, Player>>,
+    /// CHECK: seed and payout binding only; `actor` carries the authority.
+    pub owner: UncheckedAccount<'info>,
+    /// The key actually signing: the owner itself, or its delegate.
     #[account(mut)]
-    pub owner: Signer<'info>,
+    pub actor: Signer<'info>,
     /// stake mint for this game
     #[account(address = game.stake_mint @ GameError::BadParam)]
     pub stake_mint: InterfaceAccount<'info, Mint>,
@@ -1543,11 +1665,15 @@ pub struct ClaimWinnings<'info> {
         seeds = [b"player", game.key().as_ref(), owner.key().as_ref()],
         bump = player.bump,
         has_one = owner @ GameError::Unauthorized,
+        constraint = actor.key() == player.owner || actor.key() == player.delegate @ GameError::Unauthorized,
         constraint = player.game == game.key() @ GameError::BadParam
     )]
     pub player: Account<'info, Player>,
+    /// CHECK: seed and payout binding only; `actor` carries the authority.
+    pub owner: UncheckedAccount<'info>,
+    /// The key actually signing: the owner itself, or its delegate.
     #[account(mut)]
-    pub owner: Signer<'info>,
+    pub actor: Signer<'info>,
     /// stake mint for this game
     #[account(address = game.stake_mint @ GameError::BadParam)]
     pub stake_mint: InterfaceAccount<'info, Mint>,
@@ -1569,11 +1695,15 @@ pub struct ClaimSkill<'info> {
         seeds = [b"player", game.key().as_ref(), owner.key().as_ref()],
         bump = player.bump,
         has_one = owner @ GameError::Unauthorized,
+        constraint = actor.key() == player.owner || actor.key() == player.delegate @ GameError::Unauthorized,
         constraint = player.game == game.key() @ GameError::BadParam
     )]
     pub player: Account<'info, Player>,
+    /// CHECK: seed and payout binding only; `actor` carries the authority.
+    pub owner: UncheckedAccount<'info>,
+    /// The key actually signing: the owner itself, or its delegate.
     #[account(mut)]
-    pub owner: Signer<'info>,
+    pub actor: Signer<'info>,
     /// stake mint for this game
     #[account(address = game.stake_mint @ GameError::BadParam)]
     pub stake_mint: InterfaceAccount<'info, Mint>,
@@ -1669,6 +1799,7 @@ pub struct Land<'info> {
         seeds = [b"player", game.key().as_ref(), owner.key().as_ref()],
         bump = player.bump,
         has_one = owner @ GameError::Unauthorized,
+        constraint = actor.key() == player.owner || actor.key() == player.delegate @ GameError::Unauthorized,
         constraint = player.game == game.key() @ GameError::BadParam
     )]
     pub player: Account<'info, Player>,
@@ -1684,7 +1815,11 @@ pub struct Land<'info> {
         bump = to_circle.bump
     )]
     pub to_circle: Account<'info, Circle>,
-    pub owner: Signer<'info>,
+    /// CHECK: seed and payout binding only; `actor` carries the authority.
+    pub owner: UncheckedAccount<'info>,
+    /// The key actually signing: the owner itself, or its delegate.
+    #[account(mut)]
+    pub actor: Signer<'info>,
 }
 
 #[derive(Accounts)]
@@ -1703,6 +1838,40 @@ pub struct AllowMint<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
     pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct AllowRelayer<'info> {
+    #[account(seeds = [b"config"], bump = config.bump)]
+    pub config: Account<'info, GameConfig>,
+    /// CHECK: recorded as the allowed relayer; only its address is used.
+    pub relayer: UncheckedAccount<'info>,
+    #[account(
+        init_if_needed,
+        payer = authority,
+        space = AllowedRelayer::SPACE,
+        seeds = [b"relayer", relayer.key().as_ref()],
+        bump
+    )]
+    pub allowed: Account<'info, AllowedRelayer>,
+    #[account(mut)]
+    pub authority: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct SetDelegate<'info> {
+    #[account(seeds = [b"game", game.game_id.to_le_bytes().as_ref()], bump = game.bump)]
+    pub game: Account<'info, Game>,
+    #[account(
+        mut,
+        seeds = [b"player", game.key().as_ref(), owner.key().as_ref()],
+        bump = player.bump,
+        has_one = owner @ GameError::Unauthorized,
+        constraint = player.game == game.key() @ GameError::BadParam
+    )]
+    pub player: Account<'info, Player>,
+    pub owner: Signer<'info>,
 }
 
 #[derive(Accounts)]
@@ -1725,11 +1894,15 @@ pub struct ClaimAbortRefund<'info> {
         seeds = [b"player", game.key().as_ref(), owner.key().as_ref()],
         bump = player.bump,
         has_one = owner @ GameError::Unauthorized,
+        constraint = actor.key() == player.owner || actor.key() == player.delegate @ GameError::Unauthorized,
         constraint = player.game == game.key() @ GameError::BadParam
     )]
     pub player: Account<'info, Player>,
+    /// CHECK: seed and payout binding only; `actor` carries the authority.
+    pub owner: UncheckedAccount<'info>,
+    /// The key actually signing: the owner itself, or its delegate.
     #[account(mut)]
-    pub owner: Signer<'info>,
+    pub actor: Signer<'info>,
     /// stake mint for this game
     #[account(address = game.stake_mint @ GameError::BadParam)]
     pub stake_mint: InterfaceAccount<'info, Mint>,

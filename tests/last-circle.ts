@@ -116,8 +116,8 @@ describe("buzz: token staking", () => {
     const stake = new anchor.BN(10 * UNIT);
     await program.methods.createCircle(0, stake).accountsPartial({
       config: configPda, game: g, vault: vaultPda(g), circle: combPda(g, 0),
-      player: playerPda(g, p1.kp.publicKey), owner: p1.kp.publicKey,
-      stakeMint: mint, ownerToken: p1.ata, tokenProgram, systemProgram: SystemProgram.programId,
+      player: playerPda(g, p1.kp.publicKey), owner: p1.kp.publicKey, payer: p1.kp.publicKey, relayer: null,
+      stakeMint: mint, payerToken: p1.ata, tokenProgram, systemProgram: SystemProgram.programId,
     }).signers([p1.kp]).rpc();
 
     const vault = await getAccount(conn, vaultPda(g), undefined, tokenProgram);
@@ -145,8 +145,8 @@ describe("buzz: token staking", () => {
     }).rpc();
     await program.methods.createCircle(0, new anchor.BN(5 * UNIT)).accountsPartial({
       config: configPda, game: g, vault: vaultPda(g), circle: combPda(g, 0),
-      player: playerPda(g, p1.kp.publicKey), owner: p1.kp.publicKey,
-      stakeMint: mint, ownerToken: p1.ata, tokenProgram, systemProgram: SystemProgram.programId,
+      player: playerPda(g, p1.kp.publicKey), owner: p1.kp.publicKey, payer: p1.kp.publicKey, relayer: null,
+      stakeMint: mint, payerToken: p1.ata, tokenProgram, systemProgram: SystemProgram.programId,
     }).signers([p1.kp]).rpc();
 
     const vault = await getAccount(conn, vaultPda(g), undefined, tokenProgram);
@@ -171,8 +171,8 @@ describe("buzz: token staking", () => {
       try {
         await program.methods.createCircle(i, MAX_STAKE).accountsPartial({
           config: configPda, game: g, vault: vaultPda(g), circle: combPda(g, i),
-          player: playerPda(g, p.kp.publicKey), owner: p.kp.publicKey,
-          stakeMint: mint, ownerToken: p.ata, tokenProgram, systemProgram: SystemProgram.programId,
+          player: playerPda(g, p.kp.publicKey), owner: p.kp.publicKey, payer: p.kp.publicKey, relayer: null,
+          stakeMint: mint, payerToken: p.ata, tokenProgram, systemProgram: SystemProgram.programId,
         }).signers([p.kp]).rpc();
       } catch (e) { capped = String(e).includes("GameCapReached"); }
     }
@@ -196,8 +196,8 @@ describe("buzz: token staking", () => {
       }).rpc();
       await program.methods.createCircle(0, new anchor.BN(7 * UNIT)).accountsPartial({
         config: configPda, game: g, vault: vaultPda(g), circle: combPda(g, 0),
-        player: playerPda(g, p.kp.publicKey), owner: p.kp.publicKey,
-        stakeMint: asset.mint, ownerToken: p.ata,
+        player: playerPda(g, p.kp.publicKey), owner: p.kp.publicKey, payer: p.kp.publicKey, relayer: null,
+        stakeMint: asset.mint, payerToken: p.ata,
         tokenProgram: asset.tokenProgram, systemProgram: SystemProgram.programId,
       }).signers([p.kp]).rpc();
       return g;
@@ -234,8 +234,8 @@ describe("buzz: a full game in tokens", () => {
     for (let i = 0; i < 2; i++) {
       await program.methods.createCircle(i, stake).accountsPartial({
         config: configPda, game: g, vault: vaultPda(g), circle: combPda(g, i),
-        player: playerPda(g, players[i].kp.publicKey), owner: players[i].kp.publicKey,
-        stakeMint: mint, ownerToken: players[i].ata, tokenProgram,
+        player: playerPda(g, players[i].kp.publicKey), owner: players[i].kp.publicKey, payer: players[i].kp.publicKey, relayer: null,
+        stakeMint: mint, payerToken: players[i].ata, tokenProgram,
         systemProgram: SystemProgram.programId,
       }).signers([players[i].kp]).rpc();
     }
@@ -264,7 +264,7 @@ describe("buzz: a full game in tokens", () => {
     const before = Number((await getAccount(conn, loser.ata, undefined, tokenProgram)).amount);
     await program.methods.cashOut().accountsPartial({
       game: g, vault: vaultPda(g), circle: combPda(g, doomed),
-      player: playerPda(g, loser.kp.publicKey), owner: loser.kp.publicKey,
+      player: playerPda(g, loser.kp.publicKey), owner: loser.kp.publicKey, actor: loser.kp.publicKey,
       stakeMint: mint, ownerToken: loser.ata, tokenProgram, systemProgram: SystemProgram.programId,
     }).signers([loser.kp]).rpc();
     const after = Number((await getAccount(conn, loser.ata, undefined, tokenProgram)).amount);
@@ -274,11 +274,11 @@ describe("buzz: a full game in tokens", () => {
     const w = players[winner];
     await program.methods.claimWinnings().accountsPartial({
       game: g, vault: vaultPda(g), winningCircle: combPda(g, winner),
-      player: playerPda(g, w.kp.publicKey), owner: w.kp.publicKey,
+      player: playerPda(g, w.kp.publicKey), owner: w.kp.publicKey, actor: w.kp.publicKey,
       stakeMint: mint, ownerToken: w.ata, tokenProgram, systemProgram: SystemProgram.programId,
     }).signers([w.kp]).rpc();
     await program.methods.claimCreatorCut().accountsPartial({
-      game: g, vault: vaultPda(g), winningCircle: combPda(g, winner), owner: w.kp.publicKey,
+      game: g, vault: vaultPda(g), winningCircle: combPda(g, winner), owner: w.kp.publicKey, player: null, actor: w.kp.publicKey,
       stakeMint: mint, ownerToken: w.ata, tokenProgram, systemProgram: SystemProgram.programId,
     }).signers([w.kp]).rpc();
     await program.methods.collectFees().accountsPartial({

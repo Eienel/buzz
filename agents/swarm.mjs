@@ -154,8 +154,8 @@ async function playGame(gameNo) {
   for (const a of agents) {
     const stake = new BN(String(BigInt(STAKE_UNITS) * BigInt(10) ** BigInt(asset.decimals)));
     const acc = { config: configPda, game: gamePda, vault: vaultPda, circle: circlePda(a.circle),
-      player: playerPda(a.kp.publicKey), owner: a.kp.publicKey,
-      stakeMint: asset.mint, ownerToken: a.ata, tokenProgram: asset.tokenProgram,
+      player: playerPda(a.kp.publicKey), owner: a.kp.publicKey, payer: a.kp.publicKey, relayer: null,
+      stakeMint: asset.mint, payerToken: a.ata, tokenProgram: asset.tokenProgram,
       systemProgram: SystemProgram.programId };
     if (!taken.has(a.circle)) {
       await program.methods.createCircle(a.circle, stake).accountsPartial(acc).signers([a.kp]).rpc();
@@ -197,9 +197,9 @@ async function playGame(gameNo) {
       try {
         if (plan.move !== null && fog[plan.move] !== undefined)
           await program.methods.commitMove([...moveHash(plan.move, mvNonce, a.kp.publicKey, gamePda, instance)])
-            .accountsPartial({ game: gamePda, player: playerPda(a.kp.publicKey), owner: a.kp.publicKey }).signers([a.kp]).rpc();
+            .accountsPartial({ game: gamePda, player: playerPda(a.kp.publicKey), owner: a.kp.publicKey, actor: a.kp.publicKey }).signers([a.kp]).rpc();
         await program.methods.commitPrediction([...moveHash(plan.predict, pdNonce, a.kp.publicKey, gamePda, instance)])
-          .accountsPartial({ game: gamePda, player: playerPda(a.kp.publicKey), owner: a.kp.publicKey }).signers([a.kp]).rpc();
+          .accountsPartial({ game: gamePda, player: playerPda(a.kp.publicKey), owner: a.kp.publicKey, actor: a.kp.publicKey }).signers([a.kp]).rpc();
       } catch (e) { log(`  ${a.name} commit failed: ${e.message?.slice(0, 80)}`); }
     }
     await waitPhaseEnd(gamePda);
@@ -210,7 +210,7 @@ async function playGame(gameNo) {
       if (p.move === null || fog[p.move] === undefined) continue;
       try {
         await program.methods.revealMove(p.move, p.mvNonce)
-          .accountsPartial({ game: gamePda, player: playerPda(a.kp.publicKey), fromCircle: circlePda(a.circle), toCircle: circlePda(p.move), owner: a.kp.publicKey })
+          .accountsPartial({ game: gamePda, player: playerPda(a.kp.publicKey), fromCircle: circlePda(a.circle), toCircle: circlePda(p.move), owner: a.kp.publicKey, actor: a.kp.publicKey })
           .signers([a.kp]).rpc();
         a.circle = p.move;
       } catch (e) { log(`  ${a.name} reveal failed: ${e.message?.slice(0, 80)}`); }
@@ -239,7 +239,7 @@ async function playGame(gameNo) {
     for (const [a, p] of plans) {
       try {
         await program.methods.revealPrediction(p.predict, p.pdNonce)
-          .accountsPartial({ game: gamePda, player: playerPda(a.kp.publicKey), owner: a.kp.publicKey }).signers([a.kp]).rpc();
+          .accountsPartial({ game: gamePda, player: playerPda(a.kp.publicKey), owner: a.kp.publicKey, actor: a.kp.publicKey }).signers([a.kp]).rpc();
         if (p.predict === doomed) log(`  ${a.name} called it (+1 skill point)`);
       } catch {}
     }
@@ -253,7 +253,7 @@ async function playGame(gameNo) {
         const target = alive.sort((x, y) => fog[y] - fog[x])[0];
         try {
           await program.methods.land(target)
-            .accountsPartial({ game: gamePda, player: playerPda(a.kp.publicKey), fromCircle: circlePda(doomed), toCircle: circlePda(target), owner: a.kp.publicKey })
+            .accountsPartial({ game: gamePda, player: playerPda(a.kp.publicKey), fromCircle: circlePda(doomed), toCircle: circlePda(target), owner: a.kp.publicKey, actor: a.kp.publicKey })
             .signers([a.kp]).rpc();
           a.circle = target;
           log(`  ${a.name} landed in circle ${target} (haircut applied)`);
@@ -291,7 +291,7 @@ async function playGame(gameNo) {
     if (winnerCreator) {
       try {
         await program.methods.claimCreatorCut()
-          .accountsPartial({ game: gamePda, vault: vaultPda, winningCircle: circlePda(winner), owner: winnerCreator.kp.publicKey,
+          .accountsPartial({ game: gamePda, vault: vaultPda, winningCircle: circlePda(winner), owner: winnerCreator.kp.publicKey, player: null, actor: winnerCreator.kp.publicKey,
             stakeMint: asset.mint, ownerToken: winnerCreator.ata, tokenProgram: asset.tokenProgram, systemProgram: SystemProgram.programId })
           .signers([winnerCreator.kp]).rpc();
       } catch (e) { log(`  creator-cut claim failed: ${e.message?.slice(0, 80)}`); }
@@ -301,13 +301,13 @@ async function playGame(gameNo) {
       const st = await program.account.player.fetch(P);
       try {
         if (st.status.active && st.currentCircle === winner)
-          await program.methods.claimWinnings().accountsPartial({ game: gamePda, vault: vaultPda, winningCircle: circlePda(winner), player: P, owner: a.kp.publicKey,
+          await program.methods.claimWinnings().accountsPartial({ game: gamePda, vault: vaultPda, winningCircle: circlePda(winner), player: P, owner: a.kp.publicKey, actor: a.kp.publicKey,
             stakeMint: asset.mint, ownerToken: a.ata, tokenProgram: asset.tokenProgram, systemProgram: SystemProgram.programId }).signers([a.kp]).rpc();
         else if (st.status.active)
-          await program.methods.cashOut().accountsPartial({ game: gamePda, vault: vaultPda, circle: circlePda(st.currentCircle), player: P, owner: a.kp.publicKey,
+          await program.methods.cashOut().accountsPartial({ game: gamePda, vault: vaultPda, circle: circlePda(st.currentCircle), player: P, owner: a.kp.publicKey, actor: a.kp.publicKey,
             stakeMint: asset.mint, ownerToken: a.ata, tokenProgram: asset.tokenProgram, systemProgram: SystemProgram.programId }).signers([a.kp]).rpc();
         if (st.points > 0)
-          await program.methods.claimSkill().accountsPartial({ game: gamePda, vault: vaultPda, player: P, owner: a.kp.publicKey,
+          await program.methods.claimSkill().accountsPartial({ game: gamePda, vault: vaultPda, player: P, owner: a.kp.publicKey, actor: a.kp.publicKey,
             stakeMint: asset.mint, ownerToken: a.ata, tokenProgram: asset.tokenProgram, systemProgram: SystemProgram.programId }).signers([a.kp]).rpc();
         log(`  ${a.name}: settled (${st.points} skill pts)`);
       } catch (e) { log(`  ${a.name} settle failed: ${e.message?.slice(0, 80)}`); }
