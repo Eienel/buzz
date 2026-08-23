@@ -78,7 +78,12 @@
   .m svg{width:15px;height:15px;flex:none;stroke:var(--honey);fill:none;
     stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;opacity:.85}
 
-  .bar{height:2px;background:#241a0d}
+  .bar{height:3px;background:#241a0d}
+  .bar i{transition:width .9s linear}
+  time.cd{font-family:var(--mono);font-size:12.5px;color:var(--gold);
+    font-variant-numeric:tabular-nums}
+  time.cd.soon{color:var(--dead);animation:pulse 1s infinite}
+  @keyframes pulse{50%{opacity:.45}}
   .bar i{display:block;height:100%;background:linear-gradient(90deg,var(--honey2),var(--gold));
     transition:width .9s linear}
 
@@ -304,6 +309,8 @@ const IC={
   vol:'<svg viewBox="0 0 24 24"><path d="M3 12h3l2.5-7 3.5 14 3-9 2 4h4"/></svg>'
 };
 const band=m=>m===0?["empty","thin"]:m<=1?["thin","thin"]:m<=3?["healthy","alive"]:["crowded","crowded"];
+// 300s instances make a raw second count hard to read at a glance.
+const mmss=(s)=>s<=0?"cranking":s<60?s+"s":`${Math.floor(s/60)}:${String(s%60).padStart(2,"0")}`;
 
 // ---- view mode -------------------------------------------------------------
 // Two ways to read the same board. Cards are easier to scan for numbers; the
@@ -411,17 +418,35 @@ function render(s){
         ${g.insane?'<span class="pill insane"><i></i>insane</span>':""}
         <span class="gid">game #${g.gameId}</span>
         <span class="m">${IC.inst}instance <b>${g.instance}</b></span>
-        <span class="m">${IC.clock}<b>${PHASE[g.phase]}</b> ${g.status===1?`(${left>0?left+"s":"cranking"})`:""}</span>
+        <span class="m">${IC.clock}<b>${PHASE[g.phase]}</b>
+          ${g.status===1?`<time class="cd" data-ends="${g.phaseEndsAt}" data-span="${span}">${mmss(left)}</time>`:""}</span>
         <span class="m">${IC.ppl}players <b>${g.players}</b></span>
         <span class="m">${IC.pot}pot <b>${sol(g.leftover)}</b></span>
         <span class="m">${IC.vol}volume <b>${sol(g.deposited)}</b></span>
       </div>
-      <div class="bar"><i style="width:${pct}%"></i></div>
+      <div class="bar"><i style="width:${pct}%" data-ends="${g.phaseEndsAt}" data-span="${span}"></i></div>
       ${VIEW==="hive"?combs:`<div class="combs">${combs}</div>`}
       <div class="side"><h4>Feed</h4><ul class="feed">${feed}</ul></div>
     </section>`;
   }).join("");
 }
+// The poll is every 2.5s, so a countdown rendered only on poll jumps. These
+// elements carry their own deadline, so the clock can run locally between
+// fetches without asking the chain anything.
+function tickClocks(){
+  const now=Math.floor(Date.now()/1e3);
+  for(const el of document.querySelectorAll("time.cd")){
+    const left=Math.max(0,+el.dataset.ends-now);
+    el.textContent=mmss(left);
+    el.classList.toggle("soon", left>0 && left<=10);
+  }
+  for(const el of document.querySelectorAll(".bar i[data-ends]")){
+    const left=Math.max(0,+el.dataset.ends-now), span=Math.max(1,+el.dataset.span);
+    el.style.width=Math.max(0,Math.min(100,left/span*100))+"%";
+  }
+}
+setInterval(tickClocks,1000);
+
 async function tick(){ try{ render(await fetchState()); }catch{ render({ok:false,live:[]}); } }
 document.getElementById("view").addEventListener("click",e=>{
   const v=e.target.dataset&&e.target.dataset.v; if(v) setView(v);
