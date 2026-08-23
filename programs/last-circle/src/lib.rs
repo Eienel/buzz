@@ -1332,8 +1332,14 @@ fn credit_stats(stats: &mut Account<AgentStats>, treasury: &mut Account<Treasury
         stats.owner = owner;
         stats.bump = bump;
     }
-    stats.games = stats.games.saturating_add(1);
-    if won { stats.wins = stats.wins.saturating_add(1); }
+    // `games` counts games, not claims. A player who both survives and scores
+    // calls claim_winnings AND claim_skill, so incrementing on every credit
+    // recorded two games for one. Only claim_winnings, which happens at most
+    // once per player per game, advances it.
+    if won {
+        stats.games = stats.games.saturating_add(1);
+        stats.wins = stats.wins.saturating_add(1);
+    }
     stats.total_points = stats.total_points.saturating_add(points as u64);
     if treasury.season == 0 { return Ok(()); }              // unranked mint
     if stats.season != treasury.season {
