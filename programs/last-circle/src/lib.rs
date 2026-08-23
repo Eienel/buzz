@@ -96,6 +96,7 @@ pub mod last_circle {
         g.insane_entropy_slot = 0;
         g.created_at = Clock::get()?.unix_timestamp;
         g.stake_mint = ctx.accounts.stake_mint.key();
+        g.fee_bps = ctx.accounts.config.fee_bps;
         g.require_vrf = require_vrf;
         g.creator_cut_paid = false;
         g.insane_rolled = false;
@@ -114,6 +115,7 @@ pub mod last_circle {
 
         let net = take_deposit(
             &ctx.accounts.config,
+            g.fee_bps,
             stake,
             &ctx.accounts.payer_token,
             &ctx.accounts.vault,
@@ -160,6 +162,7 @@ pub mod last_circle {
 
         let net = take_deposit(
             &ctx.accounts.config,
+            g.fee_bps,
             stake,
             &ctx.accounts.payer_token,
             &ctx.accounts.vault,
@@ -726,6 +729,34 @@ pub mod last_circle {
         Ok(())
     }
 
+    /// Authority-only: retune the config. Only games created afterwards see the
+    /// new numbers, because every game snapshots its own rake at creation, so
+    /// this can never change the terms of a game already being played.
+    pub fn update_config(
+        ctx: Context<UpdateConfig>,
+        fee_bps: u16,
+        house_cut_bps: u16,
+        min_stake: u64,
+        max_stake: u64,
+        instance_seconds: u32,
+        insane_prob_bps: u16,
+    ) -> Result<()> {
+        let c = &mut ctx.accounts.config;
+        require!(c.authority == ctx.accounts.authority.key(), GameError::Unauthorized);
+        require!(fee_bps <= 2_000, GameError::BadParam);        // same 20% cap as init
+        require!(house_cut_bps <= 10_000, GameError::BadParam);
+        require!(min_stake > 0 && max_stake >= min_stake, GameError::BadParam);
+        require!(instance_seconds >= 10, GameError::BadParam);
+        require!(insane_prob_bps <= 10_000, GameError::BadParam);
+        c.fee_bps = fee_bps;
+        c.house_cut_bps = house_cut_bps;
+        c.min_stake = min_stake;
+        c.max_stake = max_stake;
+        c.instance_seconds = instance_seconds;
+        c.insane_prob_bps = insane_prob_bps;
+        Ok(())
+    }
+
     /// Authority-only: mark an SPL mint playable. Combs can only ever be opened
     /// in a mint that has one of these, so $BUZZ and $ANSEM are enabled
     /// deliberately and anything else is refused.
@@ -788,7 +819,7 @@ pub mod last_circle {
         };
         require!(status == GameStatus::Aborted, GameError::WrongPhase);
 
-        let fee_bps = ctx.accounts.config.fee_bps as u128;
+        let fee_bps = ctx.accounts.game.fee_bps as u128;
         let gross = {
             let p = &mut ctx.accounts.player;
             require!(p.status == PlayerStatus::Active, GameError::PlayerInactive);
@@ -902,6 +933,7 @@ pub mod last_circle {
 /// stake (deposit minus rake) that actually goes into play.
 fn take_deposit<'info>(
     config: &Account<'info, GameConfig>,
+    fee_bps: u16,
     stake: u64,
     from: &InterfaceAccount<'info, TokenAccount>,
     vault: &InterfaceAccount<'info, TokenAccount>,
@@ -925,7 +957,7 @@ fn take_deposit<'info>(
         mint.decimals,
     )?;
 
-    let rake = ((stake as u128 * config.fee_bps as u128) / BPS) as u64;
+    let rake = ((stake as u128 * fee_bps as u128) / BPS) as u64;
     let net = stake.checked_sub(rake).ok_or(GameError::MathOverflow)?;
     Ok(net)
 }
@@ -1218,6 +1250,11 @@ pub struct Game {
     /// the SPL mint every stake in this game is denominated in. One mint per
     /// game: a pot is never mixed. Wrapped SOL is just another allowed mint.
     pub stake_mint: Pubkey,
+    /// the rake this game was opened under, snapshotted from config so changing
+    /// the fee never alters a game already in flight. The abort path rebuilds
+    /// each gross deposit from this, so reading the live config instead would
+    /// refund players at a rate they never paid.
+    pub fee_bps: u16,
     /// when set, the death and jackpot rolls REFUSE to fall back to the slot
     /// hash and require a settled Switchboard value. Real-value games set this.
     pub require_vrf: bool,
@@ -1231,7 +1268,7 @@ pub struct Game {
 }
 impl Game {
     pub const SPACE: usize =
-        8 + 8 + 32 + 1 + 1 + 2 + 2 + 1 + 8 + 4 + 1 + 1 + 1 + 4 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 32 + 1 + 1 + 1 + 1 + 1 + 1;
+        8 + 8 + 32 + 1 + 1 + 2 + 2 + 1 + 8 + 4 + 1 + 1 + 1 + 4 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 32 + 2 + 1 + 1 + 1 + 1 + 1 + 1;
     /// Commit window = 60% of the instance, reveal = 40% (min 1s each).
     pub fn commit_window(&self) -> i64 {
         ((self.instance_seconds as i64) * 3 / 5).max(1)
@@ -1822,6 +1859,13 @@ pub struct Land<'info> {
     /// The key actually signing: the owner itself, or its delegate.
     #[account(mut)]
     pub actor: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct UpdateConfig<'info> {
+    #[account(mut, seeds = [b"config"], bump = config.bump)]
+    pub config: Account<'info, GameConfig>,
+    pub authority: Signer<'info>,
 }
 
 #[derive(Accounts)]
