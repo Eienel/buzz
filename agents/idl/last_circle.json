@@ -2674,6 +2674,11 @@
       "accounts": [
         {
           "name": "treasury",
+          "docs": [
+            "deserialize the OLD layout as the new one during validation and fail",
+            "before the handler runs. Seeds still pin the address; the discriminator",
+            "and authority are checked in the handler."
+          ],
           "writable": true,
           "pda": {
             "seeds": [
