@@ -383,9 +383,14 @@ function renderHistory(h){
       </div>
     </div></div>`;
 }
+// On a static host there is no /api/history, and an empty panel saying "no
+// game has finished yet" would be a lie rather than a blank. So the panel only
+// appears where the server that keeps the record is actually running.
 async function tickHistory(){
   try{ const r=await fetch("/api/history",{cache:"no-store"});
-       if(r.ok) renderHistory(await r.json()); }catch{}
+       if(r.ok) renderHistory(await r.json());
+       else document.getElementById("hist").innerHTML="";
+  }catch{ document.getElementById("hist").innerHTML=""; }
 }
 tickHistory(); setInterval(tickHistory,15000);
 
