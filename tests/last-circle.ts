@@ -33,6 +33,7 @@ const pda = (...seeds: (Buffer | Uint8Array)[]) =>
 const configPda = pda(Buffer.from("config"));
 const allowedPda = (mint: PublicKey) => pda(Buffer.from("allowed"), mint.toBuffer());
 const treasuryPda = (mint: PublicKey) => pda(Buffer.from("treasury"), mint.toBuffer());
+const statsPda = (owner: PublicKey) => pda(Buffer.from("agent"), owner.toBuffer());
 const tvaultPda = (mint: PublicKey) => pda(Buffer.from("tvault"), mint.toBuffer());
 const gamePda = (gid: anchor.BN) => pda(Buffer.from("game"), gid.toArrayLike(Buffer, "le", 8));
 const vaultPda = (g: PublicKey) => pda(Buffer.from("vault"), g.toBuffer());
@@ -310,6 +311,7 @@ describe("buzz: a full game in tokens", () => {
     await program.methods.claimWinnings().accountsPartial({
       game: g, vault: vaultPda(g), winningCircle: combPda(g, winner),
       player: playerPda(g, w.kp.publicKey), owner: w.kp.publicKey, actor: w.kp.publicKey,
+      stats: statsPda(w.kp.publicKey), treasury: treasuryPda(mint),
       stakeMint: mint, ownerToken: w.ata, tokenProgram, systemProgram: SystemProgram.programId,
     }).signers([w.kp]).rpc();
     await program.methods.claimCreatorCut().accountsPartial({
@@ -324,7 +326,64 @@ describe("buzz: a full game in tokens", () => {
     }).rpc();
 
     const t = await program.account.treasury.fetch(treasuryPda(mint));
-    assert.ok(t.houseBalance.toNumber() > 0, "house revenue booked for this mint");
     assert.ok(t.jackpotPool.toNumber() > 0, "jackpot funded for this mint");
+
+    // house cut divides 25 leaderboard / 50 SOL / 25 burn, and nothing rounds away
+    const lb = t.lbAccruing.toNumber(), sol = t.toSolBalance.toNumber(), burn = t.burnBalance.toNumber();
+    const house = lb + sol + burn;
+    assert.ok(house > 0, "house cut booked into the buckets");
+    assert.equal(lb, Math.floor(house * 0.25), "leaderboard takes 25%");
+    assert.equal(burn, Math.floor(house * 0.25), "burn takes 25%");
+    assert.equal(sol, house - lb - burn, "the rest goes to SOL, remainder included");
+
+    // the winner's cross-game record exists and counted the win
+    const st = await program.account.agentStats.fetch(statsPda(w.kp.publicKey));
+    assert.equal(st.wins, 1, "a win is recorded once");
+    assert.ok(st.owner.equals(w.kp.publicKey), "stats belong to the wallet");
+  });
+
+  it("pays a season pro rata by skill points, and only to whoever earned them", async () => {
+    await ensureConfig();
+    const { mint, tokenProgram } = await newStakeAsset();
+    const T = treasuryPda(mint);
+    let t = await program.account.treasury.fetch(T);
+    assert.equal(t.season, 0, "a fresh mint is unranked until a season opens");
+
+    await program.methods.openSeason().accountsPartial({
+      treasury: T, stakeMint: mint, authority: authority.publicKey,
+    }).rpc();
+    t = await program.account.treasury.fetch(T);
+    assert.equal(t.season, 1, "season one is open");
+
+    // A second open must fail: it would silently reset the ranking.
+    let reopened = false;
+    try {
+      await program.methods.openSeason().accountsPartial({
+        treasury: T, stakeMint: mint, authority: authority.publicKey,
+      }).rpc();
+      reopened = true;
+    } catch { /* expected */ }
+    assert.ok(!reopened, "a season cannot be opened twice");
+
+    // Closing with nothing earned still advances, and pays nobody.
+    await program.methods.closeSeason().accountsPartial({
+      treasury: T, stakeMint: mint, authority: authority.publicKey,
+    }).rpc();
+    t = await program.account.treasury.fetch(T);
+    assert.equal(t.season, 2, "closing opens the next season");
+    assert.equal(t.ptsClaimable.toNumber(), 0, "no points, no claimants");
+
+    // Someone who never earned a point cannot invent a claim.
+    const stranger = await newPlayer(mint, tokenProgram);
+    let paid = false;
+    try {
+      await program.methods.claimSeasonReward().accountsPartial({
+        treasury: T, treasuryVault: tvaultPda(mint), stats: statsPda(stranger.kp.publicKey),
+        owner: stranger.kp.publicKey, actor: stranger.kp.publicKey,
+        stakeMint: mint, ownerToken: stranger.ata, tokenProgram,
+      }).signers([stranger.kp]).rpc();
+      paid = true;
+    } catch { /* expected */ }
+    assert.ok(!paid, "no points, no reward");
   });
 });

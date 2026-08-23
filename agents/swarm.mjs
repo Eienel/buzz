@@ -58,6 +58,8 @@ const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
 const pda = (...seeds) => PublicKey.findProgramAddressSync(seeds, PID)[0];
 const configPda = pda(Buffer.from("config"));
 const gamePdaOf = (gid) => pda(Buffer.from("game"), gid.toArrayLike(Buffer, "le", 8));
+// Cross-game record per wallet; created on a wallet's first claim.
+const statsPda = (owner) => pda(Buffer.from("agent"), owner.toBuffer());
 
 // ----- strategies: given fog (prev-instance member counts of alive circles),
 // return { move: circleId|null, predict: circleId } -------------------------
@@ -316,12 +318,14 @@ async function playGame(gameNo) {
       try {
         if (st.status.active && st.currentCircle === winner)
           await program.methods.claimWinnings().accountsPartial({ game: gamePda, vault: vaultPda, winningCircle: circlePda(winner), player: P, owner: a.kp.publicKey, actor: a.kp.publicKey,
+            stats: statsPda(a.kp.publicKey), treasury: treasuryPda,
             stakeMint: asset.mint, ownerToken: a.ata, tokenProgram: asset.tokenProgram, systemProgram: SystemProgram.programId }).signers([a.kp]).rpc();
         else if (st.status.active)
           await program.methods.cashOut().accountsPartial({ game: gamePda, vault: vaultPda, circle: circlePda(st.currentCircle), player: P, owner: a.kp.publicKey, actor: a.kp.publicKey,
             stakeMint: asset.mint, ownerToken: a.ata, tokenProgram: asset.tokenProgram, systemProgram: SystemProgram.programId }).signers([a.kp]).rpc();
         if (st.points > 0)
           await program.methods.claimSkill().accountsPartial({ game: gamePda, vault: vaultPda, player: P, owner: a.kp.publicKey, actor: a.kp.publicKey,
+            stats: statsPda(a.kp.publicKey), treasury: treasuryPda,
             stakeMint: asset.mint, ownerToken: a.ata, tokenProgram: asset.tokenProgram, systemProgram: SystemProgram.programId }).signers([a.kp]).rpc();
         log(`  ${a.name}: settled (${st.points} skill pts)`);
       } catch (e) { log(`  ${a.name} settle failed: ${e.message?.slice(0, 80)}`); }

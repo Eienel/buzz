@@ -41,6 +41,10 @@ const MIN_CIRCLES: u8 = 4;
 /// statement about how fast a real game should run. The integration suite plays
 /// at this tempo so CI stays quick.
 const MIN_INSTANCE_SECONDS: u32 = 10;
+/// How the house cut divides. Leaderboard rewards, a burn, and the rest
+/// converted to SOL to fund the arena.
+const LEADERBOARD_BPS: u64 = 2_500;
+const BURN_BPS: u64 = 2_500;
 const MAX_INSTANCE_SECONDS: u32 = 3_600;
 /// Hard ceiling on what a single game may ever take in. Each game escrows into
 /// its own vault PDA, so this bounds the blast radius of any bug we have not
@@ -590,6 +594,11 @@ pub mod last_circle {
             p.stake = 0;
             pay
         };
+        // A win is recorded here; points stay claim_skill's job, so an agent
+        // that both wins and scores is credited once for each and not twice
+        // for either.
+        credit_stats(&mut ctx.accounts.stats, &mut ctx.accounts.treasury,
+                     ctx.accounts.owner.key(), ctx.bumps.stats, 0, true)?;
         transfer_from_vault(
             &ctx.accounts.vault,
             &ctx.accounts.owner_token,
@@ -619,6 +628,9 @@ pub mod last_circle {
             p.skill_claimed = true;
             s
         };
+        let pts = ctx.accounts.player.points;
+        credit_stats(&mut ctx.accounts.stats, &mut ctx.accounts.treasury,
+                     ctx.accounts.owner.key(), ctx.bumps.stats, pts, false)?;
         transfer_from_vault(
             &ctx.accounts.vault,
             &ctx.accounts.owner_token,
@@ -640,6 +652,13 @@ pub mod last_circle {
         t.jackpot_pool = 0;
         t.vault_bump = ctx.bumps.treasury_vault;
         t.bump = ctx.bumps.treasury;
+        t.to_sol_balance = 0;
+        t.burn_balance = 0;
+        t.lb_accruing = 0;
+        t.lb_claimable = 0;
+        t.pts_accruing = 0;
+        t.pts_claimable = 0;
+        t.season = 0;
         Ok(())
     }
 
@@ -665,9 +684,18 @@ pub mod last_circle {
             gvbump,
             fees,
         )?;
+        // House cut splits three ways. Fixed in code rather than config: this is
+        // a published policy, so moving it should require an upgrade anyone can
+        // see on chain, not a quiet admin transaction.
+        let to_lb = (house as u128 * LEADERBOARD_BPS as u128 / BPS) as u64;
+        let to_burn = (house as u128 * BURN_BPS as u128 / BPS) as u64;
+        let to_sol = house - to_lb - to_burn;      // remainder, so nothing rounds away
+
         let t = &mut ctx.accounts.treasury;
-        t.house_balance = t.house_balance.checked_add(house).ok_or(GameError::MathOverflow)?;
         t.jackpot_pool = t.jackpot_pool.checked_add(jackpot).ok_or(GameError::MathOverflow)?;
+        t.to_sol_balance = t.to_sol_balance.checked_add(to_sol).ok_or(GameError::MathOverflow)?;
+        t.burn_balance = t.burn_balance.checked_add(to_burn).ok_or(GameError::MathOverflow)?;
+        t.lb_accruing = t.lb_accruing.checked_add(to_lb).ok_or(GameError::MathOverflow)?;
         ctx.accounts.game.fees_collected = 0;
         Ok(())
     }
@@ -749,6 +777,117 @@ pub mod last_circle {
         }
         let _ = gvbump;
         Ok(())
+    }
+
+    /// Authority-only: draw down one of the policy buckets. Separate from the
+    /// leaderboard pool on purpose: that one is owed to players and is only
+    /// payable through claim_season_reward, so no authority call can reach it.
+    /// 0 = to_sol, 1 = burn.
+    pub fn withdraw_bucket(ctx: Context<WithdrawHouse>, bucket: u8, amount: u64) -> Result<()> {
+        let vbump = {
+            let t = &ctx.accounts.treasury;
+            require!(t.authority == ctx.accounts.authority.key(), GameError::Unauthorized);
+            let available = match bucket {
+                0 => t.to_sol_balance,
+                1 => t.burn_balance,
+                _ => return err!(GameError::BadParam),
+            };
+            require!(amount <= available, GameError::NothingToClaim);
+            t.vault_bump
+        };
+        {
+            let t = &mut ctx.accounts.treasury;
+            match bucket {
+                0 => t.to_sol_balance -= amount,
+                1 => t.burn_balance -= amount,
+                _ => unreachable!(),
+            }
+        }
+        transfer_from_treasury(
+            &ctx.accounts.treasury_vault,
+            &ctx.accounts.authority_token,
+            &ctx.accounts.stake_mint,
+            &ctx.accounts.token_program,
+            vbump,
+            amount,
+        )
+    }
+
+    /// Authority-only: grow an existing treasury to the current layout. The
+    /// treasury is permanent and holds real balances, so unlike a game account
+    /// it cannot be drained and rebuilt: the address is fixed by its seeds.
+    /// Reallocating in place preserves every existing balance and zeroes only
+    /// the appended region.
+    pub fn migrate_treasury(ctx: Context<MigrateTreasury>) -> Result<()> {
+        let t = &mut ctx.accounts.treasury;
+        require!(t.authority == ctx.accounts.authority.key(), GameError::Unauthorized);
+        // Anchor has already grown and zeroed the account by the time we run,
+        // so an already-migrated treasury would silently lose its season state.
+        require!(t.season == 0 && t.lb_accruing == 0 && t.lb_claimable == 0
+                 && t.to_sol_balance == 0 && t.burn_balance == 0
+                 && t.pts_accruing == 0 && t.pts_claimable == 0,
+                 GameError::AlreadyClaimed);
+        Ok(())
+    }
+
+    /// Authority-only: start ranking this mint. Only a mint with an open season
+    /// gives leaderboard credit, which is how ranked play stays BUZZ-only
+    /// without special-casing any mint in the code.
+    pub fn open_season(ctx: Context<SeasonAdmin>) -> Result<()> {
+        let t = &mut ctx.accounts.treasury;
+        require!(t.authority == ctx.accounts.authority.key(), GameError::Unauthorized);
+        require!(t.season == 0, GameError::AlreadyClaimed);
+        t.season = 1;
+        Ok(())
+    }
+
+    /// Authority-only: end the open season and start the next. Whatever nobody
+    /// claimed from the previous one rolls back into the new pool rather than
+    /// being stranded in the vault.
+    pub fn close_season(ctx: Context<SeasonAdmin>) -> Result<()> {
+        let t = &mut ctx.accounts.treasury;
+        require!(t.authority == ctx.accounts.authority.key(), GameError::Unauthorized);
+        require!(t.season > 0, GameError::WrongPhase);
+        let unclaimed = t.lb_claimable;
+        t.lb_claimable = t.lb_accruing.checked_add(unclaimed).ok_or(GameError::MathOverflow)?;
+        t.pts_claimable = t.pts_accruing;
+        t.lb_accruing = 0;
+        t.pts_accruing = 0;
+        t.season = t.season.checked_add(1).ok_or(GameError::MathOverflow)?;
+        Ok(())
+    }
+
+    /// Claim a share of the last closed season, pro rata by the skill points
+    /// earned in it. Pro rata rather than a top-N cliff: every correct call
+    /// earns, and there is no ranking to compute or publish.
+    pub fn claim_season_reward(ctx: Context<ClaimSeasonReward>) -> Result<()> {
+        let (season, pool, total, vbump) = {
+            let t = &ctx.accounts.treasury;
+            (t.season, t.lb_claimable, t.pts_claimable, t.vault_bump)
+        };
+        require!(season > 1, GameError::WrongPhase);        // nothing closed yet
+        require!(total > 0, GameError::NothingToClaim);
+
+        let share = {
+            let a = &mut ctx.accounts.stats;
+            // Points belong to exactly one season, and only the closed one pays.
+            require!(a.season == season - 1, GameError::NothingToClaim);
+            require!(a.season_points > 0, GameError::NothingToClaim);
+            let share = (pool as u128 * a.season_points as u128 / total as u128) as u64;
+            a.season_points = 0;
+            a.season = season;                              // cannot claim twice
+            share
+        };
+        let t = &mut ctx.accounts.treasury;
+        t.lb_claimable = t.lb_claimable.saturating_sub(share);
+        transfer_from_treasury(
+            &ctx.accounts.treasury_vault,
+            &ctx.accounts.owner_token,
+            &ctx.accounts.stake_mint,
+            &ctx.accounts.token_program,
+            vbump,
+            share,
+        )
     }
 
     /// Authority-only: retune the config. Only games created afterwards see the
@@ -1156,6 +1295,29 @@ fn resolve_delegate(
     Ok(payer.key())
 }
 
+/// Credit a wallet's cross-game record. A mint with no open season gives no
+/// credit, which is how ranked play stays BUZZ-only without naming BUZZ in the
+/// code. Points always belong to exactly one season, so a stale balance is
+/// reset rather than carried forward into a pool it did not help fill.
+fn credit_stats(stats: &mut Account<AgentStats>, treasury: &mut Account<Treasury>,
+                owner: Pubkey, bump: u8, points: u32, won: bool) -> Result<()> {
+    if stats.owner == Pubkey::default() {
+        stats.owner = owner;
+        stats.bump = bump;
+    }
+    stats.games = stats.games.saturating_add(1);
+    if won { stats.wins = stats.wins.saturating_add(1); }
+    stats.total_points = stats.total_points.saturating_add(points as u64);
+    if treasury.season == 0 { return Ok(()); }              // unranked mint
+    if stats.season != treasury.season {
+        stats.season = treasury.season;
+        stats.season_points = 0;
+    }
+    stats.season_points = stats.season_points.saturating_add(points as u64);
+    treasury.pts_accruing = treasury.pts_accruing.saturating_add(points as u64);
+    Ok(())
+}
+
 fn init_player(
     player: &mut Account<Player>,
     game: Pubkey,
@@ -1229,13 +1391,57 @@ impl AllowedRelayer {
 #[account]
 pub struct Treasury {
     pub authority: Pubkey,
+    /// Retired. Every collect_fees now books the house cut straight into the
+    /// three buckets below. Kept at its original offset so existing treasuries
+    /// can be reallocated in place rather than rebuilt, and still withdrawable
+    /// through withdraw_house for whatever it holds.
     pub house_balance: u64,
     pub jackpot_pool: u64,
     pub vault_bump: u8,
     pub bump: u8,
+    // --- appended by the leaderboard upgrade; zeroed by migrate_treasury ---
+    /// 50% of the house cut. Converted to SOL off chain: no DEX lives in this
+    /// program, and putting one next to player funds would be a poor trade.
+    pub to_sol_balance: u64,
+    /// 25% of the house cut, withdrawn to buy and burn BUZZ off chain.
+    pub burn_balance: u64,
+    /// 25% of the house cut, accruing to the season currently open.
+    pub lb_accruing: u64,
+    /// The pool the last closed season pays out of.
+    pub lb_claimable: u64,
+    /// Skill points earned across all games in the open season.
+    pub pts_accruing: u64,
+    /// Skill points that `lb_claimable` is divided between.
+    pub pts_claimable: u64,
+    /// 0 means this mint is not ranked and earns no leaderboard credit. Ranked
+    /// play is BUZZ only for now; opening a season on another mint is one call,
+    /// because every mint already has its own treasury.
+    pub season: u16,
 }
 impl Treasury {
-    pub const SPACE: usize = 8 + 32 + 8 + 8 + 1 + 1;
+    /// The pre-leaderboard layout. Treasuries created before the upgrade are
+    /// this size and must be migrated before they can be used again.
+    pub const LEGACY_SPACE: usize = 8 + 32 + 8 + 8 + 1 + 1;
+    pub const SPACE: usize = Self::LEGACY_SPACE + 8 + 8 + 8 + 8 + 8 + 8 + 2;
+}
+
+/// Per-wallet, cross-game record. Skill points are the leaderboard's metric on
+/// purpose: they are a flat +1 per correct call regardless of stake, so the
+/// board measures reading the board rather than the size of the wallet reading
+/// it. PnL is displayed off chain and deliberately never paid on.
+#[account]
+pub struct AgentStats {
+    pub owner: Pubkey,
+    /// Season that `season_points` belongs to; a stale one resets on credit.
+    pub season: u16,
+    pub season_points: u64,
+    pub total_points: u64,
+    pub games: u32,
+    pub wins: u32,
+    pub bump: u8,
+}
+impl AgentStats {
+    pub const SPACE: usize = 8 + 32 + 2 + 8 + 8 + 4 + 4 + 1;
 }
 
 #[account]
@@ -1712,6 +1918,16 @@ pub struct ClaimCreatorCut<'info> {
 
 #[derive(Accounts)]
 pub struct ClaimWinnings<'info> {
+    #[account(
+        init_if_needed,
+        payer = actor,
+        space = AgentStats::SPACE,
+        seeds = [b"agent", owner.key().as_ref()],
+        bump
+    )]
+    pub stats: Account<'info, AgentStats>,
+    #[account(mut, seeds = [b"treasury", game.stake_mint.as_ref()], bump = treasury.bump)]
+    pub treasury: Account<'info, Treasury>,
     #[account(seeds = [b"game", game.game_id.to_le_bytes().as_ref()], bump = game.bump)]
     pub game: Account<'info, Game>,
     #[account(mut, seeds = [b"vault", game.key().as_ref()], bump = game.vault_bump)]
@@ -1747,6 +1963,18 @@ pub struct ClaimWinnings<'info> {
 
 #[derive(Accounts)]
 pub struct ClaimSkill<'info> {
+    /// Cross-game record for this wallet, created on first claim.
+    #[account(
+        init_if_needed,
+        payer = actor,
+        space = AgentStats::SPACE,
+        seeds = [b"agent", owner.key().as_ref()],
+        bump
+    )]
+    pub stats: Account<'info, AgentStats>,
+    /// This game's mint decides whether the claim earns ranked credit.
+    #[account(mut, seeds = [b"treasury", game.stake_mint.as_ref()], bump = treasury.bump)]
+    pub treasury: Account<'info, Treasury>,
     #[account(seeds = [b"game", game.game_id.to_le_bytes().as_ref()], bump = game.bump)]
     pub game: Account<'info, Game>,
     #[account(mut, seeds = [b"vault", game.key().as_ref()], bump = game.vault_bump)]
@@ -1881,6 +2109,56 @@ pub struct Land<'info> {
     /// The key actually signing: the owner itself, or its delegate.
     #[account(mut)]
     pub actor: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct MigrateTreasury<'info> {
+    #[account(
+        mut,
+        seeds = [b"treasury", stake_mint.key().as_ref()],
+        bump = treasury.bump,
+        realloc = Treasury::SPACE,
+        realloc::payer = authority,
+        realloc::zero = false
+    )]
+    pub treasury: Account<'info, Treasury>,
+    pub stake_mint: InterfaceAccount<'info, Mint>,
+    #[account(mut)]
+    pub authority: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct SeasonAdmin<'info> {
+    #[account(mut, seeds = [b"treasury", stake_mint.key().as_ref()], bump = treasury.bump)]
+    pub treasury: Account<'info, Treasury>,
+    pub stake_mint: InterfaceAccount<'info, Mint>,
+    pub authority: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct ClaimSeasonReward<'info> {
+    #[account(mut, seeds = [b"treasury", stake_mint.key().as_ref()], bump = treasury.bump)]
+    pub treasury: Account<'info, Treasury>,
+    #[account(mut, seeds = [b"tvault", stake_mint.key().as_ref()], bump = treasury.vault_bump)]
+    pub treasury_vault: InterfaceAccount<'info, TokenAccount>,
+    #[account(
+        mut,
+        seeds = [b"agent", owner.key().as_ref()],
+        bump = stats.bump,
+        has_one = owner @ GameError::Unauthorized
+    )]
+    pub stats: Account<'info, AgentStats>,
+    /// CHECK: seed and payout binding only; `actor` carries the authority.
+    pub owner: UncheckedAccount<'info>,
+    /// The owner itself, or anyone willing to pay the fee to settle it for them.
+    /// Safe either way: the reward can only land in the owner's own account.
+    #[account(mut)]
+    pub actor: Signer<'info>,
+    pub stake_mint: InterfaceAccount<'info, Mint>,
+    #[account(mut, token::mint = stake_mint, token::authority = owner)]
+    pub owner_token: InterfaceAccount<'info, TokenAccount>,
+    pub token_program: Interface<'info, TokenInterface>,
 }
 
 #[derive(Accounts)]
