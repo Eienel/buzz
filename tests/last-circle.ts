@@ -93,7 +93,7 @@ describe("buzz: token staking", () => {
     const g = gamePda(gid);
     let rejected = false;
     try {
-      await program.methods.createGame(gid, 6, false).accountsPartial({
+      await program.methods.createGame(gid, 6, 10, false).accountsPartial({
         config: configPda, stakeMint: rogue, allowed: allowedPda(rogue), game: g, vault: vaultPda(g),
         authority: authority.publicKey, tokenProgram, systemProgram: SystemProgram.programId,
       }).rpc();
@@ -108,7 +108,7 @@ describe("buzz: token staking", () => {
     const gid = new anchor.BN(Date.now() + 1);
     const g = gamePda(gid);
 
-    await program.methods.createGame(gid, 6, false).accountsPartial({
+    await program.methods.createGame(gid, 6, 10, false).accountsPartial({
       config: configPda, stakeMint: mint, allowed: allowedPda(mint), game: g, vault: vaultPda(g),
       authority: authority.publicKey, tokenProgram, systemProgram: SystemProgram.programId,
     }).rpc();
@@ -139,7 +139,7 @@ describe("buzz: token staking", () => {
     const gid = new anchor.BN(Date.now() + 2);
     const g = gamePda(gid);
 
-    await program.methods.createGame(gid, 6, false).accountsPartial({
+    await program.methods.createGame(gid, 6, 10, false).accountsPartial({
       config: configPda, stakeMint: mint, allowed: allowedPda(mint), game: g, vault: vaultPda(g),
       authority: authority.publicKey, tokenProgram, systemProgram: SystemProgram.programId,
     }).rpc();
@@ -158,7 +158,7 @@ describe("buzz: token staking", () => {
     const { mint, tokenProgram } = await newStakeAsset();
     const gid = new anchor.BN(Date.now() + 3);
     const g = gamePda(gid);
-    await program.methods.createGame(gid, 6, false).accountsPartial({
+    await program.methods.createGame(gid, 6, 10, false).accountsPartial({
       config: configPda, stakeMint: mint, allowed: allowedPda(mint), game: g, vault: vaultPda(g),
       authority: authority.publicKey, tokenProgram, systemProgram: SystemProgram.programId,
     }).rpc();
@@ -189,7 +189,7 @@ describe("buzz: token staking", () => {
     const mk = async (asset: any, p: any, salt: number) => {
       const gid = new anchor.BN(Date.now() + 100 + salt);
       const g = gamePda(gid);
-      await program.methods.createGame(gid, 6, false).accountsPartial({
+      await program.methods.createGame(gid, 6, 10, false).accountsPartial({
         config: configPda, stakeMint: asset.mint, allowed: allowedPda(asset.mint), game: g,
         vault: vaultPda(g), authority: authority.publicKey,
         tokenProgram: asset.tokenProgram, systemProgram: SystemProgram.programId,
@@ -219,19 +219,22 @@ describe("buzz: a full game in tokens", () => {
   it("runs lobby to settlement and drains the vault", async () => {
     await ensureConfig();
     const { mint, tokenProgram } = await newStakeAsset();
+    // four combs minimum before a game may start, so four players
     const p0 = await newPlayer(mint, tokenProgram);
     const p1 = await newPlayer(mint, tokenProgram);
+    const p2 = await newPlayer(mint, tokenProgram);
+    const p3 = await newPlayer(mint, tokenProgram);
     const gid = new anchor.BN(Date.now() + 200);
     const g = gamePda(gid);
     const stake = new anchor.BN(10 * UNIT);
 
-    await program.methods.createGame(gid, 6, false).accountsPartial({
+    await program.methods.createGame(gid, 6, 10, false).accountsPartial({
       config: configPda, stakeMint: mint, allowed: allowedPda(mint), game: g, vault: vaultPda(g),
       authority: authority.publicKey, tokenProgram, systemProgram: SystemProgram.programId,
     }).rpc();
 
-    const players = [p0, p1];
-    for (let i = 0; i < 2; i++) {
+    const players = [p0, p1, p2, p3];
+    for (let i = 0; i < players.length; i++) {
       await program.methods.createCircle(i, stake).accountsPartial({
         config: configPda, game: g, vault: vaultPda(g), circle: combPda(g, i),
         player: playerPda(g, players[i].kp.publicKey), owner: players[i].kp.publicKey, payer: players[i].kp.publicKey, relayer: null,
@@ -241,32 +244,61 @@ describe("buzz: a full game in tokens", () => {
     }
     await program.methods.startGame().accountsPartial({ game: g, authority: authority.publicKey }).rpc();
 
-    // one instance to a death
-    await sleep(9000);
-    await program.methods.advanceToReveal().accountsPartial({ game: g, cranker: authority.publicKey }).rpc();
-    await sleep(10000);
-    await program.methods.selectDeath()
-      // randomness: null takes the committed-slot-hash fallback, which is legal
-      // here because these games are created with require_vrf false.
-      .accountsPartial({ game: g, recentSlotHashes: SYSVAR_SLOT_HASHES_PUBKEY,
-                         randomness: null, cranker: authority.publicKey })
-      .remainingAccounts([0, 1].map((i) => ({ pubkey: combPda(g, i), isSigner: false, isWritable: false })))
-      .rpc();
-    const doomed = (await program.account.game.fetch(g)).doomedCircle;
-    await program.methods.executeDeath(doomed)
-      .accountsPartial({ game: g, circle: combPda(g, doomed), cranker: authority.publicKey }).rpc();
-    await sleep(7000);
-    await program.methods.advanceInstance().accountsPartial({ game: g, cranker: authority.publicKey }).rpc();
+    // Four combs now, so crank instances until exactly one is left rather than
+    // assuming a single death decides it.
+    const waitPhase = async () => {
+      const gg = await program.account.game.fetch(g);
+      const ms = gg.phaseEndsAt.toNumber() * 1000 - Date.now() + 1200;
+      if (ms > 0) await sleep(ms);
+    };
+    let alive = players.map((_, i) => i);
+    let doomed = -1;
+    const firstDoomed = { id: -1 };
+    for (let guard = 0; guard < 12; guard++) {
+      const gnow = await program.account.game.fetch(g);
+      if (!gnow.status.running) break;
+
+      await waitPhase();
+      await program.methods.advanceToReveal()
+        .accountsPartial({ game: g, cranker: authority.publicKey }).rpc();
+      await waitPhase();
+
+      // selectDeath must be handed EVERY alive comb, or the minimum is gameable
+      for (let t = 0; t < 15; t++) {
+        try {
+          await program.methods.selectDeath()
+            // randomness: null takes the committed-slot-hash fallback, legal
+            // here because these games are created with require_vrf false.
+            .accountsPartial({ game: g, recentSlotHashes: SYSVAR_SLOT_HASHES_PUBKEY,
+                               randomness: null, cranker: authority.publicKey })
+            .remainingAccounts(alive.map((i) => ({ pubkey: combPda(g, i), isSigner: false, isWritable: false })))
+            .rpc();
+          break;
+        } catch (e) {
+          if (!String(e).includes("PhaseNotOver")) throw e;
+          await sleep(1200);
+        }
+      }
+      doomed = (await program.account.game.fetch(g)).doomedCircle;
+      if (firstDoomed.id < 0) firstDoomed.id = doomed;
+      await program.methods.executeDeath(doomed)
+        .accountsPartial({ game: g, circle: combPda(g, doomed), cranker: authority.publicKey }).rpc();
+      alive = alive.filter((i) => i !== doomed);
+      await waitPhase();
+      await program.methods.advanceInstance()
+        .accountsPartial({ game: g, cranker: authority.publicKey }).rpc();
+    }
 
     const gs = await program.account.game.fetch(g);
     assert.deepEqual(gs.status, { settling: {} }, "one comb left, game settles");
-    const winner = doomed === 0 ? 1 : 0;
+    assert.equal(alive.length, 1, "exactly one comb survives");
+    const winner = alive[0];
 
     // loser banks the refund in tokens
-    const loser = players[doomed];
+    const loser = players[firstDoomed.id];
     const before = Number((await getAccount(conn, loser.ata, undefined, tokenProgram)).amount);
     await program.methods.cashOut().accountsPartial({
-      game: g, vault: vaultPda(g), circle: combPda(g, doomed),
+      game: g, vault: vaultPda(g), circle: combPda(g, firstDoomed.id),
       player: playerPda(g, loser.kp.publicKey), owner: loser.kp.publicKey, actor: loser.kp.publicKey,
       stakeMint: mint, ownerToken: loser.ata, tokenProgram, systemProgram: SystemProgram.programId,
     }).signers([loser.kp]).rpc();

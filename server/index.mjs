@@ -48,12 +48,13 @@ function decodeGame(d){let o=8;const g={};
   g.players=u32(d,o);o+=4;g.leftover=String(u64(d,o));o+=8;g.fees=String(u64(d,o));o+=8;
   g.deposited=String(u64(d,o));o+=8;g.points=String(u64(d,o));o+=8;
   o+=16;                                   // entropy_slot + insane_entropy_slot
-  // Games predating the multi-mint upgrade are still on chain and 41 bytes
-  // shorter. Decoding by length rather than assuming the current layout keeps
-  // the whole poller alive instead of throwing on the first old account.
+  // Three Game layouts are live on devnet: pre-multi-mint (no stake_mint),
+  // pre-fee-snapshot (no fee_bps), and current. Decode by size rather than
+  // assuming the newest, or every older account throws the poller off.
   if(d.length>=166){
     g.createdAt=Number(u64(d,o));o+=8;
     g.stakeMint=b58(d.slice(o,o+32));o+=32; // one mint per game; the pot never mixes
+    if(d.length>=170){ g.feeBps=u16(d,o);o+=2; }
     o+=1;o+=1;o+=1;                         // require_vrf, creator_cut_paid, insane_rolled
     g.insane=!!u8(d,o);
   }

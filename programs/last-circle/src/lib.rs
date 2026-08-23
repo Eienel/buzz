@@ -30,6 +30,18 @@ const SIGMA_BPS: u128 = 5_000;
 /// A lobby that never starts becomes abortable after this long, so deposits can
 /// never be stranded by an authority that walks away.
 const LOBBY_TIMEOUT_SECONDS: i64 = 3_600;
+/// Combs that must be open before a game may start. Two combs is a coin flip
+/// and three is barely a choice; the fog only means anything when hiding in a
+/// crowd is a real option. This is the floor at START, not during play: combs
+/// die down to one winner as normal.
+const MIN_CIRCLES: u8 = 4;
+/// Bounds on how long an instance may run. A game picks its own tempo at
+/// creation, so a fast lobby and a slow one can be live at the same time.
+/// 10s is deliberately low: it is a guard against nonsense values, not a
+/// statement about how fast a real game should run. The integration suite plays
+/// at this tempo so CI stays quick.
+const MIN_INSTANCE_SECONDS: u32 = 10;
+const MAX_INSTANCE_SECONDS: u32 = 3_600;
 /// Hard ceiling on what a single game may ever take in. Each game escrows into
 /// its own vault PDA, so this bounds the blast radius of any bug we have not
 /// found to one game's deposits. Deliberately a compile-time constant rather
@@ -70,8 +82,18 @@ pub mod last_circle {
     }
 
     /// Open a new game arena in the Lobby phase. `num_circles` is 6 or 12.
-    pub fn create_game(ctx: Context<CreateGame>, game_id: u64, num_circles: u8, require_vrf: bool) -> Result<()> {
+    pub fn create_game(
+        ctx: Context<CreateGame>,
+        game_id: u64,
+        num_circles: u8,
+        instance_seconds: u32,
+        require_vrf: bool,
+    ) -> Result<()> {
         require!(num_circles == 6 || num_circles == 12, GameError::BadParam);
+        require!(
+            (MIN_INSTANCE_SECONDS..=MAX_INSTANCE_SECONDS).contains(&instance_seconds),
+            GameError::BadParam
+        );
 
         let g = &mut ctx.accounts.game;
         g.game_id = game_id;
@@ -83,7 +105,7 @@ pub mod last_circle {
         g.instance = 0;
         g.phase = InstancePhase::Commit;
         g.phase_ends_at = 0;
-        g.instance_seconds = ctx.accounts.config.instance_seconds;
+        g.instance_seconds = instance_seconds;
         g.doomed_circle = 0;
         g.circle_count = 0;
         g.player_count = 0;
@@ -186,7 +208,7 @@ pub mod last_circle {
     pub fn start_game(ctx: Context<StartGame>) -> Result<()> {
         let g = &mut ctx.accounts.game;
         require!(g.status == GameStatus::Lobby, GameError::WrongPhase);
-        require!(g.alive_circles >= 2, GameError::NotEnoughCircles);
+        require!(g.alive_circles >= MIN_CIRCLES, GameError::NotEnoughCircles);
         let now = Clock::get()?.unix_timestamp;
         g.status = GameStatus::Running;
         g.instance = 1;
@@ -2039,7 +2061,7 @@ pub enum GameError {
     StakeOutOfRange,
     #[msg("Circle is no longer alive")]
     CircleDead,
-    #[msg("Need at least 2 circles to start")]
+    #[msg("Not enough combs open to start")]
     NotEnoughCircles,
     #[msg("Arithmetic overflow")]
     MathOverflow,

@@ -241,6 +241,7 @@ function decodeGame(d){let o=8,g={};
   o+=16;                                   // entropy_slot + insane_entropy_slot
   o+=8;                                    // created_at
   g.stakeMint=b58(d.slice(o,o+32));o+=32;
+  if(d.length>=170){ g.feeBps=u16(d,o);o+=2; }   // snapshotted rake, newer games
   o+=1;o+=1;o+=1;                          // require_vrf, creator_cut_paid, insane_rolled
   g.insane=!!u8(d,o);return g}
 function decodeCircle(d){let o=8,c={};

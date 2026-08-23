@@ -19,7 +19,17 @@ import { readFileSync } from "node:fs";
 const { AnchorProvider, Program, Wallet, BN } = anchorPkg;
 
 const RPC = process.env.RPC ?? "https://api.devnet.solana.com";
-const N_AGENTS = Number(process.env.AGENTS ?? 3);
+// At least MIN_COMBS agents, one per comb, or the game cannot legally start.
+const MIN_COMBS = 4;
+const N_AGENTS = Math.max(MIN_COMBS, Number(process.env.AGENTS ?? 5));
+// How many games may be live at once, and how long to wait between starting
+// them so three lobbies do not all crank on the same second.
+const MAX_CONCURRENT = Number(process.env.MAX_CONCURRENT ?? 3);
+const STAGGER_MS = Number(process.env.STAGGER_SECONDS ?? 25) * 1000;
+// Tempos a game may be dealt. A fast lobby and a slow one running side by side
+// is the point: spectators always have something resolving, and agents have to
+// handle both a 60 second and a 5 minute think.
+const TEMPOS = (process.env.TEMPOS ?? "60,90,300").split(",").map(Number);
 const N_GAMES = Number(process.env.GAMES ?? 1); // 0 = forever
 // Stakes are SPL tokens now. STAKE is in whole units of the stake asset.
 const STAKE_UNITS = Number(process.env.STAKE_UNITS ?? 10);
@@ -132,13 +142,16 @@ async function playGame(gameNo) {
   const circlePda = (id) => pda(Buffer.from("circle"), gamePda.toBuffer(), Buffer.from([id]));
   const playerPda = (o) => pda(Buffer.from("player"), gamePda.toBuffer(), o.toBuffer());
 
+  const tempo = TEMPOS[Math.floor(Math.random() * TEMPOS.length)];
   const agents = Array.from({ length: N_AGENTS }, (_, i) => ({
     kp: Keypair.generate(),
     name: `${stratNames[i % stratNames.length]}-${i}`,
     strat: strategies[stratNames[i % stratNames.length]],
-    circle: i % 6, dead: false,
+    // one agent per comb for the first MIN_COMBS, so the comb floor is met by
+    // construction rather than by luck; the rest spread over the six
+    circle: i < MIN_COMBS ? i : i % 6, dead: false,
   }));
-  log(`game ${gid}: ${asset.name} game, funding ${N_AGENTS} agents…`);
+  log(`game ${gid}: ${asset.name}, ${tempo}s instances, funding ${N_AGENTS} agents…`);
   await fundAgents(agents, asset);
 
   // Everything after funding is wrapped so sweepBack ALWAYS runs, a throw
@@ -146,7 +159,7 @@ async function playGame(gameNo) {
   // the ephemeral agent wallets' balances (their keypairs live only in memory).
   try {
   // lobby: keeper (payer) creates the game; agents create/join circles 0..5
-  await program.methods.createGame(gid, 6, false).accountsPartial({
+  await program.methods.createGame(gid, 6, tempo, false).accountsPartial({
     config: configPda, stakeMint: asset.mint, allowed: allowedPda, game: gamePda, vault: vaultPda,
     authority: payer.publicKey, tokenProgram: asset.tokenProgram, systemProgram: SystemProgram.programId,
   }).rpc();
@@ -381,10 +394,27 @@ if (bal < FUND * N_AGENTS + 0.05 * LAMPORTS_PER_SOL) {
   process.exit(1);
 }
 await ensureSetup();
-for (let i = 0; N_GAMES === 0 || i < N_GAMES; i++) {
-  try { await playGame(i); } catch (e) { log(`game failed: ${e.message?.slice(0, 200)}`); await sleep(10_000); }
-  if (N_GAMES === 0 || i < N_GAMES - 1) {
-    log(`next game in ${GAME_INTERVAL / 1000}s`);
-    await sleep(GAME_INTERVAL); // pace the arena: rent burn per hour stays low
+// Keep up to MAX_CONCURRENT games live at once. Each playGame is fully
+// self-contained (its own agents, PDAs and settlement), so running several is a
+// scheduling question rather than a shared-state one. Starts are staggered so
+// three games do not crank in lockstep and spike the RPC.
+const inflight = new Set();
+let started = 0;
+const launch = (n) => {
+  const task = (async () => {
+    try { await playGame(n); }
+    catch (e) { log(`game failed: ${e.message?.slice(0, 200)}`); }
+  })().finally(() => inflight.delete(task));
+  inflight.add(task);
+  return task;
+};
+
+while (N_GAMES === 0 || started < N_GAMES) {
+  while (inflight.size < MAX_CONCURRENT && (N_GAMES === 0 || started < N_GAMES)) {
+    launch(started++);
+    if (inflight.size < MAX_CONCURRENT) await sleep(STAGGER_MS);
   }
+  await Promise.race(inflight);          // a slot opened, fill it
+  if (N_GAMES === 0 || started < N_GAMES) await sleep(GAME_INTERVAL);
 }
+await Promise.all(inflight);
