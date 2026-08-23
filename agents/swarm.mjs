@@ -414,7 +414,11 @@ while (N_GAMES === 0 || started < N_GAMES) {
     launch(started++);
     if (inflight.size < MAX_CONCURRENT) await sleep(STAGGER_MS);
   }
-  await Promise.race(inflight);          // a slot opened, fill it
+  // Promise.race on an empty set never settles, and node exits 13 on an
+  // unsettled top-level await. That is reachable: if every game fails fast the
+  // set drains before we get here.
+  if (inflight.size) await Promise.race(inflight);
+  else await sleep(5_000);
   if (N_GAMES === 0 || started < N_GAMES) await sleep(GAME_INTERVAL);
 }
 await Promise.all(inflight);
