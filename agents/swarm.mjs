@@ -31,6 +31,14 @@ const STAGGER_MS = Number(process.env.STAGGER_SECONDS ?? 25) * 1000;
 // is the point: spectators always have something resolving, and agents have to
 // handle both a 60 second and a 5 minute think.
 const TEMPOS = (process.env.TEMPOS ?? "60,90,300").split(",").map(Number);
+// Swarm identities are derived from a seed rather than generated per game, so
+// "herd-0" is the same wallet every time and builds a record worth beating.
+// Ephemeral keys would have left the leaderboard permanently empty.
+// One set per concurrent slot, so two live games never share a wallet and race
+// each other's funding and sweep.
+const SWARM_SEED = process.env.SWARM_SEED ?? "buzz-devnet-swarm-v1";
+const agentKey = (name) => Keypair.fromSeed(
+  Uint8Array.from(Buffer.from(keccak_256.arrayBuffer(`${SWARM_SEED}:${name}`)).subarray(0, 32)));
 const N_GAMES = Number(process.env.GAMES ?? 1); // 0 = forever
 // Stakes are SPL tokens now. STAKE is in whole units of the stake asset.
 const STAKE_UNITS = Number(process.env.STAKE_UNITS ?? 10);
@@ -146,14 +154,18 @@ async function playGame(gameNo) {
   const playerPda = (o) => pda(Buffer.from("player"), gamePda.toBuffer(), o.toBuffer());
 
   const tempo = TEMPOS[Math.floor(Math.random() * TEMPOS.length)];
-  const agents = Array.from({ length: N_AGENTS }, (_, i) => ({
-    kp: Keypair.generate(),
-    name: `${stratNames[i % stratNames.length]}-${i}`,
-    strat: strategies[stratNames[i % stratNames.length]],
-    // one agent per comb for the first MIN_COMBS, so the comb floor is met by
-    // construction rather than by luck; the rest spread over the six
-    circle: i < MIN_COMBS ? i : i % 6, dead: false,
-  }));
+  const slot = gameNo % MAX_CONCURRENT;
+  const agents = Array.from({ length: N_AGENTS }, (_, i) => {
+    const name = `${stratNames[i % stratNames.length]}-${slot}${i}`;
+    return {
+      kp: agentKey(name),
+      name,
+      strat: strategies[stratNames[i % stratNames.length]],
+      // one agent per comb for the first MIN_COMBS, so the comb floor is met by
+      // construction rather than by luck; the rest spread over the six
+      circle: i < MIN_COMBS ? i : i % 6, dead: false,
+    };
+  });
   log(`game ${gid}: ${asset.name}, ${tempo}s instances, funding ${N_AGENTS} agents…`);
   await fundAgents(agents, asset);
 

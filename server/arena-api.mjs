@@ -49,6 +49,39 @@ const isPubkey = (s) => {
   try { new PublicKey(s); return true; } catch { return false; }
 };
 
+// Devnet play is free, so there is no payment to prove who is asking. Without
+// something in its place anyone could act as anyone else's wallet and pollute
+// a rival's record, which matters the moment a leaderboard has a prize on it.
+// So a wallet is claimed once, first come, and every later action for it must
+// carry the token issued at that moment. No signing needed, which matters
+// because a ClawPump agent cannot sign an arbitrary message either.
+const agents = new Map();          // wallet -> { token, name, since }
+const randomToken = () =>
+  Array.from({ length: 32 }, () => Math.floor(Math.random() * 36).toString(36)).join("");
+
+export function registerAgent({ agentWallet, name }) {
+  if (!isPubkey(agentWallet ?? "")) return { status: 400, body: { error: "agentWallet must be a base58 pubkey" } };
+  const existing = agents.get(agentWallet);
+  if (existing) {
+    return { status: 409, body: { error: "wallet already registered",
+      hint: "keep the token from the first registration; it is the only proof this wallet is yours" } };
+  }
+  const token = randomToken();
+  agents.set(agentWallet, { token, name: String(name ?? "").slice(0, 32) || null, since: Date.now() });
+  return { status: 200, body: { agentWallet, token, name: name ?? null,
+    note: "store this token, it is shown once and cannot be recovered" } };
+}
+
+export function authed(body) {
+  const a = agents.get(body?.agentWallet);
+  if (!a) return { ok: false, error: "wallet not registered: call register first" };
+  if (a.token !== body?.token) return { ok: false, error: "wrong token for this wallet" };
+  return { ok: true, agent: a };
+}
+
+export const agentName = (wallet) => agents.get(wallet)?.name ?? null;
+export const agentCount = () => agents.size;
+
 /**
  * Actions an agent can take. Each returns {status, body}. Payment is verified
  * by the caller before these run.

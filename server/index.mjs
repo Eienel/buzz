@@ -15,7 +15,8 @@ import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { Connection, PublicKey } from "@solana/web3.js";
-import { makeArena, PRICE, challenge } from "./arena-api.mjs";
+import { makeArena, PRICE, challenge, registerAgent, authed } from "./arena-api.mjs";
+import { makeAutoplay } from "./autoplay.mjs";
 import { verifyPayment } from "./x402.mjs";
 import { loadRelayer, startDrain } from "./relayer.mjs";
 import { DATA_DIR } from "./keypair.mjs";
@@ -154,6 +155,7 @@ async function poll(){
     snapshot = { ok:true, updatedAt:Date.now(), programId:PROGRAM_ID, cluster:RPC.includes("devnet")?"devnet":"mainnet",
                  live:games.filter(g=>g.status===0||g.status===1), finished:history.length,
                  recent: history.slice(0, 10) };
+    autoplay.tick(snapshot);          // walk easy-mode intents through the phases
   }catch(e){
     snapshot = { ...snapshot, ok:false, error:String(e.message).slice(0,120), updatedAt:Date.now() };
   }
@@ -176,6 +178,15 @@ const enqueue = (a) => {
   return id;
 };
 const arena = makeArena({ snapshot: () => snapshot, enqueue });
+
+// Easy mode: agents declare an intent, this walks it through commit and reveal
+// as the poller watches the phases turn.
+const gamePdaFor = (gameId) => {
+  const id = Buffer.alloc(8);
+  id.writeBigUInt64LE(BigInt(gameId));
+  return PublicKey.findProgramAddressSync([Buffer.from("game"), id], PID)[0].toBase58();
+};
+const autoplay = makeAutoplay({ enqueue, gamePdaFor });
 
 // The relayer signs for agents that cannot. Without RELAYER_KEYPAIR the arena
 // still reads and quotes, but paid actions would queue forever, so we refuse
@@ -211,6 +222,27 @@ createServer(async (req,res)=>{
     const a = actions.get(p.split("/").pop());
     return a ? send(res,200,a) : send(res,404,{error:"unknown action"});
   }
+  if(p === "/api/agent/register"){
+    const r = registerAgent(await readBody(req));
+    return send(res, r.status, r.body);
+  }
+  // Easy mode. One call says what to do; commit, reveal and timing are handled.
+  if(p === "/api/agent/play"){
+    if(!relayer) return send(res, 503, { error: "arena is read-only: no relayer configured" });
+    const body = await readBody(req);
+    const a = authed(body);
+    if(!a.ok) return send(res, 401, { error: a.error });
+    const { gameId, move, predict } = body;
+    if(gameId == null) return send(res, 400, { error: "gameId is required" });
+    if(move == null && predict == null) return send(res, 400, { error: "give a move, a predict, or both" });
+    for(const [k,v] of [["move",move],["predict",predict]]){
+      if(v != null && (!Number.isInteger(v) || v < 0 || v > 11))
+        return send(res, 400, { error: `${k} must be a comb id 0-11` });
+    }
+    const plan = autoplay.plan({ agentWallet: body.agentWallet, gameId, move, predict });
+    return send(res, 202, { accepted: true, gameId, move: plan.move, predict: plan.predict,
+      note: "committed and revealed for you each instance until you change it or the game ends" });
+  }
   if(p === "/api/agent/relayer"){
     return relayer ? send(res, 200, await relayer.ready())
                    : send(res, 503, { error: "no relayer configured" });
@@ -225,6 +257,11 @@ createServer(async (req,res)=>{
         `BUZZ arena: ${kind}`);
     }
     const body = await readBody(req);
+    // Registration binds the wallet to whoever claimed it. Payment binds it
+    // economically on top, but devnet play is free, so without this anyone
+    // could act as anyone else's wallet and wreck their record.
+    const who = authed(body);
+    if(!who.ok) return send(res, 401, { error: who.error });
     if(price > 0){
       const v = await verifyPayment(connection, paid, { usd: price,
         payTo: process.env.ARENA_PAY_TO, usdcMint: process.env.USDC_MINT ?? USDC_DEFAULT,
