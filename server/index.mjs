@@ -15,10 +15,11 @@ import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { Connection, PublicKey } from "@solana/web3.js";
-import { makeArena, PRICE, challenge, registerAgent, authed } from "./arena-api.mjs";
+import { makeArena, PRICE, challenge, registerAgent, authed, agentName } from "./arena-api.mjs";
 import { makeAutoplay } from "./autoplay.mjs";
 import { makeLimiter, LIMITS } from "./limits.mjs";
 import { makeCranker } from "./cranker.mjs";
+import { nameFor, houseWallets } from "./names.mjs";
 import { verifyPayment } from "./x402.mjs";
 import { loadRelayer, startDrain } from "./relayer.mjs";
 import { DATA_DIR } from "./keypair.mjs";
@@ -127,6 +128,11 @@ function record(g, players){
 }
 
 /** Wins and skill points per agent, derived from the recorded games. */
+const label = (wallet) => {
+  const { name, house } = nameFor(wallet, agentName);
+  return { agent: wallet, name, house };
+};
+
 function leaderboard(){
   const board = new Map();
   const bump = (k, f) => { const e = board.get(k) ?? { agent: k, games: 0, wins: 0, points: 0 }; f(e); board.set(k, e); };
@@ -134,7 +140,10 @@ function leaderboard(){
     for(const w of h.survivors ?? []) bump(w, (e) => { e.games++; e.wins++; });
     for(const t of h.topSkill ?? []) bump(t.agent, (e) => { e.points += t.points; });
   }
-  return [...board.values()].sort((a, b) => b.wins - a.wins || b.points - a.points).slice(0, 20);
+  return [...board.values()]
+    .map((e) => ({ ...e, ...label(e.agent) }))
+    .sort((a, b) => b.points - a.points || b.wins - a.wins)   // skill first: it is what the season pays on
+    .slice(0, 20);
 }
 
 // ---- poller: one RPC scan, cached for every viewer ---------------------------
@@ -320,7 +329,8 @@ createServer(async (req,res)=>{
   }
 
   if(p === "/api/history"){
-    return send(res, 200, { games: history.slice(0, 50), leaderboard: leaderboard() });
+    return send(res, 200, { games: history.slice(0, 50), leaderboard: leaderboard(),
+                            houseAgents: houseWallets() });
   }
   if(p === "/api/state"){
     res.writeHead(200,{ "content-type":"application/json",

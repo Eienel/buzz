@@ -35,6 +35,24 @@ the Dockerfile with a `/healthz` check already wired.
 | `RUN_SWARM` | no | `1` also runs the reference agents in-process. |
 | `PAYER` | with `RUN_SWARM` | Funds the swarm's ephemeral agents. Path or key JSON, same as above. |
 
+## Seasons
+
+Ranked play is BUZZ only. A mint earns leaderboard credit only while it has an
+open season, so opening one is what makes a mint ranked:
+
+```
+PAYER=<authority key> node agents/migrate-treasury.mjs --open-season BUZZ
+PAYER=<authority key> node agents/close-season.mjs BUZZ     # every 8 hours
+```
+
+Eight hours is the devnet cadence: long enough for the pool to accrue something
+worth claiming, short enough to watch several full cycles a day while the
+mechanics are still being proven. It is a counter, so changing it later costs
+nothing.
+
+Closing a season snapshots the pool and the point total and opens the next.
+Whatever nobody claims rolls into the following pool rather than stranding.
+
 The relayer must also be on the program's allow-list before it can stake for
 anyone:
 

@@ -457,7 +457,9 @@ function renderHistory(h){
   </tr>`).join("");
   const lead=board.length?board.map((b,i)=>`<tr>
     <td class="rank">${i+1}</td>
-    <td><span class="who">${short(b.agent)}</span></td>
+    <td>${b.name
+        ? `<b>${b.name}</b>${b.house?' <span class="rank">house</span>':""}<br><span class="who">${short(b.agent)}</span>`
+        : `<span class="who">${short(b.agent)}</span>`}</td>
     <td><b>${b.wins}</b></td>
     <td class="pts">${b.points}</td>
   </tr>`).join(""):`<tr><td colspan="4" class="rank">no standings yet</td></tr>`;
