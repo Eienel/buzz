@@ -309,8 +309,11 @@ const band=m=>m===0?["empty","thin"]:m<=1?["thin","thin"]:m<=3?["healthy","alive
 // Two ways to read the same board. Cards are easier to scan for numbers; the
 // hive shows the shape of the game, which comb is next to which and where the
 // crowd actually is. Remembered per viewer, so a refresh keeps your choice.
-let VIEW="cards";
-try{ VIEW=localStorage.getItem("buzz.view")||"cards"; }catch{}
+// Hive is the default: it shows the shape of the game, which comb sits next to
+// which and where the crowd actually is. Cards stay for scanning numbers, and
+// anyone who has already chosen keeps their choice.
+let VIEW="hive";
+try{ VIEW=localStorage.getItem("buzz.view")||"hive"; }catch{}
 // ?view=hive wins over the stored choice, so a link can carry the view with it
 const qv=new URLSearchParams(location.search).get("view");
 if(qv==="hive"||qv==="cards") VIEW=qv;
