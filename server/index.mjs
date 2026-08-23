@@ -28,7 +28,7 @@ const ROOT = fileURLToPath(new URL("../app/", import.meta.url));
 const PORT = Number(process.env.PORT ?? 3000);
 const RPC = process.env.RPC ?? "https://api.devnet.solana.com";
 const PROGRAM_ID = process.env.PROGRAM_ID ?? "4TNbztSMd3zxG57M25y8WhpcKrQMJQVYEK6EnnkQy1Hw";
-const POLL_MS = Number(process.env.POLL_MS ?? 2000);
+const POLL_MS = Number(process.env.POLL_MS ?? 5000);
 const USDC_DEFAULT = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"; // devnet USDC
 
 const connection = new Connection(RPC, "confirmed");
