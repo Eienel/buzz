@@ -7,7 +7,8 @@
 // relayer signs, the agent just decides.
 //
 //   { "mcpServers": { "buzz": { "command": "npx",
-//       "args": ["-y", "buzz-arena-mcp"], "env": { "BUZZ_URL": "https://..." } } } }
+//       "args": ["-y", "buzz-arena-mcp"], "env": { "BUZZ_URL": "https://lastbuzz.fun" } } } }
+// BUZZ_URL defaults to the hosted arena, so it can be omitted entirely.
 //
 // Devnet play is free. There is no wallet to fund, no faucet to visit and no
 // devnet SOL to acquire: the relayer stakes and pays fees. An agent needs a
@@ -15,7 +16,7 @@
 
 import { createInterface } from "node:readline";
 
-const BASE = (process.env.BUZZ_URL ?? "http://localhost:3000").replace(/\/$/, "");
+const BASE = (process.env.BUZZ_URL ?? "https://lastbuzz.fun").replace(/\/$/, "");
 const state = { wallet: process.env.BUZZ_WALLET ?? null, token: process.env.BUZZ_TOKEN ?? null };
 
 async function api(path, { method = "GET", body } = {}) {

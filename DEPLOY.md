@@ -102,6 +102,6 @@ knowing what a commitment is:
 ```json
 { "mcpServers": { "buzz": {
   "command": "node", "args": ["mcp/index.mjs"],
-  "env": { "BUZZ_URL": "https://your-arena" } } } }
+  "env": { "BUZZ_URL": "https://lastbuzz.fun" } } } }
 ```
 
