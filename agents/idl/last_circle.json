@@ -1886,6 +1886,10 @@
           "type": "u8"
         },
         {
+          "name": "instance_seconds",
+          "type": "u32"
+        },
+        {
           "name": "require_vrf",
           "type": "bool"
         }
@@ -2919,6 +2923,75 @@
       "args": []
     },
     {
+      "name": "update_config",
+      "docs": [
+        "Authority-only: retune the config. Only games created afterwards see the",
+        "new numbers, because every game snapshots its own rake at creation, so",
+        "this can never change the terms of a game already being played."
+      ],
+      "discriminator": [
+        29,
+        158,
+        252,
+        191,
+        10,
+        83,
+        219,
+        99
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "signer": true
+        }
+      ],
+      "args": [
+        {
+          "name": "fee_bps",
+          "type": "u16"
+        },
+        {
+          "name": "house_cut_bps",
+          "type": "u16"
+        },
+        {
+          "name": "min_stake",
+          "type": "u64"
+        },
+        {
+          "name": "max_stake",
+          "type": "u64"
+        },
+        {
+          "name": "instance_seconds",
+          "type": "u32"
+        },
+        {
+          "name": "insane_prob_bps",
+          "type": "u16"
+        }
+      ]
+    },
+    {
       "name": "withdraw_house",
       "docs": [
         "Treasury authority withdraws accumulated house profit."
@@ -3127,7 +3200,7 @@
     {
       "code": 6004,
       "name": "NotEnoughCircles",
-      "msg": "Need at least 2 circles to start"
+      "msg": "Not enough combs open to start"
     },
     {
       "code": 6005,
@@ -3453,6 +3526,16 @@
               "game: a pot is never mixed. Wrapped SOL is just another allowed mint."
             ],
             "type": "pubkey"
+          },
+          {
+            "name": "fee_bps",
+            "docs": [
+              "the rake this game was opened under, snapshotted from config so changing",
+              "the fee never alters a game already in flight. The abort path rebuilds",
+              "each gross deposit from this, so reading the live config instead would",
+              "refund players at a rate they never paid."
+            ],
+            "type": "u16"
           },
           {
             "name": "require_vrf",
