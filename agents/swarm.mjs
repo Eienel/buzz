@@ -31,6 +31,9 @@ const STAGGER_MS = Number(process.env.STAGGER_SECONDS ?? 25) * 1000;
 // is the point: spectators always have something resolving, and agents have to
 // handle both a 60 second and a 5 minute think.
 const TEMPOS = (process.env.TEMPOS ?? "60,90,300").split(",").map(Number);
+// One game in this many is played in the second asset; the rest are the ranked
+// one. 4 means three quarters of the arena counts toward the season.
+const BUZZ_EVERY = Number(process.env.RANKED_RATIO ?? 4);
 // Swarm identities are derived from a seed rather than generated per game, so
 // "herd-0" is the same wallet every time and builds a record worth beating.
 // Ephemeral keys would have left the leaderboard permanently empty.
@@ -147,7 +150,11 @@ const waitPhaseEnd = async (gamePda, margin = 1500) => {
 };
 
 async function playGame(gameNo) {
-  const asset = ASSETS[gameNo % ASSETS.length];
+  // Only BUZZ has an open season, so only BUZZ games move the leaderboard.
+  // A strict alternation made half the arena unranked, which is the wrong
+  // shape when ranked play is the reason people are here. ANSEM still gets a
+  // share so it stays exercised rather than becoming dead code.
+  const asset = ASSETS[gameNo % BUZZ_EVERY === 0 && ASSETS.length > 1 ? 1 : 0];
   const treasuryPda = pda(Buffer.from("treasury"), asset.mint.toBuffer());
   const tvaultPda = pda(Buffer.from("tvault"), asset.mint.toBuffer());
   const allowedPda = pda(Buffer.from("allowed"), asset.mint.toBuffer());
