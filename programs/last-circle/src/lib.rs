@@ -819,14 +819,41 @@ pub mod last_circle {
     /// Reallocating in place preserves every existing balance and zeroes only
     /// the appended region.
     pub fn migrate_treasury(ctx: Context<MigrateTreasury>) -> Result<()> {
-        let t = &mut ctx.accounts.treasury;
-        require!(t.authority == ctx.accounts.authority.key(), GameError::Unauthorized);
-        // Anchor has already grown and zeroed the account by the time we run,
-        // so an already-migrated treasury would silently lose its season state.
-        require!(t.season == 0 && t.lb_accruing == 0 && t.lb_claimable == 0
-                 && t.to_sol_balance == 0 && t.burn_balance == 0
-                 && t.pts_accruing == 0 && t.pts_claimable == 0,
-                 GameError::AlreadyClaimed);
+        let info = ctx.accounts.treasury.to_account_info();
+        {
+            let data = info.try_borrow_data()?;
+            // Cannot be an Account<Treasury>: Anchor deserializes during account
+            // validation, which happens BEFORE any realloc, and the old layout
+            // cannot be parsed as the new one. So the checks Anchor would have
+            // done are done here by hand, against raw bytes.
+            require!(data.len() >= Treasury::LEGACY_SPACE, GameError::BadParam);
+            require!(data[..8] == Treasury::DISCRIMINATOR[..], GameError::BadParam);
+            // authority sits immediately after the discriminator in both layouts
+            let authority = Pubkey::try_from(&data[8..40]).map_err(|_| GameError::BadParam)?;
+            require!(authority == ctx.accounts.authority.key(), GameError::Unauthorized);
+            // Already migrated: refuse rather than re-zero live season state.
+            require!(data.len() < Treasury::SPACE, GameError::AlreadyClaimed);
+        }
+
+        // Top up to the rent-exempt minimum for the larger account first: a
+        // realloc that leaves it under-funded would fail the runtime's check.
+        let rent = Rent::get()?.minimum_balance(Treasury::SPACE);
+        let owed = rent.saturating_sub(info.lamports());
+        if owed > 0 {
+            anchor_lang::system_program::transfer(
+                CpiContext::new(
+                    ctx.accounts.system_program.to_account_info(),
+                    anchor_lang::system_program::Transfer {
+                        from: ctx.accounts.authority.to_account_info(),
+                        to: info.clone(),
+                    },
+                ),
+                owed,
+            )?;
+        }
+        // zero_init true: the appended region must start at zero, which is
+        // exactly the correct initial value for every field added.
+        info.realloc(Treasury::SPACE, true)?;
         Ok(())
     }
 
@@ -2113,15 +2140,12 @@ pub struct Land<'info> {
 
 #[derive(Accounts)]
 pub struct MigrateTreasury<'info> {
-    #[account(
-        mut,
-        seeds = [b"treasury", stake_mint.key().as_ref()],
-        bump = treasury.bump,
-        realloc = Treasury::SPACE,
-        realloc::payer = authority,
-        realloc::zero = false
-    )]
-    pub treasury: Account<'info, Treasury>,
+    /// CHECK: cannot be typed as Account<Treasury>, since Anchor would try to
+    /// deserialize the OLD layout as the new one during validation and fail
+    /// before the handler runs. Seeds still pin the address; the discriminator
+    /// and authority are checked in the handler.
+    #[account(mut, seeds = [b"treasury", stake_mint.key().as_ref()], bump)]
+    pub treasury: UncheckedAccount<'info>,
     pub stake_mint: InterfaceAccount<'info, Mint>,
     #[account(mut)]
     pub authority: Signer<'info>,

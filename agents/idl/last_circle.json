@@ -711,6 +711,122 @@
       "args": []
     },
     {
+      "name": "claim_season_reward",
+      "docs": [
+        "Claim a share of the last closed season, pro rata by the skill points",
+        "earned in it. Pro rata rather than a top-N cliff: every correct call",
+        "earns, and there is no ranking to compute or publish."
+      ],
+      "discriminator": [
+        129,
+        96,
+        145,
+        129,
+        154,
+        203,
+        29,
+        150
+      ],
+      "accounts": [
+        {
+          "name": "treasury",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  114,
+                  101,
+                  97,
+                  115,
+                  117,
+                  114,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "stake_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "treasury_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "stake_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "stats",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "owner",
+          "relations": [
+            "stats"
+          ]
+        },
+        {
+          "name": "actor",
+          "docs": [
+            "The owner itself, or anyone willing to pay the fee to settle it for them.",
+            "Safe either way: the reward can only land in the owner's own account."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "stake_mint"
+        },
+        {
+          "name": "owner_token",
+          "writable": true
+        },
+        {
+          "name": "token_program"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "claim_skill",
       "docs": [
         "Any player who scored skill points claims their points-weighted share of",
@@ -727,6 +843,60 @@
         153
       ],
       "accounts": [
+        {
+          "name": "stats",
+          "docs": [
+            "Cross-game record for this wallet, created on first claim."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "treasury",
+          "docs": [
+            "This game's mint decides whether the claim earns ranked credit."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  114,
+                  101,
+                  97,
+                  115,
+                  117,
+                  114,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game.stake_mint",
+                "account": "Game"
+              }
+            ]
+          }
+        },
         {
           "name": "game",
           "pda": {
@@ -851,6 +1021,54 @@
         221
       ],
       "accounts": [
+        {
+          "name": "stats",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "treasury",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  114,
+                  101,
+                  97,
+                  115,
+                  117,
+                  114,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game.stake_mint",
+                "account": "Game"
+              }
+            ]
+          }
+        },
         {
           "name": "game",
           "pda": {
@@ -1237,6 +1455,59 @@
         },
         {
           "name": "cranker",
+          "signer": true
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "close_season",
+      "docs": [
+        "Authority-only: end the open season and start the next. Whatever nobody",
+        "claimed from the previous one rolls back into the new pool rather than",
+        "being stranded in the vault."
+      ],
+      "discriminator": [
+        162,
+        198,
+        31,
+        37,
+        77,
+        0,
+        199,
+        152
+      ],
+      "accounts": [
+        {
+          "name": "treasury",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  114,
+                  101,
+                  97,
+                  115,
+                  117,
+                  114,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "stake_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "stake_mint"
+        },
+        {
+          "name": "authority",
           "signer": true
         }
       ],
@@ -2382,6 +2653,119 @@
       ]
     },
     {
+      "name": "migrate_treasury",
+      "docs": [
+        "Authority-only: grow an existing treasury to the current layout. The",
+        "treasury is permanent and holds real balances, so unlike a game account",
+        "it cannot be drained and rebuilt: the address is fixed by its seeds.",
+        "Reallocating in place preserves every existing balance and zeroes only",
+        "the appended region."
+      ],
+      "discriminator": [
+        13,
+        5,
+        40,
+        102,
+        230,
+        124,
+        105,
+        118
+      ],
+      "accounts": [
+        {
+          "name": "treasury",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  114,
+                  101,
+                  97,
+                  115,
+                  117,
+                  114,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "stake_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "stake_mint"
+        },
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "open_season",
+      "docs": [
+        "Authority-only: start ranking this mint. Only a mint with an open season",
+        "gives leaderboard credit, which is how ranked play stays BUZZ-only",
+        "without special-casing any mint in the code."
+      ],
+      "discriminator": [
+        100,
+        152,
+        95,
+        245,
+        247,
+        126,
+        124,
+        215
+      ],
+      "accounts": [
+        {
+          "name": "treasury",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  114,
+                  101,
+                  97,
+                  115,
+                  117,
+                  114,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "stake_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "stake_mint"
+        },
+        {
+          "name": "authority",
+          "signer": true
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "reveal_move",
       "docs": [
         "Reveal a committed MOVE (target must differ from current circle) and apply",
@@ -2992,6 +3376,104 @@
       ]
     },
     {
+      "name": "withdraw_bucket",
+      "docs": [
+        "Authority-only: draw down one of the policy buckets. Separate from the",
+        "leaderboard pool on purpose: that one is owed to players and is only",
+        "payable through claim_season_reward, so no authority call can reach it.",
+        "0 = to_sol, 1 = burn."
+      ],
+      "discriminator": [
+        157,
+        99,
+        157,
+        212,
+        65,
+        179,
+        161,
+        188
+      ],
+      "accounts": [
+        {
+          "name": "treasury",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  114,
+                  101,
+                  97,
+                  115,
+                  117,
+                  114,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "stake_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "treasury_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "stake_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "stake_mint"
+        },
+        {
+          "name": "authority_token",
+          "writable": true
+        },
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "bucket",
+          "type": "u8"
+        },
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "withdraw_house",
       "docs": [
         "Treasury authority withdraws accumulated house profit."
@@ -3084,6 +3566,19 @@
     }
   ],
   "accounts": [
+    {
+      "name": "AgentStats",
+      "discriminator": [
+        43,
+        192,
+        26,
+        112,
+        162,
+        176,
+        77,
+        164
+      ]
+    },
     {
       "name": "AllowedMint",
       "discriminator": [
@@ -3314,6 +3809,51 @@
     }
   ],
   "types": [
+    {
+      "name": "AgentStats",
+      "docs": [
+        "Per-wallet, cross-game record. Skill points are the leaderboard's metric on",
+        "purpose: they are a flat +1 per correct call regardless of stake, so the",
+        "board measures reading the board rather than the size of the wallet reading",
+        "it. PnL is displayed off chain and deliberately never paid on."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "season",
+            "docs": [
+              "Season that `season_points` belongs to; a stale one resets on credit."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "season_points",
+            "type": "u64"
+          },
+          {
+            "name": "total_points",
+            "type": "u64"
+          },
+          {
+            "name": "games",
+            "type": "u32"
+          },
+          {
+            "name": "wins",
+            "type": "u32"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
     {
       "name": "AllowedMint",
       "docs": [
@@ -3786,6 +4326,12 @@
           },
           {
             "name": "house_balance",
+            "docs": [
+              "Retired. Every collect_fees now books the house cut straight into the",
+              "three buckets below. Kept at its original offset so existing treasuries",
+              "can be reallocated in place rather than rebuilt, and still withdrawable",
+              "through withdraw_house for whatever it holds."
+            ],
             "type": "u64"
           },
           {
@@ -3799,6 +4345,58 @@
           {
             "name": "bump",
             "type": "u8"
+          },
+          {
+            "name": "to_sol_balance",
+            "docs": [
+              "50% of the house cut. Converted to SOL off chain: no DEX lives in this",
+              "program, and putting one next to player funds would be a poor trade."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "burn_balance",
+            "docs": [
+              "25% of the house cut, withdrawn to buy and burn BUZZ off chain."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "lb_accruing",
+            "docs": [
+              "25% of the house cut, accruing to the season currently open."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "lb_claimable",
+            "docs": [
+              "The pool the last closed season pays out of."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "pts_accruing",
+            "docs": [
+              "Skill points earned across all games in the open season."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "pts_claimable",
+            "docs": [
+              "Skill points that `lb_claimable` is divided between."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "season",
+            "docs": [
+              "0 means this mint is not ranked and earns no leaderboard credit. Ranked",
+              "play is BUZZ only for now; opening a season on another mint is one call,",
+              "because every mint already has its own treasury."
+            ],
+            "type": "u16"
           }
         ]
       }
