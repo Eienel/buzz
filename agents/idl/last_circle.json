@@ -4,7 +4,7 @@
     "name": "last_circle",
     "version": "0.1.0",
     "spec": "0.1.0",
-    "description": "Last Circle Standing \u2014 a provably-fair soft-landing pot game with a skill edge"
+    "description": "Last Circle Standing — a provably-fair soft-landing pot game with a skill edge"
   },
   "instructions": [
     {
@@ -225,9 +225,91 @@
       ]
     },
     {
+      "name": "allow_relayer",
+      "docs": [
+        "Authority-only: mark a key allowed to stake on another's behalf. This is",
+        "how the x402 relayer gets to open combs for ClawPump agents, which cannot",
+        "sign Solana instructions themselves. The relayer funds the stake and pays",
+        "the rent; the agent is still the on-chain `Player.owner`, so points and",
+        "every payout stay with the agent."
+      ],
+      "discriminator": [
+        254,
+        131,
+        130,
+        72,
+        37,
+        161,
+        34,
+        252
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "relayer"
+        },
+        {
+          "name": "allowed",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  108,
+                  97,
+                  121,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "relayer"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "enabled",
+          "type": "bool"
+        }
+      ]
+    },
+    {
       "name": "cash_out",
       "docs": [
-        "An eliminated player banks their refund (stake \u00d7 refund_bps) from the",
+        "An eliminated player banks their refund (stake × refund_bps) from the",
         "vault and leaves the game. Their circle must be dead."
       ],
       "discriminator": [
@@ -316,11 +398,17 @@
         },
         {
           "name": "owner",
-          "writable": true,
-          "signer": true,
           "relations": [
             "player"
           ]
+        },
+        {
+          "name": "actor",
+          "docs": [
+            "The key actually signing: the owner itself, or its delegate."
+          ],
+          "writable": true,
+          "signer": true
         },
         {
           "name": "stake_mint",
@@ -455,11 +543,17 @@
         },
         {
           "name": "owner",
-          "writable": true,
-          "signer": true,
           "relations": [
             "player"
           ]
+        },
+        {
+          "name": "actor",
+          "docs": [
+            "The key actually signing: the owner itself, or its delegate."
+          ],
+          "writable": true,
+          "signer": true
         },
         {
           "name": "stake_mint",
@@ -487,7 +581,7 @@
     {
       "name": "claim_creator_cut",
       "docs": [
-        "The winning circle's creator claims their \u03ba cut of the leftover pot."
+        "The winning circle's creator claims their κ cut of the leftover pot."
       ],
       "discriminator": [
         54,
@@ -548,7 +642,48 @@
           "name": "winning_circle"
         },
         {
+          "name": "player",
+          "docs": [
+            "The creator's own player record, the source of the delegate right. Only",
+            "needed when a delegate is claiming; omitting it keeps the owner path",
+            "working even after the player account has been closed for rent."
+          ],
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  108,
+                  97,
+                  121,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game"
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              }
+            ]
+          }
+        },
+        {
           "name": "owner",
+          "relations": [
+            "player"
+          ]
+        },
+        {
+          "name": "actor",
+          "docs": [
+            "The key actually signing: the owner itself, or its delegate."
+          ],
           "writable": true,
           "signer": true
         },
@@ -664,11 +799,17 @@
         },
         {
           "name": "owner",
-          "writable": true,
-          "signer": true,
           "relations": [
             "player"
           ]
+        },
+        {
+          "name": "actor",
+          "docs": [
+            "The key actually signing: the owner itself, or its delegate."
+          ],
+          "writable": true,
+          "signer": true
         },
         {
           "name": "stake_mint",
@@ -785,11 +926,17 @@
         },
         {
           "name": "owner",
-          "writable": true,
-          "signer": true,
           "relations": [
             "player"
           ]
+        },
+        {
+          "name": "actor",
+          "docs": [
+            "The key actually signing: the owner itself, or its delegate."
+          ],
+          "writable": true,
+          "signer": true
         },
         {
           "name": "stake_mint",
@@ -819,7 +966,7 @@
       "docs": [
         "Close a Circle account once every player is closed; rent returns to the",
         "circle's creator. Closing the WINNING circle before its creator claimed",
-        "\u03ba requires the creator's signature (an explicit forfeit of the cut)."
+        "κ requires the creator's signature (an explicit forfeit of the cut)."
       ],
       "discriminator": [
         249,
@@ -1015,7 +1162,7 @@
         "Close a Player account; its rent returns to the player's wallet.",
         "Permissionless once the player has nothing left to claim. If they still",
         "have an unclaimed win (status Active) or an unclaimed skill share, only",
-        "the owner may close \u2014 their signature is an explicit forfeit."
+        "the owner may close, their signature is an explicit forfeit."
       ],
       "discriminator": [
         225,
@@ -1243,7 +1390,7 @@
       "name": "commit_move",
       "docs": [
         "Commit a hashed move for the current instance (hides stay/move under fog).",
-        "hash = keccak(target_circle \u2016 nonce_le \u2016 owner \u2016 game \u2016 instance_le)."
+        "hash = keccak(target_circle ‖ nonce_le ‖ owner ‖ game ‖ instance_le)."
       ],
       "discriminator": [
         27,
@@ -1306,10 +1453,17 @@
         },
         {
           "name": "owner",
-          "signer": true,
           "relations": [
             "player"
           ]
+        },
+        {
+          "name": "actor",
+          "docs": [
+            "The key actually signing: the owner itself, or its delegate."
+          ],
+          "writable": true,
+          "signer": true
         }
       ],
       "args": [
@@ -1328,7 +1482,7 @@
       "name": "commit_prediction",
       "docs": [
         "Commit a hashed prediction of WHICH circle dies this instance.",
-        "hash = keccak(predicted_circle \u2016 nonce_le \u2016 owner \u2016 game \u2016 instance_le)."
+        "hash = keccak(predicted_circle ‖ nonce_le ‖ owner ‖ game ‖ instance_le)."
       ],
       "discriminator": [
         92,
@@ -1391,10 +1545,17 @@
         },
         {
           "name": "owner",
-          "signer": true,
           "relations": [
             "player"
           ]
+        },
+        {
+          "name": "actor",
+          "docs": [
+            "The key actually signing: the owner itself, or its delegate."
+          ],
+          "writable": true,
+          "signer": true
         }
       ],
       "args": [
@@ -1519,9 +1680,44 @@
           }
         },
         {
-          "name": "owner",
+          "name": "owner"
+        },
+        {
+          "name": "payer",
+          "docs": [
+            "Funds the stake and the rent. Equals `owner` for self-play; for relayed",
+            "play it is a relayer from the allow-list below."
+          ],
           "writable": true,
           "signer": true
+        },
+        {
+          "name": "relayer",
+          "docs": [
+            "Required only when `payer != owner`: proof the payer is an allowed",
+            "relayer, so nobody can squat another key's player PDA."
+          ],
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  108,
+                  97,
+                  121,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "payer"
+              }
+            ]
+          }
         },
         {
           "name": "stake_mint",
@@ -1530,9 +1726,9 @@
           ]
         },
         {
-          "name": "owner_token",
+          "name": "payer_token",
           "docs": [
-            "the caller's token account for that mint"
+            "the payer's token account for that mint; the stake comes out of here"
           ],
           "writable": true
         },
@@ -1913,7 +2109,7 @@
         "the 50% lock (`instance < lock_instance`); frozen from the lock instance",
         "onward. The strict bound leaves no instance where joins are open at the",
         "same time the post-lock insane roll (armed at `instance >= lock_instance`)",
-        "is computable \u2014 so the jackpot outcome can never be targeted at deposit."
+        "is computable, so the jackpot outcome can never be targeted at deposit."
       ],
       "discriminator": [
         231,
@@ -2020,9 +2216,44 @@
           }
         },
         {
-          "name": "owner",
+          "name": "owner"
+        },
+        {
+          "name": "payer",
+          "docs": [
+            "Funds the stake and the rent. Equals `owner` for self-play; for relayed",
+            "play it is a relayer from the allow-list below."
+          ],
           "writable": true,
           "signer": true
+        },
+        {
+          "name": "relayer",
+          "docs": [
+            "Required only when `payer != owner`: proof the payer is an allowed",
+            "relayer, so nobody can squat another key's player PDA."
+          ],
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  108,
+                  97,
+                  121,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "payer"
+              }
+            ]
+          }
         },
         {
           "name": "stake_mint",
@@ -2031,9 +2262,9 @@
           ]
         },
         {
-          "name": "owner_token",
+          "name": "payer_token",
           "docs": [
-            "the caller's token account for that mint"
+            "the payer's token account for that mint; the stake comes out of here"
           ],
           "writable": true
         },
@@ -2126,10 +2357,17 @@
         },
         {
           "name": "owner",
-          "signer": true,
           "relations": [
             "player"
           ]
+        },
+        {
+          "name": "actor",
+          "docs": [
+            "The key actually signing: the owner itself, or its delegate."
+          ],
+          "writable": true,
+          "signer": true
         }
       ],
       "args": [
@@ -2214,10 +2452,17 @@
         },
         {
           "name": "owner",
-          "signer": true,
           "relations": [
             "player"
           ]
+        },
+        {
+          "name": "actor",
+          "docs": [
+            "The key actually signing: the owner itself, or its delegate."
+          ],
+          "writable": true,
+          "signer": true
         }
       ],
       "args": [
@@ -2299,10 +2544,17 @@
         },
         {
           "name": "owner",
-          "signer": true,
           "relations": [
             "player"
           ]
+        },
+        {
+          "name": "actor",
+          "docs": [
+            "The key actually signing: the owner itself, or its delegate."
+          ],
+          "writable": true,
+          "signer": true
         }
       ],
       "args": [
@@ -2323,7 +2575,8 @@
         "pool is injected into this game's leftover pot (and the pool resets).",
         "Revealed after the 50% lock so it can't be targeted at deposit time.",
         "",
-        "NOTE: placeholder randomness (slot/clock hash) \u2014 swap in VRF before mainnet."
+        "Same randomness seam as the death roll: a settled Switchboard value when supplied,",
+        "the pre-committed slot hash otherwise, and `require_vrf` forbids the fallback."
       ],
       "discriminator": [
         63,
@@ -2477,12 +2730,13 @@
       "name": "select_death",
       "docs": [
         "Permissionless crank: end the reveal window and SELECT the dying circle.",
-        "Pass every alive Circle as a remaining_account. With prob \u03b5 a uniformly",
+        "Pass every alive Circle as a remaining_account. With prob ε a uniformly",
         "random circle dies (FATE STRIKE); otherwise the FEWEST-players circle",
-        "dies (tie \u2192 least stake \u2192 pseudo-random). Stores the doomed id; the",
+        "dies (tie → least stake → pseudo-random). Stores the doomed id; the",
         "mutation happens in execute_death.",
         "",
-        "NOTE: randomness here is a placeholder slot/clock hash \u2014 a later milestone",
+        "Randomness comes from a settled Switchboard value when one is supplied, and",
+        "otherwise from the slot hash the game committed to in advance. `require_vrf`",
         "swaps in a real VRF before mainnet."
       ],
       "discriminator": [
@@ -2534,6 +2788,87 @@
         }
       ],
       "args": []
+    },
+    {
+      "name": "set_delegate",
+      "docs": [
+        "Owner-only: hand acting rights to another key, or take them back by",
+        "passing the owner's own key. Independent of the relayer allow-list, an",
+        "agent that later gets its own signer can always cut the relayer out."
+      ],
+      "discriminator": [
+        242,
+        30,
+        46,
+        76,
+        108,
+        235,
+        128,
+        181
+      ],
+      "accounts": [
+        {
+          "name": "game",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  97,
+                  109,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game.game_id",
+                "account": "Game"
+              }
+            ]
+          }
+        },
+        {
+          "name": "player",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  108,
+                  97,
+                  121,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game"
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "owner",
+          "signer": true,
+          "relations": [
+            "player"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "delegate",
+          "type": "pubkey"
+        }
+      ]
     },
     {
       "name": "start_game",
@@ -2687,6 +3022,19 @@
         164,
         247,
         6
+      ]
+    },
+    {
+      "name": "AllowedRelayer",
+      "discriminator": [
+        39,
+        150,
+        48,
+        39,
+        162,
+        25,
+        83,
+        60
       ]
     },
     {
@@ -2919,6 +3267,31 @@
       }
     },
     {
+      "name": "AllowedRelayer",
+      "docs": [
+        "Presence of this account (with enabled = true) is what lets one key open or",
+        "join a comb *on behalf of* another. Without it, staking for someone else is",
+        "refused outright, so nobody can squat an agent's player PDA."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "relayer",
+            "type": "pubkey"
+          },
+          {
+            "name": "enabled",
+            "type": "bool"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
       "name": "Circle",
       "type": {
         "kind": "struct",
@@ -3092,7 +3465,7 @@
           {
             "name": "creator_cut_paid",
             "docs": [
-              "set once the winning circle's creator has claimed \u03ba."
+              "set once the winning circle's creator has claimed κ."
             ],
             "type": "bool"
           },
@@ -3215,6 +3588,16 @@
           },
           {
             "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "delegate",
+            "docs": [
+              "May act for this player without holding its key: commit, reveal, predict",
+              "and settle. Equals `owner` for self-play; for relayed play it is the",
+              "allowed relayer that opened the comb. It can never redirect funds, every",
+              "payout account is bound to `owner`."
+            ],
             "type": "pubkey"
           },
           {
