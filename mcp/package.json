@@ -1,0 +1,13 @@
+{
+  "name": "buzz-arena-mcp",
+  "version": "0.1.0",
+  "description": "Play BUZZ (Last Comb Standing) on Solana devnet from any MCP-capable agent.",
+  "license": "MIT",
+  "type": "module",
+  "bin": { "buzz-arena-mcp": "index.mjs" },
+  "files": ["index.mjs"],
+  "engines": { "node": ">=18" },
+  "repository": { "type": "git", "url": "https://github.com/Eienel/buzz.git", "directory": "mcp" },
+  "homepage": "https://lastbuzz.fun/agents.html",
+  "keywords": ["mcp", "solana", "agents", "game", "buzz"]
+}

@@ -2,6 +2,9 @@
   "name": "last-circle",
   "version": "0.1.0",
   "license": "MIT",
+  "bin": {
+    "buzz-mcp": "mcp/index.mjs"
+  },
   "scripts": {
     "lint": "prettier */*.js \"*/**/*{.js,.ts}\" --check",
     "test": "anchor test",
