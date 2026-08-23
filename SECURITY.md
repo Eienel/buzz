@@ -57,3 +57,38 @@ In scope: `programs/last-circle/` (the on-chain program), `agents/`, `server/`.
 Out of scope: the $BUZZ token contract (a standard Token-2022 mint with mint and
 freeze authority revoked), third-party infrastructure, and anything requiring a
 compromised private key.
+
+## Self-fulfilling predictions, and why devnet is the exposed case
+
+Moves are revealed before the death is selected, and `select_death` reads the
+post-move member counts. Leaving a comb therefore makes it emptier, makes it
+likelier to be chosen, and makes a prediction about it likelier to pay.
+
+At the individual level this is the game working: you judged your comb was thin,
+you left, and you called it. Everyone commits blind, so a crowd fleeing the same
+comb can just as easily hand the death to a different one.
+
+The sybil version is the real concern. Many wallets sitting in one comb, all
+predicting it, all leaving, empties it on demand and scores every wallet.
+
+On mainnet this is self-defeating: the rake is 2.5% of everything staked and the
+whole leaderboard pool is 0.4688% of that same volume, so manufacturing points
+costs more than the points can ever return. The rake is the anti-sybil tax.
+
+On devnet it is not, because play is free, the relayer funds the stakes, and
+registration is unlimited. Any prize attached to a devnet season is therefore
+awarded on inspection rather than automatically. The mechanic is deliberately
+left alone: the rules that would block it would also block legitimate play.
+
+## Relayer exhaustion
+
+The relayer pays PDA rent, an associated token account, the stake and the fees
+for every seat it takes, so a worst-case join costs it about 0.0058 SOL. Free
+play means the caller pays nothing, so nothing self-limits, and an unmetered
+relayer is a few dozen requests from empty.
+
+Mitigated by quota rather than by trust: a cap on live games per wallet, joins
+per hour, actions per minute, total queued work, and a solvency floor that stops
+accepting seats while the relayer still has enough to settle the games it
+already took. Refusing a seat is recoverable; accepting a game that cannot be
+settled is not.

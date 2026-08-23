@@ -17,6 +17,7 @@ import { spawn } from "node:child_process";
 import { Connection, PublicKey } from "@solana/web3.js";
 import { makeArena, PRICE, challenge, registerAgent, authed } from "./arena-api.mjs";
 import { makeAutoplay } from "./autoplay.mjs";
+import { makeLimiter, LIMITS } from "./limits.mjs";
 import { verifyPayment } from "./x402.mjs";
 import { loadRelayer, startDrain } from "./relayer.mjs";
 import { DATA_DIR } from "./keypair.mjs";
@@ -156,6 +157,8 @@ async function poll(){
                  live:games.filter(g=>g.status===0||g.status===1), finished:history.length,
                  recent: history.slice(0, 10) };
     autoplay.tick(snapshot);          // walk easy-mode intents through the phases
+    limiter.reconcile(games.filter(g=>g.status===0||g.status===1).map(g=>g.gameId));
+    pollRelayer();
   }catch(e){
     snapshot = { ...snapshot, ok:false, error:String(e.message).slice(0,120), updatedAt:Date.now() };
   }
@@ -177,6 +180,30 @@ const enqueue = (a) => {
   actions.set(id, { ...a, id, state: "queued", at: Date.now() });
   return id;
 };
+const queuedCount = () => {
+  let n = 0;
+  for (const a of actions.values()) if (a.state === "queued") n++;
+  return n;
+};
+// Finished actions were kept forever, which is a slow leak on a long-running
+// service. An hour is long enough for any agent to have polled its result.
+setInterval(() => {
+  const cut = Date.now() - 3_600_000;
+  for (const [id, a] of actions) {
+    if (a.state !== "queued" && a.state !== "relaying" && (a.settledAt ?? a.at) < cut) actions.delete(id);
+  }
+}, 300_000);
+
+const limiter = makeLimiter();
+// The relayer's own balance, refreshed alongside the state poll. Joins stop
+// before it runs dry rather than after, because a game it cannot settle is
+// worse than a seat it refused.
+let relayerSol = null;
+async function pollRelayer(){
+  if(!relayer) return;
+  try { relayerSol = (await connection.getBalance(relayer.pubkey)) / 1e9; }
+  catch { /* leave the last reading */ }
+}
 const arena = makeArena({ snapshot: () => snapshot, enqueue });
 
 // Easy mode: agents declare an intent, this walks it through commit and reveal
@@ -239,13 +266,16 @@ createServer(async (req,res)=>{
       if(v != null && (!Number.isInteger(v) || v < 0 || v > 11))
         return send(res, 400, { error: `${k} must be a comb id 0-11` });
     }
+    const gate = limiter.check("play", body.agentWallet, gameId, { queued: queuedCount(), relayerSol });
+    if(!gate.ok) return send(res, 429, { error: gate.error, retryAfter: gate.retryAfter ?? null });
     const plan = autoplay.plan({ agentWallet: body.agentWallet, gameId, move, predict });
     return send(res, 202, { accepted: true, gameId, move: plan.move, predict: plan.predict,
       note: "committed and revealed for you each instance until you change it or the game ends" });
   }
   if(p === "/api/agent/relayer"){
-    return relayer ? send(res, 200, await relayer.ready())
-                   : send(res, 503, { error: "no relayer configured" });
+    if(!relayer) return send(res, 503, { error: "no relayer configured" });
+    return send(res, 200, { ...await relayer.ready(), sol: relayerSol,
+                            queued: queuedCount(), limits: LIMITS, ...limiter.stats() });
   }
   if(p.startsWith("/api/agent/") && ROUTES.has(routeName(p.split("/").pop()))){
     const kind = routeName(p.split("/").pop());
@@ -262,6 +292,9 @@ createServer(async (req,res)=>{
     // could act as anyone else's wallet and wreck their record.
     const who = authed(body);
     if(!who.ok) return send(res, 401, { error: who.error });
+    const gate = limiter.check(kind, body.agentWallet, body.gameId,
+      { queued: queuedCount(), relayerSol });
+    if(!gate.ok) return send(res, 429, { error: gate.error, retryAfter: gate.retryAfter ?? null });
     if(price > 0){
       const v = await verifyPayment(connection, paid, { usd: price,
         payTo: process.env.ARENA_PAY_TO, usdcMint: process.env.USDC_MINT ?? USDC_DEFAULT,
