@@ -80,6 +80,9 @@
   .comb .b{font:11px/1 var(--mono);color:var(--dim)}
   .comb[disabled]{cursor:not-allowed;opacity:.35}
   .comb.mine .n{color:var(--honey)}
+  /* selection tints the cell, so the label has to go back to full contrast:
+     honey-on-honey was unreadable on the comb a player both owns and picks */
+  .comb.sel .n{color:var(--text)}
   .comb.sel .b{color:var(--gold)}
 
   .note{font-size:13px;color:var(--dim);margin-top:12px}
@@ -252,7 +255,7 @@ function combBtn(c, opts={}){
   if(opts.disabled) b.disabled=true;
   const stroke = c.alive ? (BAND[c.band]||"#6d5f4c") : "#4a2430";
   b.innerHTML =
-    `<svg viewBox="0 0 100 96"><path d="${HEX}" fill="${opts.sel?"rgba(255,179,0,.13)":"rgba(255,255,255,.02)"}"
+    `<svg viewBox="0 0 100 96"><path d="${HEX}" fill="${opts.sel?"rgba(255,179,0,.10)":"rgba(255,255,255,.02)"}"
        stroke="${opts.sel?"#ffd280":stroke}" stroke-width="${opts.sel?5:3}" stroke-linejoin="round"/></svg>
      <span class="lab"><span class="n">comb ${c.id}</span>
      <span class="b">${c.alive ? (opts.mine?"you":c.band) : "dead"}</span></span>`;
