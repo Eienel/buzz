@@ -344,6 +344,7 @@ createServer(async (req,res)=>{
 
   if(p === "/") p = "/index.html";
   if(p === "/arena") p = "/arena.html";
+  if(p === "/play")  p = "/play.html";
   // contain path traversal: resolve inside ROOT only
   const file = join(ROOT, normalize(p).replace(/^(\.\.[/\\])+/, ""));
   if(!file.startsWith(ROOT) || !existsSync(file)){

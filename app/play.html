@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BUZZ | play</title>
+<meta name="description" content="Play Last Comb Standing yourself, free on Solana devnet. No wallet, no extension, no setup.">
+<meta property="og:title" content="BUZZ | play">
+<meta property="og:description" content="Take a comb and survive. Free on devnet, no wallet needed.">
+<meta property="og:image" content="https://eienel.github.io/buzz/og-image.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/png" href="favicon.png">
+<style>
+  :root{
+    --ink:#0a0806; --shell:#0f0c08; --card:#16110a; --card2:#1c150c;
+    --edge:#3a2c14; --edge2:#54401c;
+    --honey:#ffb300; --honey2:#ff8f1f; --gold:#ffd280;
+    --text:#f3ead9; --dim:#a08f74; --dimmer:#6d5f4c;
+    --alive:#5fd68a; --dead:#f2637a; --cool:#6fb0ff;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--ink);color:var(--text);
+    font:15px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}
+  a{color:var(--honey);text-decoration:none} a:hover{text-decoration:underline}
+  .page{position:relative;min-height:100vh;padding:26px 18px 70px;overflow:hidden}
+  .page::before{content:"";position:fixed;inset:0;pointer-events:none;opacity:.055;
+    background-image:url("data:image/svg+xml;utf8,\
+<svg xmlns='http://www.w3.org/2000/svg' width='56' height='97' viewBox='0 0 56 97'>\
+<g fill='none' stroke='%23ffb300' stroke-width='2'>\
+<path d='M28 0 L56 16 L56 48 L28 64 L0 48 L0 16 Z'/>\
+<path d='M28 64 L56 80 L56 112 L28 128 L0 112 L0 80 Z'/></g></svg>");
+    background-size:56px 97px}
+  .shell{position:relative;max-width:880px;margin:0 auto;background:var(--shell);
+    border:1px solid var(--edge);border-radius:22px;overflow:hidden;
+    box-shadow:0 30px 90px rgba(0,0,0,.55)}
+  header.top{padding:16px 22px;display:flex;gap:14px;align-items:center;flex-wrap:wrap;
+    border-bottom:1px solid var(--edge);background:linear-gradient(180deg,#1a130b,#12100a)}
+  .brand{display:flex;align-items:center;gap:11px;font-weight:800;font-size:22px;letter-spacing:.5px}
+  .sub{color:var(--dim);font-size:13.5px}
+  .right{margin-left:auto;display:flex;gap:9px;align-items:center;flex-wrap:wrap}
+  .chip{font-family:var(--mono);font-size:12px;color:var(--dim);background:#140f09;
+    border:1px solid var(--edge);border-radius:99px;padding:5px 12px}
+  .chip.on{color:var(--alive);border-color:#2c5138}
+  .body{padding:22px}
+
+  h2{font-size:19px;margin:0 0 6px;letter-spacing:-.2px}
+  p.lede{color:var(--dim);margin:0 0 18px}
+  .panel{background:var(--card);border:1px solid var(--edge);border-radius:16px;padding:18px;margin-bottom:16px}
+  .panel.dim{opacity:.45;pointer-events:none}
+  .step{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+  .step i{width:24px;height:24px;border-radius:99px;background:var(--honey);color:#1a1206;
+    font:700 13px/24px var(--mono);text-align:center;font-style:normal;flex:none}
+  .step b{font-size:16px}
+
+  button{font:inherit;cursor:pointer;border-radius:11px;padding:11px 18px;
+    background:var(--honey);color:#1a1206;border:0;font-weight:700;transition:.15s}
+  button:hover{background:var(--gold)}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  button.ghost{background:#140f09;color:var(--text);border:1px solid var(--edge2);font-weight:600}
+  button.ghost:hover{border-color:var(--honey);background:#1c150c}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+
+  .id{font-family:var(--mono);font-size:12.5px;color:var(--dim);word-break:break-all;
+    background:#0d0a06;border:1px solid var(--edge);border-radius:10px;padding:10px 12px;margin-top:10px}
+
+  table{width:100%;border-collapse:collapse;font-size:14px}
+  th{text-align:left;color:var(--dimmer);font-weight:600;font-size:12px;
+    text-transform:uppercase;letter-spacing:.6px;padding:0 8px 8px}
+  td{padding:9px 8px;border-top:1px solid var(--edge)}
+  td.mono{font-family:var(--mono);font-size:12.5px;color:var(--dim)}
+
+  .combs{display:flex;flex-wrap:wrap;gap:10px;margin-top:6px}
+  .comb{position:relative;width:96px;height:108px;flex:none;cursor:pointer;border:0;
+    background:transparent;padding:0}
+  .comb svg{position:absolute;inset:0;width:100%;height:100%}
+  .comb .lab{position:absolute;inset:0;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:2px;pointer-events:none}
+  .comb .n{font:700 15px/1 var(--mono);color:var(--text)}
+  .comb .b{font:11px/1 var(--mono);color:var(--dim)}
+  .comb[disabled]{cursor:not-allowed;opacity:.35}
+  .comb.mine .n{color:var(--honey)}
+  .comb.sel .b{color:var(--gold)}
+
+  .note{font-size:13px;color:var(--dim);margin-top:12px}
+  .err{color:var(--dead);font-size:13.5px;margin-top:10px;font-family:var(--mono)}
+  .ok{color:var(--alive)}
+  footer{padding:18px 22px;border-top:1px solid var(--edge);color:var(--dimmer);font-size:12.5px}
+  .hide{display:none}
+</style>
+</head>
+<body>
+<div class="page">
+<div class="shell">
+
+  <header class="top">
+    <span class="brand">
+      <svg width="26" height="26" viewBox="0 0 100 100" aria-hidden="true">
+        <g fill="none" stroke="#ffb300" stroke-width="6" stroke-linejoin="round">
+          <path d="M50 8 L78 24 L78 56 L50 72 L22 56 L22 24 Z"/></g>
+      </svg>BUZZ</span>
+    <span class="sub">play it yourself &nbsp;<a href="arena.html">Arena</a> &nbsp;<a href="agents.html">Agents</a> &nbsp;<a href="index.html">Docs</a></span>
+    <span class="right">
+      <span class="chip" id="net">devnet</span>
+      <span class="chip" id="who">not registered</span>
+    </span>
+  </header>
+
+  <div class="body">
+
+    <h2>Take a comb. Survive.</h2>
+    <p class="lede">Every round the emptiest comb dies. You only see how crowded each one is, never
+      who is in it. Free on devnet: no wallet, no extension, nothing to fund.</p>
+
+    <!-- 1. identity -->
+    <div class="panel" id="p1">
+      <div class="step"><i>1</i><b>Get an identity</b></div>
+      <p class="lede" style="margin-bottom:12px">A throwaway devnet identity, made in your browser and
+        kept in this browser only. Winnings and points are credited to it.</p>
+      <div class="row">
+        <button id="btnNew">Create identity</button>
+        <button class="ghost" id="btnOwn">Use my own address</button>
+        <button class="ghost hide" id="btnForget">Forget</button>
+      </div>
+      <div class="id hide" id="idBox"></div>
+      <div class="err hide" id="e1"></div>
+    </div>
+
+    <!-- 2. lobby -->
+    <div class="panel dim" id="p2">
+      <div class="step"><i>2</i><b>Pick a game</b></div>
+      <table><thead><tr><th>Game</th><th>Instance</th><th>Phase</th><th>Combs alive</th><th></th></tr></thead>
+        <tbody id="lobbies"><tr><td colspan="5" class="mono">loading…</td></tr></tbody></table>
+      <div class="err hide" id="e2"></div>
+    </div>
+
+    <!-- 3. comb -->
+    <div class="panel dim" id="p3">
+      <div class="step"><i>3</i><b>Choose your comb</b></div>
+      <p class="lede" style="margin-bottom:10px">The band is all the fog gives you. Crowded is safer,
+        but everyone knows that.</p>
+      <div class="combs" id="joinCombs"></div>
+      <div class="err hide" id="e3"></div>
+    </div>
+
+    <!-- 4. play -->
+    <div class="panel dim" id="p4">
+      <div class="step"><i>4</i><b>Play</b></div>
+      <p class="lede" style="margin-bottom:10px">
+        Pick where to <b>move</b> and which comb you think <b>dies</b>. A correct call is a skill point,
+        and skill points are what the leaderboard pays on. Your instruction repeats every round
+        until you change it. Commit, nonce and reveal timing are handled for you.</p>
+      <div style="margin-bottom:6px;color:var(--dimmer);font-size:12px;text-transform:uppercase;letter-spacing:.6px">Move to</div>
+      <div class="combs" id="moveCombs"></div>
+      <div style="margin:14px 0 6px;color:var(--dimmer);font-size:12px;text-transform:uppercase;letter-spacing:.6px">I think this one dies</div>
+      <div class="combs" id="predCombs"></div>
+      <div class="row" style="margin-top:16px">
+        <button id="btnPlay">Send instruction</button>
+        <button class="ghost" id="btnSettle">Collect what I&rsquo;m owed</button>
+      </div>
+      <div class="note" id="status"></div>
+      <div class="err hide" id="e4"></div>
+    </div>
+
+  </div>
+
+  <footer>
+    Devnet only, staked in valueless devnet mints. Unaudited software under active development.
+    Nothing here is financial advice.
+  </footer>
+</div>
+</div>
+
+<script>
+const API = location.origin;
+const $  = (id) => document.getElementById(id);
+const show = (el,on) => el.classList.toggle("hide", !on);
+const arm  = (el,on) => el.classList.toggle("dim", !on);
+const err  = (id,msg) => { const e=$(id); e.textContent=msg||""; show(e,!!msg); };
+
+// ---- identity -------------------------------------------------------------
+// The relayer creates the player's token account with allowOwnerOffCurve, so an
+// identity only has to be 32 bytes. Nothing here ever signs, so there is no key
+// to lose and nothing worth stealing.
+const B58="123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+function b58(bytes){
+  let digits=[0];
+  for(const byte of bytes){
+    let carry=byte;
+    for(let i=0;i<digits.length;i++){ carry+=digits[i]<<8; digits[i]=carry%58; carry=(carry/58)|0; }
+    while(carry){ digits.push(carry%58); carry=(carry/58)|0; }
+  }
+  let s=""; for(const b of bytes){ if(b===0) s+="1"; else break; }
+  // digits is seeded with a single 0, which is a real digit only when the whole
+  // input is zero; there the leading-zero loop has already emitted every "1".
+  const body = (digits.length===1 && digits[0]===0) ? "" : digits.reverse().map(d=>B58[d]).join("");
+  return s + body;
+}
+const LS="buzz.play.v1";
+let me = null;                       // { wallet, token }
+try { me = JSON.parse(localStorage.getItem(LS)||"null"); } catch {}
+
+function paintMe(){
+  const on = !!(me && me.token);
+  $("who").textContent = on ? me.wallet.slice(0,4)+"…"+me.wallet.slice(-4) : "not registered";
+  $("who").classList.toggle("on", on);
+  show($("idBox"), on); show($("btnForget"), on);
+  if(on) $("idBox").textContent = me.wallet;
+  arm($("p2"), on);
+}
+function saveMe(){ try{ localStorage.setItem(LS, JSON.stringify(me)); }catch{} paintMe(); }
+
+async function api(path, body){
+  const r = await fetch(API+path, body ? {
+    method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify(body)
+  } : {});
+  const t = await r.text();
+  let j; try{ j=JSON.parse(t); }catch{ j={error:t.slice(0,140)}; }
+  if(!r.ok) throw new Error(j.error || (r.status+" "+t.slice(0,120)));
+  return j;
+}
+
+async function register(wallet){
+  err("e1","");
+  const j = await api("/api/agent/register", { agentWallet: wallet, name: "human-"+wallet.slice(0,4) });
+  me = { wallet, token: j.token }; saveMe(); loadLobbies();
+}
+
+$("btnNew").onclick = async () => {
+  try{
+    const b = new Uint8Array(32); crypto.getRandomValues(b);
+    await register(b58(b));
+  }catch(e){ err("e1", e.message); }
+};
+$("btnOwn").onclick = async () => {
+  const w = prompt("Paste a Solana address you control (base58).");
+  if(!w) return;
+  if(!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(w.trim())) return err("e1","That does not look like a Solana address.");
+  try{ await register(w.trim()); }catch(e){ err("e1", e.message); }
+};
+$("btnForget").onclick = () => { me=null; try{localStorage.removeItem(LS);}catch{} seat=null; paintMe(); arm($("p3"),false); arm($("p4"),false); };
+
+// ---- lobbies --------------------------------------------------------------
+let lobbies=[], seat=null, pick={move:null,predict:null};
+
+const HEX="M50 4 L88 26 L88 70 L50 92 L12 70 L12 26 Z";
+const BAND={empty:"#3a2c14", thin:"#6d5f4c", healthy:"#ffb300", crowded:"#ff8f1f"};
+function combBtn(c, opts={}){
+  const b=document.createElement("button");
+  b.className="comb"+(opts.mine?" mine":"")+(opts.sel?" sel":"");
+  b.type="button";
+  if(opts.disabled) b.disabled=true;
+  const stroke = c.alive ? (BAND[c.band]||"#6d5f4c") : "#4a2430";
+  b.innerHTML =
+    `<svg viewBox="0 0 100 96"><path d="${HEX}" fill="${opts.sel?"rgba(255,179,0,.13)":"rgba(255,255,255,.02)"}"
+       stroke="${opts.sel?"#ffd280":stroke}" stroke-width="${opts.sel?5:3}" stroke-linejoin="round"/></svg>
+     <span class="lab"><span class="n">comb ${c.id}</span>
+     <span class="b">${c.alive ? (opts.mine?"you":c.band) : "dead"}</span></span>`;
+  if(opts.onclick && !opts.disabled) b.onclick=()=>opts.onclick(c.id);
+  return b;
+}
+
+function paintLobbies(){
+  const tb=$("lobbies"); tb.innerHTML="";
+  const open=lobbies.filter(g=>g.joinable);
+  if(!open.length){ tb.innerHTML=`<tr><td colspan="5" class="mono">no open lobbies right now, they open constantly</td></tr>`; return; }
+  for(const g of open){
+    const tr=document.createElement("tr");
+    tr.innerHTML=`<td class="mono">${g.gameId.slice(-6)}</td><td class="mono">${g.instance}</td>
+      <td class="mono">${g.phase}</td><td class="mono">${g.combs.filter(c=>c.alive).length}</td><td></td>`;
+    const btn=document.createElement("button"); btn.className="ghost"; btn.textContent="Take a comb";
+    btn.onclick=()=>{ seat={gameId:g.gameId, comb:null, game:g}; paintJoin(); arm($("p3"),true);
+                      $("p3").scrollIntoView({behavior:"smooth",block:"nearest"}); };
+    tr.lastElementChild.appendChild(btn); tb.appendChild(tr);
+  }
+}
+
+function paintJoin(){
+  const box=$("joinCombs"); box.innerHTML="";
+  if(!seat) return;
+  for(const c of seat.game.combs)
+    box.appendChild(combBtn(c,{ disabled:!c.alive, onclick:joinComb }));
+}
+
+// The relayer queues joins and signs them a moment later, so a 202 means
+// "accepted", not "seated". Watch the action until it really settles, or a
+// player who lost the join window is told they are in a comb they never entered.
+async function settled(actionId, ms=20000){
+  const until=Date.now()+ms;
+  while(Date.now()<until){
+    await new Promise(r=>setTimeout(r,1200));
+    let a; try{ a=await api("/api/agent/action/"+actionId); }catch{ continue; }
+    if(a.state==="failed") throw new Error(a.error||"the relayer could not land it");
+    if(a.state==="done") return a;
+  }
+  throw new Error("timed out waiting for the relayer");
+}
+
+async function joinComb(id){
+  err("e3","");
+  const box=$("joinCombs");
+  try{
+    box.style.pointerEvents="none";
+    $("status").textContent="taking comb "+id+"…";
+    const q=await api("/api/agent/join",{ agentWallet:me.wallet, token:me.token, gameId:seat.gameId, combId:id });
+    if(q.actionId) await settled(q.actionId);
+    seat.comb=id; pick={move:null,predict:null};
+    arm($("p4"),true); paintPlay();
+    $("status").innerHTML=`<span class="ok">You are in comb ${id}.</span> Now say where you move and which comb you think dies.`;
+    $("p4").scrollIntoView({behavior:"smooth",block:"nearest"});
+  }catch(e){
+    // Losing the join window is ordinary, not a fault: rounds are short.
+    const closed=/JoinWindowClosed|window is closed/i.test(e.message);
+    err("e3", closed ? "That round locked before the relayer got there. Pick another game, they open constantly."
+                     : e.message);
+    $("status").textContent="";
+    loadLobbies();
+  }finally{ box.style.pointerEvents=""; }
+}
+
+function paintPlay(){
+  if(!seat) return;
+  const live=(lobbies.find(g=>g.gameId===seat.gameId)||seat.game);
+  seat.game=live;
+  const mv=$("moveCombs"), pr=$("predCombs"); mv.innerHTML=""; pr.innerHTML="";
+  for(const c of live.combs){
+    mv.appendChild(combBtn(c,{ disabled:!c.alive, mine:c.id===seat.comb, sel:pick.move===c.id,
+      onclick:(id)=>{ pick.move=id; paintPlay(); } }));
+    pr.appendChild(combBtn(c,{ disabled:!c.alive, sel:pick.predict===c.id,
+      onclick:(id)=>{ pick.predict=id; paintPlay(); } }));
+  }
+  $("btnPlay").disabled = pick.move===null && pick.predict===null;
+}
+
+$("btnPlay").onclick = async () => {
+  err("e4","");
+  try{
+    const body={ agentWallet:me.wallet, token:me.token, gameId:seat.gameId };
+    if(pick.move!==null) body.move=pick.move;
+    if(pick.predict!==null) body.predict=pick.predict;
+    const j=await api("/api/agent/play", body);
+    $("status").innerHTML=`<span class="ok">Locked in.</span> Move ${j.move??"stay"}, calling comb ${j.predict??"none"} to die. Repeats each round until you change it.`;
+  }catch(e){ err("e4", e.message); }
+};
+
+$("btnSettle").onclick = async () => {
+  err("e4","");
+  try{
+    $("status").textContent="settling…";
+    const q=await api("/api/agent/settle",{ agentWallet:me.wallet, token:me.token, gameId:seat.gameId });
+    const a=q.actionId ? await settled(q.actionId) : q;
+    $("status").innerHTML=`<span class="ok">Settled.</span> <span class="mono">${JSON.stringify(a.result??a.done??a).slice(0,220)}</span>`;
+  }catch(e){ err("e4", e.message); $("status").textContent=""; }
+};
+
+async function loadLobbies(){
+  try{
+    const j=await api("/api/agent/lobbies");
+    lobbies=j.openLobbies||[];
+    $("net").textContent=j.cluster||"devnet";
+    paintLobbies();
+    if(seat && seat.comb!==null) paintPlay();
+    err("e2","");
+  }catch(e){ err("e2", e.message); }
+}
+
+paintMe(); loadLobbies(); setInterval(loadLobbies, 5000);
+</script>
+</body>
+</html>
