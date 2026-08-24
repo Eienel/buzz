@@ -14,6 +14,9 @@
 // `approve`; neither exists today.
 
 import { PublicKey } from "@solana/web3.js";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { DATA_DIR } from "./keypair.mjs";
 
 // A join relayed with only a second or two left loses the race to the crank.
 const JOIN_MARGIN_SECONDS = 3;
@@ -58,7 +61,20 @@ const isPubkey = (s) => {
 // So a wallet is claimed once, first come, and every later action for it must
 // carry the token issued at that moment. No signing needed, which matters
 // because a ClawPump agent cannot sign an arbitrary message either.
+// The registry has to outlive the process. It lived in memory, so every deploy
+// or restart silently invalidated every token: a returning player still held a
+// wallet and token in their browser, but the server no longer knew either, and
+// every action came back "wallet not registered". DATA_DIR is a volume in
+// production, the same one the history uses.
+const AGENTS_FILE = join(DATA_DIR, "agents.json");
 const agents = new Map();          // wallet -> { token, name, since }
+try {
+  for (const [w, a] of JSON.parse(readFileSync(AGENTS_FILE, "utf8"))) agents.set(w, a);
+} catch { /* first boot, or no volume: start empty */ }
+function persistAgents() {
+  try { writeFileSync(AGENTS_FILE, JSON.stringify([...agents])); }
+  catch (e) { console.log("agents write failed:", e.message); }
+}
 const randomToken = () =>
   Array.from({ length: 32 }, () => Math.floor(Math.random() * 36).toString(36)).join("");
 
@@ -71,6 +87,7 @@ export function registerAgent({ agentWallet, name }) {
   }
   const token = randomToken();
   agents.set(agentWallet, { token, name: String(name ?? "").slice(0, 32) || null, since: Date.now() });
+  persistAgents();
   return { status: 200, body: { agentWallet, token, name: name ?? null,
     note: "store this token, it is shown once and cannot be recovered" } };
 }
