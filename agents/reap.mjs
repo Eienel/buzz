@@ -27,13 +27,35 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const PAUSE = Number(process.env.PAUSE_MS ?? 400); // be gentle with the public RPC
 
 const before = await connection.getBalance(payer.publicKey);
+
+// Several generations of Game and Player have been deployed to devnet, and a
+// program upgrade never rewrites account data, so older accounts are still out
+// there at their original size. Anchor's .all() decodes the whole set eagerly
+// and throws on the first stale one, which took the whole reap down. Decode
+// per account and skip what does not fit the current layout: those belong to
+// games that predate this program and are not ours to close anyway.
+async function decodeAll(name) {
+  const disc = program.coder.accounts.memcmp(name).bytes;
+  const raw = await connection.getProgramAccounts(PID, {
+    filters: [{ memcmp: { offset: 0, bytes: disc } }],
+  });
+  const out = [];
+  let skipped = 0;
+  for (const { pubkey, account } of raw) {
+    try { out.push({ publicKey: pubkey, account: program.coder.accounts.decode(name, account.data) }); }
+    catch { skipped += 1; }
+  }
+  if (skipped) log(`  ${name}: skipped ${skipped} stale-layout account(s)`);
+  return out;
+}
+
 // ONE scan of each account type, then group locally, scanning per game
 // rate-limits the public RPC instantly.
-const games = await program.account.game.all();
+const games = await decodeAll("game");
 await sleep(PAUSE);
-const allPlayers = await program.account.player.all();
+const allPlayers = await decodeAll("player");
 await sleep(PAUSE);
-const allCircles = await program.account.circle.all();
+const allCircles = await decodeAll("circle");
 const settling = games.filter((g) => g.account.status.settling);
 log(`${games.length} game accounts on-chain, ${settling.length} in Settling, ` +
     `${allPlayers.length} players, ${allCircles.length} circles`);
@@ -68,5 +90,5 @@ for (const { publicKey: gamePda, account: g } of settling) {
 
 const after = await connection.getBalance(payer.publicKey);
 log(`rent reclaimed: ${((after - before) / LAMPORTS_PER_SOL).toFixed(4)} SOL`);
-const left = await program.account.game.all();
+const left = await decodeAll("game");
 log(`game accounts remaining: ${left.length}`);

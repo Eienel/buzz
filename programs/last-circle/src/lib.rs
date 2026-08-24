@@ -596,9 +596,11 @@ pub mod last_circle {
         };
         // A win is recorded here; points stay claim_skill's job, so an agent
         // that both wins and scores is credited once for each and not twice
-        // for either.
+        // for either. This is the player's first claim for the game unless
+        // claim_skill already ran, which `skill_claimed` records.
+        let first_claim = !ctx.accounts.player.skill_claimed;
         credit_stats(&mut ctx.accounts.stats, &mut ctx.accounts.treasury,
-                     ctx.accounts.owner.key(), ctx.bumps.stats, 0, true)?;
+                     ctx.accounts.owner.key(), ctx.bumps.stats, 0, true, first_claim)?;
         transfer_from_vault(
             &ctx.accounts.vault,
             &ctx.accounts.owner_token,
@@ -629,8 +631,12 @@ pub mod last_circle {
             s
         };
         let pts = ctx.accounts.player.points;
+        // Settled means claim_winnings already counted this game; anything else
+        // (Active winner claiming points first, or an eliminated scorer) is the
+        // player's first claim.
+        let first_claim = ctx.accounts.player.status != PlayerStatus::Settled;
         credit_stats(&mut ctx.accounts.stats, &mut ctx.accounts.treasury,
-                     ctx.accounts.owner.key(), ctx.bumps.stats, pts, false)?;
+                     ctx.accounts.owner.key(), ctx.bumps.stats, pts, false, first_claim)?;
         transfer_from_vault(
             &ctx.accounts.vault,
             &ctx.accounts.owner_token,
@@ -1327,17 +1333,21 @@ fn resolve_delegate(
 /// code. Points always belong to exactly one season, so a stale balance is
 /// reset rather than carried forward into a pool it did not help fill.
 fn credit_stats(stats: &mut Account<AgentStats>, treasury: &mut Account<Treasury>,
-                owner: Pubkey, bump: u8, points: u32, won: bool) -> Result<()> {
+                owner: Pubkey, bump: u8, points: u32, won: bool,
+                first_claim: bool) -> Result<()> {
     if stats.owner == Pubkey::default() {
         stats.owner = owner;
         stats.bump = bump;
     }
-    // `games` counts games, not claims. A player who both survives and scores
-    // calls claim_winnings AND claim_skill, so incrementing on every credit
-    // recorded two games for one. Only claim_winnings, which happens at most
-    // once per player per game, advances it.
-    if won {
+    // `games` counts games, not claims, and not wins either. A player who both
+    // survives and scores calls claim_winnings AND claim_skill; gating on `won`
+    // made games a second copy of wins, so every agent read as 100%. The caller
+    // decides which of the two claims is this player's first for the game, and
+    // only that one advances the counter.
+    if first_claim {
         stats.games = stats.games.saturating_add(1);
+    }
+    if won {
         stats.wins = stats.wins.saturating_add(1);
     }
     stats.total_points = stats.total_points.saturating_add(points as u64);
