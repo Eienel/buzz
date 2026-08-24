@@ -85,6 +85,9 @@
   .comb.sel .n{color:var(--text)}
   .comb.sel .b{color:var(--gold)}
 
+  .round{margin-top:14px;font-family:var(--mono);font-size:12.5px;color:var(--dim)}
+  .round b{color:var(--text);font-weight:600}
+  .round.over{color:var(--gold)}
   .note{font-size:13px;color:var(--dim);margin-top:12px}
   .err{color:var(--dead);font-size:13.5px;margin-top:10px;font-family:var(--mono)}
   .ok{color:var(--alive)}
@@ -157,6 +160,7 @@
       <div class="combs" id="moveCombs"></div>
       <div style="margin:14px 0 6px;color:var(--dimmer);font-size:12px;text-transform:uppercase;letter-spacing:.6px">I think this one dies</div>
       <div class="combs" id="predCombs"></div>
+      <div class="round" id="round"></div>
       <div class="row" style="margin-top:16px">
         <button id="btnPlay">Send instruction</button>
         <button class="ghost" id="btnSettle">Collect what I&rsquo;m owed</button>
@@ -263,7 +267,13 @@ function combBtn(c, opts={}){
   return b;
 }
 
+// Repainting on every poll rips the row out from under a cursor mid-click, so
+// only rebuild when the joinable set actually changes.
+let lobbySig="";
 function paintLobbies(){
+  const sig=lobbies.filter(g=>g.joinable).map(g=>g.gameId+":"+g.combs.filter(c=>c.alive).length).join(",");
+  if(sig===lobbySig) return;
+  lobbySig=sig;
   const tb=$("lobbies"); tb.innerHTML="";
   const open=lobbies.filter(g=>g.joinable);
   if(!open.length){ tb.innerHTML=`<tr><td colspan="5" class="mono">no open lobbies right now, they open constantly</td></tr>`; return; }
@@ -323,7 +333,17 @@ async function joinComb(id){
 
 function paintPlay(){
   if(!seat) return;
-  const live=(lobbies.find(g=>g.gameId===seat.gameId)||seat.game);
+  // A game drops out of openLobbies the moment it stops running, so its absence
+  // is how a seated player learns the round is over and there is something to
+  // collect. Without this the board simply froze and said nothing.
+  const live=lobbies.find(g=>g.gameId===seat.gameId);
+  const over=!live;
+  const r=$("round");
+  r.classList.toggle("over", over);
+  r.innerHTML = over
+    ? `This game has finished. Hit <b>Collect what I&rsquo;m owed</b> to take your refund, winnings and points.`
+    : `Round <b>${live.instance}</b> &middot; ${live.phase} &middot; <b>${live.combs.filter(c=>c.alive).length}</b> combs alive`;
+  if(over){ $("btnPlay").disabled=true; return; }
   seat.game=live;
   const mv=$("moveCombs"), pr=$("predCombs"); mv.innerHTML=""; pr.innerHTML="";
   for(const c of live.combs){
