@@ -24,8 +24,9 @@ const STRANDED_AFTER = Number(process.env.STRANDED_AFTER ?? 120);
 // Mirrors MIN_CIRCLES in lib.rs: below this, start_game refuses.
 const MIN_CIRCLES = 4;          // mirrors LOBBY_TIMEOUT_SECONDS in lib.rs
 
-export function makeCranker({ program, payer }) {
+export function makeCranker({ program, payer, starter }) {
   const PID = program.programId;
+  const warnedAuth = new Set();
   const pda = (...s) => PublicKey.findProgramAddressSync(s, PID)[0];
   const gamePda = (id) => pda(Buffer.from("game"), new BN(id).toArrayLike(Buffer, "le", 8));
   const combPda = (g, i) => pda(Buffer.from("circle"), g.toBuffer(), Buffer.from([i]));
@@ -51,17 +52,31 @@ export function makeCranker({ program, payer }) {
           // key the swarm creates games with, so it is that game's authority
           // and can start it.
           if (g.aliveCircles >= MIN_CIRCLES && now >= g.createdAt + STRANDED_AFTER) {
+            // start_game is has_one = authority, so only the key that created
+            // the game can start it. The cranker signs as the relayer, and the
+            // swarm creates with PAYER: two different keys. Rescuing a swarm
+            // lobby therefore needs the swarm's own key, and without it the
+            // attempt is pointless rather than merely unlucky.
+            const signer = starter ?? payer;
             try {
               await program.methods.startGame()
-                .accountsPartial({ game: gamePda(g.gameId), authority: payer.publicKey }).rpc();
+                .accountsPartial({ game: gamePda(g.gameId), authority: signer.publicKey })
+                .signers(signer === payer ? [] : [signer]).rpc();
               log(`game ${g.gameId}: lobby stranded ${Math.round((now - g.createdAt) / 60)}m with ` +
                   `${g.players} players, started`);
               continue;
             } catch (e) {
               const m = String(e.message ?? e);
-              // Not ours to start, or it started underneath us. Neither is news.
-              if (!/Unauthorized|WrongPhase|NotEnoughCircles/.test(m))
+              // Unauthorized used to be swallowed here, which hid the fact that
+              // this rescue could never fire at all. Say it once per game.
+              if (/Unauthorized/.test(m)) {
+                if (!warnedAuth.has(g.gameId)) {
+                  warnedAuth.add(g.gameId);
+                  log(`start ${g.gameId}: not this key's game to start (no PAYER for the rescue)`);
+                }
+              } else if (!/WrongPhase|NotEnoughCircles/.test(m)) {
                 log(`start ${g.gameId}: ${m.slice(0, 70)}`);
+              }
             }
           }
           if (now < g.createdAt + LOBBY_TIMEOUT) continue;

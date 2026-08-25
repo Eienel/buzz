@@ -18,6 +18,7 @@ import { Connection, PublicKey } from "@solana/web3.js";
 import { makeArena, PRICE, challenge, registerAgent, authed, agentName } from "./arena-api.mjs";
 import { makeAutoplay } from "./autoplay.mjs";
 import { makeLimiter, LIMITS } from "./limits.mjs";
+import { loadKeypair } from "./keypair.mjs";
 import { makeCranker } from "./cranker.mjs";
 import { makeScheduler } from "./scheduler.mjs";
 import { nameFor, houseWallets } from "./names.mjs";
@@ -299,7 +300,13 @@ const autoplay = makeAutoplay({ enqueue, gamePdaFor });
 // them up front instead of taking money for work we cannot do.
 const relayer = loadRelayer(connection);
 startDrain(relayer, actions);
-if (relayer) cranker = makeCranker({ program: relayer.program, payer: relayer.kp });
+// The swarm creates games with PAYER, and start_game is has_one = authority,
+// so rescuing a stranded swarm lobby needs that key rather than the relayer's.
+let starter = null;
+try {
+  if (process.env.PAYER) starter = loadKeypair(process.env.PAYER);
+} catch { /* no PAYER here: the rescue simply cannot run, and says so */ }
+if (relayer) cranker = makeCranker({ program: relayer.program, payer: relayer.kp, starter });
 // Off by default: turning it on while the swarm still creates its own games
 // would double the arena rather than replace it.
 if (relayer && process.env.RUN_SCHEDULER === "1") {

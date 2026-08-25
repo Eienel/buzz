@@ -47,7 +47,10 @@ const STAGGER_MS = Number(process.env.STAGGER_SECONDS ?? 25) * 1000;
 // Instance length, not game length: a game runs until one comb is left, so
 // with five or six combs that is four or five instances. 24 / 60 / 120 gives
 // games of roughly two, five and ten minutes.
-const TEMPOS = (process.env.TEMPOS ?? "24,60,120").split(",").map(Number);
+// Two and five minute games. A ten minute game costs twice the wall clock of
+// a five and tells you nothing extra: nobody watches a full one, and it was
+// the tempo that filled slowest, so it dominated the stranded lobbies.
+const TEMPOS = (process.env.TEMPOS ?? "24,60").split(",").map(Number);
 // One game in this many is played in the second asset; the rest are the ranked
 // one. 4 means three quarters of the arena counts toward the season.
 const BUZZ_EVERY = Number(process.env.RANKED_RATIO ?? 4);

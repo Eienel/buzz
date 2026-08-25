@@ -31,7 +31,7 @@ const MIN_CIRCLES = 4;
  * fifteen that sit half empty, and an empty lobby is the thing that made the
  * board read as busy when it was not.
  */
-const TEMPOS = (process.env.SCHED_TEMPOS ?? "24:120,60:240,120:480")
+const TEMPOS = (process.env.SCHED_TEMPOS ?? "24:120,60:240")
   .split(",").map((s) => {
     const [tempo, every] = s.split(":").map(Number);
     return { tempo, every };
