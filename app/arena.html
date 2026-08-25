@@ -90,7 +90,9 @@
   .combs{display:flex;gap:14px;padding:18px;flex-wrap:wrap}
   .comb{flex:1 1 0;min-width:190px;position:relative;padding:14px 18px 12px;
     clip-path:polygon(22px 0,100% 0,100% calc(100% - 22px),calc(100% - 22px) 100%,0 100%,0 22px);
-    background:linear-gradient(160deg,#1d1509,#140f09);border:1px solid var(--edge2)}
+    background:
+      radial-gradient(120% 78% at 50% -4%,rgba(255,255,255,.055),transparent 62%),
+      linear-gradient(180deg,#1d1509 0%,#150f09 52%,#0d0a06 100%);border:1px solid var(--edge2)}
   .comb.alive{box-shadow:inset 0 0 40px rgba(255,179,0,.09)}
   .comb.dead{background:linear-gradient(160deg,#1e0f12,#140b0d);border-color:#4a2029}
   .comb.doomed{animation:doom .8s infinite}
@@ -118,18 +120,32 @@
     background:var(--edge)}
   .hex .in{position:absolute;inset:2px;
     clip-path:polygon(50% 0%,100% 25%,100% 75%,50% 100%,0% 75%,0% 25%);
-    background:linear-gradient(160deg,#1d1509,#140f09);
+    background:
+      radial-gradient(120% 78% at 50% -4%,rgba(255,255,255,.055),transparent 62%),
+      linear-gradient(180deg,#1d1509 0%,#150f09 52%,#0d0a06 100%);
     display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px}
-  .hex.thin{background:var(--honey)} .hex.crowded{background:var(--cool)}
-  .hex.alive{background:var(--alive)}
-  .hex.dead{background:#4a2029}
-  .hex.dead .in{background:linear-gradient(160deg,#1e0f12,#140b0d)}
-  .hex.doomed{background:var(--dead);animation:doom .8s infinite}
+  /* Each band carries three colours: the outline, the floor sitting under it,
+     and the light it throws. Healthy is green, crowded blue, thin amber, so
+     the cell glows in whatever it is rather than everything glowing honey. */
+  .hex.thin   {background:var(--honey);--tint:var(--honey);--floor:#8a5a0b;--glow:rgba(255,179,0,.34)}
+  .hex.crowded{background:var(--cool); --tint:var(--cool); --floor:#3a5c84;--glow:rgba(111,176,255,.32)}
+  .hex.alive  {background:var(--alive);--tint:var(--alive);--floor:#317951;--glow:rgba(95,214,138,.36)}
+  .hex.dead   {background:#4a2029;     --tint:#8f3348;     --floor:#3a1a22;--glow:transparent}
+  .hex.dead .in{background:linear-gradient(180deg,#1e0f12,#140b0d 60%,#0d0709)}
+  .hex.doomed {background:var(--dead); --tint:var(--dead); --floor:#5c202e;--glow:rgba(242,99,122,.34);
+    animation:doom .8s infinite}
+
+  /* depth, kept quiet: one hard offset silhouette is the whole thickness, and
+     drop-shadow follows the clip-path so it stays hexagonal. */
+  .hex{filter:drop-shadow(0 7px 0 var(--floor)) drop-shadow(0 0 22px var(--glow))}
+  .hex.dead{filter:drop-shadow(0 3px 0 var(--floor))}
   .hex .hid{font-family:var(--mono);font-size:11px;color:var(--dimmer);letter-spacing:.5px}
   .hex .dots{display:flex;flex-wrap:wrap;gap:5px;justify-content:center;align-content:center;
     max-width:84px;min-height:24px}
-  .hex .dots i{width:11px;height:11px;border-radius:50%;background:var(--honey);
-    box-shadow:0 0 9px rgba(255,179,0,.5)}
+  .hex .dots i{width:12px;height:12px;border-radius:50%;
+    background:radial-gradient(circle at 34% 30%,#fffdf2 0%,var(--tint,var(--honey)) 56%,
+      var(--floor,#6b4408) 100%);
+    box-shadow:0 2px 5px rgba(0,0,0,.55),0 0 10px var(--glow,rgba(255,179,0,.4))}
   .hex .more{font-family:var(--mono);font-size:11px;color:var(--honey);align-self:center}
   .hex .hband{font-size:13px;font-weight:700;letter-spacing:-.2px}
   .hex.thin .hband{color:var(--honey)} .hex.crowded .hband{color:var(--cool)}

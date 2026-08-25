@@ -71,7 +71,7 @@
   td.mono{font-family:var(--mono);font-size:12.5px;color:var(--dim)}
 
   .combs{display:flex;flex-wrap:wrap;gap:10px;margin-top:6px}
-  .comb{position:relative;width:96px;height:108px;flex:none;cursor:pointer;border:0;
+  .comb{position:relative;width:96px;height:116px;flex:none;cursor:pointer;border:0;
     background:transparent;padding:0}
   .comb svg{position:absolute;inset:0;width:100%;height:100%}
   .comb .lab{position:absolute;inset:0;display:flex;flex-direction:column;
@@ -261,16 +261,30 @@ $("btnForget").onclick = () => { me=null; try{localStorage.removeItem(LS);}catch
 let lobbies=[], seat=null, pick={move:null,predict:null};
 
 const HEX="M50 4 L88 26 L88 70 L50 92 L12 70 L12 26 Z";
-const BAND={empty:"#3a2c14", thin:"#6d5f4c", healthy:"#ffb300", crowded:"#ff8f1f"};
+// Same vocabulary as the arena: healthy green, crowded blue, thin amber. The
+// two pages were showing the same board in different colours.
+const BAND={
+  empty:   {line:"#54401c", glow:"rgba(255,179,0,.16)"},
+  thin:    {line:"#ffb300", glow:"rgba(255,179,0,.30)"},
+  healthy: {line:"#5fd68a", glow:"rgba(95,214,138,.32)"},
+  crowded: {line:"#6fb0ff", glow:"rgba(111,176,255,.30)"},
+};
 function combBtn(c, opts={}){
   const b=document.createElement("button");
   b.className="comb"+(opts.mine?" mine":"")+(opts.sel?" sel":"");
   b.type="button";
   if(opts.disabled) b.disabled=true;
-  const stroke = c.alive ? (BAND[c.band]||"#6d5f4c") : "#4a2430";
+  const bd = BAND[c.band] ?? BAND.thin;
+  const stroke = c.alive ? bd.line : "#8f3348";
+  // a dim repeat of the outline underneath is the whole of the depth; the glow
+  // is the band's own colour, kept soft
   b.innerHTML =
-    `<svg viewBox="0 0 100 96"><path d="${HEX}" fill="${opts.sel?"rgba(255,179,0,.10)":"rgba(255,255,255,.02)"}"
-       stroke="${opts.sel?"#ffd280":stroke}" stroke-width="${opts.sel?5:3}" stroke-linejoin="round"/></svg>
+    `<svg viewBox="0 0 100 104">
+       <path d="${HEX}" transform="translate(0,6)" fill="none"
+         stroke="${c.alive ? bd.line : "#4a1c26"}" stroke-width="2" stroke-linejoin="round" opacity=".32"/>
+       <path d="${HEX}" fill="${opts.sel?"rgba(255,210,128,.10)":"rgba(255,255,255,.015)"}"
+         stroke="${opts.sel?"#ffd280":stroke}" stroke-width="${opts.sel?4.5:2.6}" stroke-linejoin="round"
+         style="filter:drop-shadow(0 0 7px ${c.alive?bd.glow:"transparent"})"/></svg>
      <span class="lab"><span class="n">comb ${c.id}</span>
      <span class="b">${c.alive ? (opts.mine?"you":c.band) : "dead"}</span></span>`;
   if(opts.onclick && !opts.disabled) b.onclick=()=>opts.onclick(c.id);
