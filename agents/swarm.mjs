@@ -16,6 +16,7 @@ import jsSha3 from "js-sha3";
 const { keccak_256 } = jsSha3;
 import { readFileSync } from "node:fs";
 import { decide, reasoningEnabled, modelFor, personaFor } from "./reason.mjs";
+import { makeBudget, totalPointsOf } from "./budget.mjs";
 import { loadKeypair } from "../server/keypair.mjs";
 
 const { AnchorProvider, Program, Wallet, BN } = anchorPkg;
@@ -284,7 +285,7 @@ async function playGame(gameNo) {
       strat: pod
         ? (fog, self, instance) => decide(fog, self, {
             instance, instanceSeconds: tempo, history: fogHistory,
-            model: modelFor(podIx), persona: personaFor(podIx),
+            model: modelFor(podIx), persona: personaFor(podIx), budget: budgets.get(name),
             // spread across the range so four pods on one board do not converge
             temperature: 0.5 + podIx * 0.15,
           })
@@ -296,6 +297,16 @@ async function playGame(gameNo) {
   });
   log(`game ${gid}: ${asset.name}, ${tempo}s instances, ${N_AGENTS} heuristic` +
       `${podsThisGame ? ` + ${podsThisGame} reasoning (${[...new Set(agents.filter((a) => a.pod).map((a) => a.model))].join(", ")})` : ""} agents…`);
+  // What each reasoning agent may spend on thinking this game, bought with the
+  // skill points it has already earned on chain. Read once per game: a budget
+  // that refilled mid-game would not be a budget.
+  const budgets = new Map();
+  for (const a of agents.filter((x) => x.pod)) {
+    const pts = await totalPointsOf(connection, program.programId, a.kp.publicKey);
+    budgets.set(a.name, makeBudget(pts));
+    log(`  ${a.name}: ${pts} skill points buys ${budgets.get(a.name).granted} calls`);
+  }
+
   await fundAgents(agents, asset);
 
   // Everything after funding is wrapped so sweepBack ALWAYS runs, a throw
@@ -370,8 +381,10 @@ async function playGame(gameNo) {
     const podCount = live.filter((a) => a.pod).length;
     if (podCount) {
       const skipped = podCount - modelled;
+      const broke = live.filter((a) => a.pod && budgets.get(a.name)?.left === 0).length;
       log(`  ${modelled}/${podCount} reasoning agents answered` +
-        (skipped ? `, ${skipped} held and did not predict` : ""));
+        (skipped ? `, ${skipped} held and did not predict` : "") +
+        (broke ? `, ${broke} out of budget` : ""));
       // One line of the model's own rationale per round. If every agent says
       // "smallest comb" the prompt is not producing reasoning and we should know.
       for (const t of thought) {
@@ -481,6 +494,10 @@ async function playGame(gameNo) {
   // out, fees sweep. Wrapped so sweepBack ALWAYS runs (even on a mid-settle
   // throw), otherwise the ephemeral agent wallets' balances are stranded.
   log(`game ${gid}: settling`);
+  for (const a of agents.filter((x) => x.pod)) {
+    const b = budgets.get(a.name);
+    if (b) log(`  ${a.name} spent ${b.spent()}/${b.granted} inference calls`);
+  }
   const winner = Object.keys(fog).map(Number)[0];
     // the winning circle's creator claims κ (else 15% of the pot strands in the vault)
     const winnerCreator = agents.find((a) => a.circle === winner && a.createdCircle === winner);

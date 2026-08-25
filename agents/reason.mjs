@@ -119,6 +119,14 @@ function sanitise(raw, fog, self) {
  */
 export async function decide(fog, self, opts = {}) {
   if (!TOKEN) return null;
+  // Thinking is not free. An agent out of budget does not fall back to a rule,
+  // it stops reasoning: it holds its comb and forfeits the prediction, exactly
+  // as it does when the model misses the window. Being broke and being slow
+  // cost the same thing, which is the round.
+  if (opts.budget && !opts.budget.spend()) {
+    if (opts.onSkip) opts.onSkip("out of inference budget");
+    return null;
+  }
 
   // History is the only thing that distinguishes a comb that is steadily
   // bleeding from one that just took a crowd. Without it every round looks
