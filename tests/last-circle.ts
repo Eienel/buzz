@@ -247,10 +247,26 @@ describe("buzz: a full game in tokens", () => {
 
     // Four combs now, so crank instances until exactly one is left rather than
     // assuming a single death decides it.
+    // phaseEndsAt is the validator's clock; Date.now() is this process's. The
+    // two drift, so sleeping until the wall clock passes the deadline is a
+    // guess, not a guarantee, and a crank issued a moment early is rejected
+    // with PhaseNotOver. That is what made this test fail on roughly half of
+    // otherwise identical runs. Wait as before to keep the test quick, then
+    // let the program itself say when the window is really over.
     const waitPhase = async () => {
       const gg = await program.account.game.fetch(g);
       const ms = gg.phaseEndsAt.toNumber() * 1000 - Date.now() + 1200;
       if (ms > 0) await sleep(ms);
+    };
+    const crank = async (call: () => Promise<string>) => {
+      for (let t = 0; t < 15; t++) {
+        try { return await call(); }
+        catch (e) {
+          if (!String(e).includes("PhaseNotOver")) throw e;
+          await sleep(1200);
+        }
+      }
+      throw new Error("phase never opened after 15 attempts");
     };
     let alive = players.map((_, i) => i);
     let doomed = -1;
@@ -260,34 +276,26 @@ describe("buzz: a full game in tokens", () => {
       if (!gnow.status.running) break;
 
       await waitPhase();
-      await program.methods.advanceToReveal()
-        .accountsPartial({ game: g, cranker: authority.publicKey }).rpc();
+      await crank(() => program.methods.advanceToReveal()
+        .accountsPartial({ game: g, cranker: authority.publicKey }).rpc());
       await waitPhase();
 
       // selectDeath must be handed EVERY alive comb, or the minimum is gameable
-      for (let t = 0; t < 15; t++) {
-        try {
-          await program.methods.selectDeath()
-            // randomness: null takes the committed-slot-hash fallback, legal
-            // here because these games are created with require_vrf false.
-            .accountsPartial({ game: g, recentSlotHashes: SYSVAR_SLOT_HASHES_PUBKEY,
-                               randomness: null, cranker: authority.publicKey })
-            .remainingAccounts(alive.map((i) => ({ pubkey: combPda(g, i), isSigner: false, isWritable: false })))
-            .rpc();
-          break;
-        } catch (e) {
-          if (!String(e).includes("PhaseNotOver")) throw e;
-          await sleep(1200);
-        }
-      }
+      await crank(() => program.methods.selectDeath()
+        // randomness: null takes the committed-slot-hash fallback, legal
+        // here because these games are created with require_vrf false.
+        .accountsPartial({ game: g, recentSlotHashes: SYSVAR_SLOT_HASHES_PUBKEY,
+                           randomness: null, cranker: authority.publicKey })
+        .remainingAccounts(alive.map((i) => ({ pubkey: combPda(g, i), isSigner: false, isWritable: false })))
+        .rpc());
       doomed = (await program.account.game.fetch(g)).doomedCircle;
       if (firstDoomed.id < 0) firstDoomed.id = doomed;
       await program.methods.executeDeath(doomed)
         .accountsPartial({ game: g, circle: combPda(g, doomed), cranker: authority.publicKey }).rpc();
       alive = alive.filter((i) => i !== doomed);
       await waitPhase();
-      await program.methods.advanceInstance()
-        .accountsPartial({ game: g, cranker: authority.publicKey }).rpc();
+      await crank(() => program.methods.advanceInstance()
+        .accountsPartial({ game: g, cranker: authority.publicKey }).rpc());
     }
 
     const gs = await program.account.game.fetch(g);
