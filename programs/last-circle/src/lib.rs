@@ -1117,6 +1117,165 @@ pub mod last_circle {
         }
         Ok(())
     }
+    // ---- prediction market ------------------------------------------------
+    //
+    // Parimutuel, so the pool sets the odds and the house never takes the other
+    // side of a bet. Spectators back an AGENT, not a comb: an agent moves every
+    // round and carries a record across games, which is the thing worth pricing.
+    //
+    // Nothing here can touch a game's own vault. The market has its own vault,
+    // its own mint, and settles by reading the game rather than changing it.
+
+    /// Open the book on a running game. Permissionless: anyone may open it, and
+    /// there is exactly one per game.
+    pub fn open_market(ctx: Context<OpenMarket>, lock_instance: u16) -> Result<()> {
+        let g = &ctx.accounts.game;
+        require!(g.status == GameStatus::Running, GameError::WrongPhase);
+        require!(lock_instance >= g.instance, GameError::BadParam);
+        let m = &mut ctx.accounts.market;
+        m.game = g.key();
+        m.stake_mint = ctx.accounts.stake_mint.key();
+        m.lock_instance = lock_instance;
+        m.total_pool = 0;
+        m.winning_pool = 0;
+        m.targets = 0;
+        m.resolved = 0;
+        m.settled = false;
+        m.bump = ctx.bumps.market;
+        m.vault_bump = ctx.bumps.market_vault;
+        Ok(())
+    }
+
+    /// Back an agent. Bets close at `lock_instance` so nobody can buy in once
+    /// the board has already thinned to a near-certainty.
+    pub fn place_bet(ctx: Context<PlaceBet>, amount: u64) -> Result<()> {
+        require!(amount > 0, GameError::BadParam);
+        {
+            let g = &ctx.accounts.game;
+            let m = &ctx.accounts.market;
+            require!(g.status == GameStatus::Running, GameError::WrongPhase);
+            require!(!m.settled, GameError::WrongPhase);
+            require!(g.instance <= m.lock_instance, GameError::BettingClosed);
+        }
+        // The target must actually be playing this game. Without this you could
+        // back a wallet that never sat down and it could never lose.
+        require!(ctx.accounts.target_player.game == ctx.accounts.game.key(), GameError::BadParam);
+
+        token_interface::transfer_checked(
+            CpiContext::new(
+                ctx.accounts.token_program.to_account_info(),
+                TransferChecked {
+                    from: ctx.accounts.bettor_token.to_account_info(),
+                    mint: ctx.accounts.stake_mint.to_account_info(),
+                    to: ctx.accounts.market_vault.to_account_info(),
+                    authority: ctx.accounts.bettor.to_account_info(),
+                },
+            ),
+            amount,
+            ctx.accounts.stake_mint.decimals,
+        )?;
+
+        let pool = &mut ctx.accounts.target_pool;
+        if pool.market == Pubkey::default() {
+            pool.market = ctx.accounts.market.key();
+            pool.target = ctx.accounts.target_player.owner;
+            pool.bump = ctx.bumps.target_pool;
+            let m = &mut ctx.accounts.market;
+            m.targets = m.targets.checked_add(1).ok_or(GameError::MathOverflow)?;
+        }
+        pool.total = pool.total.checked_add(amount).ok_or(GameError::MathOverflow)?;
+
+        let bet = &mut ctx.accounts.bet;
+        if bet.market == Pubkey::default() {
+            bet.market = ctx.accounts.market.key();
+            bet.bettor = ctx.accounts.bettor.key();
+            bet.target = ctx.accounts.target_player.owner;
+            bet.bump = ctx.bumps.bet;
+        }
+        bet.amount = bet.amount.checked_add(amount).ok_or(GameError::MathOverflow)?;
+
+        let m = &mut ctx.accounts.market;
+        m.total_pool = m.total_pool.checked_add(amount).ok_or(GameError::MathOverflow)?;
+        Ok(())
+    }
+
+    /// Decide one backed agent, once the game itself has decided. Winning is
+    /// read the same way claim_winnings reads it: the agent sits in a comb that
+    /// is still alive. Permissionless and idempotent.
+    pub fn resolve_target(ctx: Context<ResolveTarget>) -> Result<()> {
+        {
+            let g = &ctx.accounts.game;
+            require!(g.status == GameStatus::Settling || g.status == GameStatus::Closed,
+                     GameError::WrongPhase);
+        }
+        let pool = &mut ctx.accounts.target_pool;
+        require!(!pool.resolved, GameError::AlreadyClaimed);
+        require!(ctx.accounts.target_player.owner == pool.target, GameError::BadParam);
+
+        let c = &ctx.accounts.winning_circle;
+        require!(c.alive, GameError::BadParam);
+        let survived = ctx.accounts.target_player.current_circle == c.circle_id;
+
+        pool.resolved = true;
+        pool.won = survived;
+        let m = &mut ctx.accounts.market;
+        m.resolved = m.resolved.checked_add(1).ok_or(GameError::MathOverflow)?;
+        if survived {
+            m.winning_pool = m.winning_pool.checked_add(pool.total).ok_or(GameError::MathOverflow)?;
+        }
+        // Every backed agent decided means the winning pool is final and the
+        // book can pay. Claiming before that would over-pay whoever was first.
+        if m.resolved == m.targets {
+            m.settled = true;
+        }
+        Ok(())
+    }
+
+    /// Collect. Pays only once every backed agent has been decided, so the
+    /// denominator is final.
+    pub fn claim_bet(ctx: Context<ClaimBet>) -> Result<()> {
+        let (total_pool, winning_pool, settled, mkey, vbump) = {
+            let m = &ctx.accounts.market;
+            (m.total_pool, m.winning_pool, m.settled, m.key(), m.vault_bump)
+        };
+        require!(settled, GameError::WrongPhase);
+
+        let bet = &mut ctx.accounts.bet;
+        require!(!bet.claimed, GameError::AlreadyClaimed);
+        require!(ctx.accounts.target_pool.resolved, GameError::WrongPhase);
+        bet.claimed = true;
+
+        // Nobody backed a survivor: the book refunds rather than keeping it.
+        // A market that swallows the pot when everyone loses is not a market.
+        let payout = if winning_pool == 0 {
+            bet.amount
+        } else if ctx.accounts.target_pool.won {
+            (bet.amount as u128)
+                .checked_mul(total_pool as u128).ok_or(GameError::MathOverflow)?
+                .checked_div(winning_pool as u128).ok_or(GameError::MathOverflow)? as u64
+        } else {
+            0
+        };
+        if payout == 0 { return Ok(()); }
+        require!(payout <= ctx.accounts.market_vault.amount, GameError::ConservationViolated);
+
+        let seeds: &[&[u8]] = &[b"mvault", mkey.as_ref(), &[vbump]];
+        token_interface::transfer_checked(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                TransferChecked {
+                    from: ctx.accounts.market_vault.to_account_info(),
+                    mint: ctx.accounts.stake_mint.to_account_info(),
+                    to: ctx.accounts.bettor_token.to_account_info(),
+                    authority: ctx.accounts.market_vault.to_account_info(),
+                },
+                &[seeds],
+            ),
+            payout,
+            ctx.accounts.stake_mint.decimals,
+        )?;
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2425,4 +2584,164 @@ pub enum GameError {
     BadRandomness,
     #[msg("Randomness is not settled yet, or this game requires VRF")]
     RandomnessNotReady,
+    #[msg("Betting on this game has closed")]
+    BettingClosed,
+}
+
+// ---------------------------------------------------------------------------
+// Prediction market: state and accounts
+// ---------------------------------------------------------------------------
+
+/// The book on one game. Its vault is its own; a bug here cannot reach the
+/// game's pot, which is the point of keeping them separate.
+#[account]
+pub struct Market {
+    pub game: Pubkey,
+    pub stake_mint: Pubkey,
+    pub total_pool: u64,
+    /// Sum of the pools on agents that survived. Final only once `resolved`
+    /// reaches `targets`, which is what `settled` records.
+    pub winning_pool: u64,
+    /// Distinct agents backed, and how many have been decided.
+    pub targets: u32,
+    pub resolved: u32,
+    pub settled: bool,
+    /// Last instance on which a bet may be placed.
+    pub lock_instance: u16,
+    pub bump: u8,
+    pub vault_bump: u8,
+}
+impl Market {
+    pub const SPACE: usize = 8 + 32 + 32 + 8 + 8 + 4 + 4 + 1 + 2 + 1 + 1;
+}
+
+/// Everything staked on one agent in one market.
+#[account]
+pub struct TargetPool {
+    pub market: Pubkey,
+    pub target: Pubkey,
+    pub total: u64,
+    pub resolved: bool,
+    pub won: bool,
+    pub bump: u8,
+}
+impl TargetPool {
+    pub const SPACE: usize = 8 + 32 + 32 + 8 + 1 + 1 + 1;
+}
+
+/// One bettor's position on one agent.
+#[account]
+pub struct Bet {
+    pub market: Pubkey,
+    pub bettor: Pubkey,
+    pub target: Pubkey,
+    pub amount: u64,
+    pub claimed: bool,
+    pub bump: u8,
+}
+impl Bet {
+    pub const SPACE: usize = 8 + 32 + 32 + 32 + 8 + 1 + 1;
+}
+
+#[derive(Accounts)]
+pub struct OpenMarket<'info> {
+    #[account(seeds = [b"game", game.game_id.to_le_bytes().as_ref()], bump = game.bump)]
+    pub game: Account<'info, Game>,
+    #[account(
+        init, payer = payer, space = Market::SPACE,
+        seeds = [b"market", game.key().as_ref()], bump
+    )]
+    pub market: Account<'info, Market>,
+    #[account(
+        init, payer = payer,
+        token::mint = stake_mint, token::authority = market_vault,
+        seeds = [b"mvault", market.key().as_ref()], bump
+    )]
+    pub market_vault: InterfaceAccount<'info, TokenAccount>,
+    #[account(constraint = stake_mint.key() == game.stake_mint @ GameError::BadParam)]
+    pub stake_mint: InterfaceAccount<'info, Mint>,
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    pub token_program: Interface<'info, TokenInterface>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct PlaceBet<'info> {
+    #[account(seeds = [b"game", game.game_id.to_le_bytes().as_ref()], bump = game.bump)]
+    pub game: Account<'info, Game>,
+    #[account(mut, seeds = [b"market", game.key().as_ref()], bump = market.bump)]
+    pub market: Account<'info, Market>,
+    #[account(mut, seeds = [b"mvault", market.key().as_ref()], bump = market.vault_bump)]
+    pub market_vault: InterfaceAccount<'info, TokenAccount>,
+    /// The agent being backed, proven to be in this game by its own PDA.
+    #[account(
+        seeds = [b"player", game.key().as_ref(), target_player.owner.as_ref()],
+        bump
+    )]
+    pub target_player: Account<'info, Player>,
+    #[account(
+        init_if_needed, payer = bettor, space = TargetPool::SPACE,
+        seeds = [b"tpool", market.key().as_ref(), target_player.owner.as_ref()], bump
+    )]
+    pub target_pool: Account<'info, TargetPool>,
+    #[account(
+        init_if_needed, payer = bettor, space = Bet::SPACE,
+        seeds = [b"bet", market.key().as_ref(), bettor.key().as_ref(),
+                 target_player.owner.as_ref()], bump
+    )]
+    pub bet: Account<'info, Bet>,
+    #[account(mut, constraint = bettor_token.mint == market.stake_mint @ GameError::BadParam)]
+    pub bettor_token: InterfaceAccount<'info, TokenAccount>,
+    #[account(mut)]
+    pub bettor: Signer<'info>,
+    #[account(constraint = stake_mint.key() == market.stake_mint @ GameError::BadParam)]
+    pub stake_mint: InterfaceAccount<'info, Mint>,
+    pub token_program: Interface<'info, TokenInterface>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct ResolveTarget<'info> {
+    #[account(seeds = [b"game", game.game_id.to_le_bytes().as_ref()], bump = game.bump)]
+    pub game: Account<'info, Game>,
+    #[account(mut, seeds = [b"market", game.key().as_ref()], bump = market.bump)]
+    pub market: Account<'info, Market>,
+    #[account(mut, seeds = [b"tpool", market.key().as_ref(), target_pool.target.as_ref()],
+              bump = target_pool.bump)]
+    pub target_pool: Account<'info, TargetPool>,
+    #[account(
+        seeds = [b"player", game.key().as_ref(), target_player.owner.as_ref()],
+        bump
+    )]
+    pub target_player: Account<'info, Player>,
+    /// The comb still standing, the same account claim_winnings is handed.
+    #[account(seeds = [b"circle", game.key().as_ref(), &[winning_circle.circle_id]],
+              bump = winning_circle.bump)]
+    pub winning_circle: Account<'info, Circle>,
+    pub cranker: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct ClaimBet<'info> {
+    #[account(seeds = [b"market", market.game.as_ref()], bump = market.bump)]
+    pub market: Account<'info, Market>,
+    #[account(mut, seeds = [b"mvault", market.key().as_ref()], bump = market.vault_bump)]
+    pub market_vault: InterfaceAccount<'info, TokenAccount>,
+    #[account(seeds = [b"tpool", market.key().as_ref(), bet.target.as_ref()],
+              bump = target_pool.bump)]
+    pub target_pool: Account<'info, TargetPool>,
+    #[account(
+        mut,
+        seeds = [b"bet", market.key().as_ref(), bettor.key().as_ref(), bet.target.as_ref()],
+        bump = bet.bump,
+        constraint = bet.bettor == bettor.key() @ GameError::Unauthorized
+    )]
+    pub bet: Account<'info, Bet>,
+    #[account(mut, constraint = bettor_token.owner == bettor.key() @ GameError::Unauthorized)]
+    pub bettor_token: InterfaceAccount<'info, TokenAccount>,
+    pub bettor: Signer<'info>,
+    #[account(constraint = stake_mint.key() == market.stake_mint @ GameError::BadParam)]
+    pub stake_mint: InterfaceAccount<'info, Mint>,
+    pub token_program: Interface<'info, TokenInterface>,
 }

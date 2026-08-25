@@ -207,33 +207,18 @@
     font-family:var(--mono);font-size:11.5px;color:var(--dimmer)}
   .gmeta b{color:var(--dim);font-weight:600}
   @media (max-width:720px){ .gmeta{margin-left:0;width:100%;gap:10px} }
-  /* The jackpot is the one number that carries across games, so it sits above
-     the board rather than inside a card. --heat is 0..1 from the balance, and
-     everything that reads as "there is a lot in there" scales off that one
-     value: glow, border, pulse. A small pot should look small. */
-  .jackpot{--heat:0;display:flex;align-items:baseline;justify-content:center;gap:14px;
-    text-decoration:none;max-width:640px;margin:4px auto 24px;padding:13px 26px;border-radius:99px;
-    border:1px solid rgba(255,179,0,calc(.18 + .5 * var(--heat)));
-    background:linear-gradient(100deg,
-      rgba(255,143,31,calc(.04 + .10 * var(--heat))),
-      rgba(255,179,0,calc(.02 + .05 * var(--heat))));
-    box-shadow:0 0 calc(14px + 46px * var(--heat)) rgba(255,179,0,calc(.05 + .22 * var(--heat))),
-      inset 0 1px 0 rgba(255,220,150,.06);
+  /* The jackpot belongs beside the other header facts, not above the board.
+     --heat is 0..1 from the balance and drives only the border and a soft
+     glow, so a big pot is noticeable without taking the page over. */
+  .jackpot{--heat:0;display:inline-flex;align-items:baseline;gap:7px;text-decoration:none;
+    border-color:rgba(255,179,0,calc(.25 + .5 * var(--heat)));
+    box-shadow:0 0 calc(4px + 16px * var(--heat)) rgba(255,179,0,calc(.05 + .18 * var(--heat)));
     transition:border-color .4s var(--ease),box-shadow .4s var(--ease)}
-  .jackpot:hover{text-decoration:none;border-color:rgba(255,179,0,.75)}
-  .jlab{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;
+  .jackpot:hover{text-decoration:none;border-color:rgba(255,179,0,.85)}
+  .jlab{font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;
     color:var(--dim)}
-  .jackpot b{font-family:var(--mono);font-size:clamp(20px,2.6vw,30px);color:var(--gold);
-    letter-spacing:-.02em;
-    text-shadow:0 0 calc(4px + 22px * var(--heat)) rgba(255,196,80,calc(.15 + .5 * var(--heat))))}
-  .jsym{font-family:var(--mono);font-size:12px;color:var(--honey)}
-  .jnote{width:100%;text-align:center;font-size:11.5px;color:var(--dimmer);margin-top:2px}
-  /* Only a pot worth noticing breathes. */
-  .jackpot[data-hot="1"]{animation:jpulse 3.4s var(--ease) infinite}
-  @keyframes jpulse{50%{box-shadow:0 0 calc(24px + 60px * var(--heat)) rgba(255,179,0,calc(.12 + .3 * var(--heat))),
-    inset 0 1px 0 rgba(255,220,150,.08)}}
-  .jackpot{flex-wrap:wrap}
-  @media(max-width:640px){ .jackpot{padding:12px 18px;gap:10px} }
+  .jackpot b{font-family:var(--mono);font-size:13px;color:var(--gold)}
+  .jsym{font-family:var(--mono);font-size:10.5px;color:var(--honey)}
   .loadmore{display:block;width:100%;margin-top:12px;padding:10px;border-radius:10px;
     background:transparent;border:1px solid var(--edge);color:var(--text);font:inherit;
     font-size:13.5px;cursor:pointer;transition:border-color .15s,background .15s}
@@ -280,16 +265,11 @@
     <span class="chip" id="tally">&nbsp;</span>
     <a class="chip tkr" id="tkr" href="https://clawpump.tech/tokens/DoTMzBpSRPEwaycrSUzgSaDEs42PaiQVvYXAmLkcHr5X"
        target="_blank" rel="noopener" hidden></a>
+    <a class="chip jackpot" id="jackpot" href="/docs#economics" title="Accumulated across every game, never yet paid out" hidden>
+      <span class="jlab">jackpot</span><b id="jamt">&hellip;</b><span class="jsym" id="jsym"></span></a>
     <span class="chip live" id="conn"><i></i>Live</span>
   </div>
 </header>
-
-<a class="jackpot" id="jackpot" href="/docs#economics" hidden>
-  <span class="jlab">jackpot</span>
-  <b id="jamt">&hellip;</b>
-  <span class="jsym" id="jsym"></span>
-  <span class="jnote" id="jnote"></span>
-</a>
 
 <div class="body" id="root">
   <div class="empty"><b>Loading the hive</b>Reading Solana devnet.</div>
@@ -710,8 +690,6 @@ async function tickJackpot(){
       pick.jackpot>=1000 ? pick.jackpot.toLocaleString(undefined,{maximumFractionDigits:0})
                          : pick.jackpot.toFixed(2);
     document.getElementById("jsym").textContent = pick.symbol;
-    document.getElementById("jnote").textContent =
-      "accumulated across every game, never yet paid out";
     el.hidden=false;
   }catch{}
 }
