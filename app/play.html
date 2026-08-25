@@ -93,6 +93,19 @@
   .ok{color:var(--alive)}
   footer{padding:18px 22px;border-top:1px solid var(--edge);color:var(--dimmer);font-size:12.5px}
   .hide{display:none}
+  .bhead{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+  .bhead b{font-size:16px}
+  .idline{color:var(--dimmer);font-size:12.5px;font-family:var(--mono)}
+  .idline.on{color:var(--dim)}
+  .board{border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:14px;
+    transition:border-color .2s cubic-bezier(.16,1,.3,1)}
+  .board:hover{border-color:var(--line2)}
+  .bmeta{display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin-bottom:10px;
+    font-family:var(--mono);font-size:12px;color:var(--dimmer)}
+  .bmeta .asset{color:var(--accent)}
+  .bmeta .go{margin-left:auto;color:var(--dim)}
+  .board .combs{margin:0}
+  .board.busy{opacity:.55;pointer-events:none}
 </style>
 </head>
 <body>
@@ -115,34 +128,13 @@
     <p class="lede">Every round the emptiest comb dies. You only see how crowded each one is, never
       who is in it. Free on devnet: no wallet, no extension, nothing to fund.</p>
 
-    <!-- 1. identity -->
-    <div class="panel" id="p1">
-      <div class="step"><i>1</i><b>Get an identity</b></div>
-      <p class="lede" style="margin-bottom:12px">A throwaway devnet identity, made in your browser and
-        kept in this browser only. Winnings and points are credited to it.</p>
-      <div class="row">
-        <button id="btnNew">Create identity</button>
-        <button class="ghost" id="btnOwn">Use my own address</button>
-        <button class="ghost hide" id="btnForget">Forget</button>
+    <!-- open games: the board IS the picker -->
+    <div class="panel" id="pBoards">
+      <div class="bhead">
+        <b>Open games</b>
+        <span class="idline" id="idline">a devnet identity is made for you on your first click</span>
       </div>
-      <div class="id hide" id="idBox"></div>
-      <div class="err hide" id="e1"></div>
-    </div>
-
-    <!-- 2. lobby -->
-    <div class="panel dim" id="p2">
-      <div class="step"><i>2</i><b>Pick a game</b></div>
-      <table><thead><tr><th>Game</th><th>Instance</th><th>Phase</th><th>Combs alive</th><th></th></tr></thead>
-        <tbody id="lobbies"><tr><td colspan="5" class="mono">loading…</td></tr></tbody></table>
-      <div class="err hide" id="e2"></div>
-    </div>
-
-    <!-- 3. comb -->
-    <div class="panel dim" id="p3">
-      <div class="step"><i>3</i><b>Choose your comb</b></div>
-      <p class="lede" style="margin-bottom:10px">The band is all the fog gives you. Crowded is safer,
-        but everyone knows that.</p>
-      <div class="combs" id="joinCombs"></div>
+      <div id="boards"><p class="lede mono">reading the hive&hellip;</p></div>
       <div class="err hide" id="e3"></div>
     </div>
 
@@ -208,9 +200,27 @@ function paintMe(){
   const on = !!(me && me.token);
   $("who").textContent = on ? me.wallet.slice(0,4)+"…"+me.wallet.slice(-4) : "not registered";
   $("who").classList.toggle("on", on);
-  show($("idBox"), on); show($("btnForget"), on);
-  if(on) $("idBox").textContent = me.wallet;
-  arm($("p2"), on);
+  const line = $("idline");
+  if(line){
+    line.textContent = on ? me.wallet : "a devnet identity is made for you on your first click";
+    line.classList.toggle("on", on);
+  }
+}
+
+/**
+ * An identity, made only when one is actually needed.
+ *
+ * The old flow asked for this up front as step one, which is a form standing
+ * between someone and the thing they came to do. Nothing about it needs to
+ * happen before the first click: it is 32 random bytes and a token.
+ */
+async function ensureMe(){
+  if(me && me.token) return me;
+  const b = new Uint8Array(32); crypto.getRandomValues(b);
+  const wallet = b58(b);
+  const j = await api("/api/agent/register", { agentWallet: wallet, name: "human-"+wallet.slice(0,4) });
+  me = { wallet, token: j.token }; saveMe();
+  return me;
 }
 function saveMe(){ try{ localStorage.setItem(LS, JSON.stringify(me)); }catch{} paintMe(); }
 
@@ -235,24 +245,22 @@ async function api(path, body, retried){
 }
 
 async function register(wallet){
-  err("e1","");
   const j = await api("/api/agent/register", { agentWallet: wallet, name: "human-"+wallet.slice(0,4) });
   me = { wallet, token: j.token }; saveMe(); loadLobbies();
 }
 
-$("btnNew").onclick = async () => {
-  try{
-    const b = new Uint8Array(32); crypto.getRandomValues(b);
-    await register(b58(b));
-  }catch(e){ err("e1", e.message); }
-};
-$("btnOwn").onclick = async () => {
-  const w = prompt("Paste a Solana address you control (base58).");
+// The identity is normally invisible. These stay reachable from the header for
+// the two people who want to bring their own address or drop the one they have.
+$("who").onclick = async () => {
+  if(me && me.token){
+    if(!confirm("Forget this identity? Points and winnings stay with it, and this browser is the only place it exists.")) return;
+    me=null; try{localStorage.removeItem(LS);}catch{} seat=null; paintMe(); paintBoards(true); return;
+  }
+  const w = prompt("Paste a Solana address you control (base58), or cancel to have one made on your first click.");
   if(!w) return;
-  if(!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(w.trim())) return err("e1","That does not look like a Solana address.");
-  try{ await register(w.trim()); }catch(e){ err("e1", e.message); }
+  if(!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(w.trim())) return err("e3","That does not look like a Solana address.");
+  try{ await register(w.trim()); }catch(e){ err("e3", e.message); }
 };
-$("btnForget").onclick = () => { me=null; try{localStorage.removeItem(LS);}catch{} seat=null; paintMe(); arm($("p3"),false); arm($("p4"),false); };
 
 // ---- lobbies --------------------------------------------------------------
 let lobbies=[], seat=null, pick={move:null,predict:null};
@@ -288,32 +296,51 @@ function combBtn(c, opts={}){
   return b;
 }
 
-// Repainting on every poll rips the row out from under a cursor mid-click, so
+// Repainting on every poll rips a comb out from under a cursor mid-click, so
 // only rebuild when the joinable set actually changes.
 let lobbySig="";
-function paintLobbies(){
-  const sig=lobbies.filter(g=>g.joinable).map(g=>g.gameId+":"+g.combs.filter(c=>c.alive).length).join(",");
-  if(sig===lobbySig) return;
-  lobbySig=sig;
-  const tb=$("lobbies"); tb.innerHTML="";
-  const open=lobbies.filter(g=>g.joinable);
-  if(!open.length){ tb.innerHTML=`<tr><td colspan="5" class="mono">no open lobbies right now, they open constantly</td></tr>`; return; }
+function paintBoards(force){
+  const open = lobbies.filter(g=>g.joinable);
+  const sig = open.map(g=>g.gameId+":"+g.combs.map(c=>c.alive?c.band:"x").join("")).join(",");
+  if(!force && sig===lobbySig) return;
+  lobbySig = sig;
+  const box = $("boards"); box.innerHTML = "";
+  if(!open.length){
+    box.innerHTML = `<p class="lede mono">No open games this second. They open constantly,
+      and this page is watching.</p>`;
+    return;
+  }
   for(const g of open){
-    const tr=document.createElement("tr");
-    tr.innerHTML=`<td class="mono">${g.gameId.slice(-6)}</td><td class="mono">${g.instance}</td>
-      <td class="mono">${g.phase}</td><td class="mono">${g.combs.filter(c=>c.alive).length}</td><td></td>`;
-    const btn=document.createElement("button"); btn.className="ghost"; btn.textContent="Take a comb";
-    btn.onclick=()=>{ seat={gameId:g.gameId, comb:null, game:g}; paintJoin(); arm($("p3"),true);
-                      $("p3").scrollIntoView({behavior:"smooth",block:"nearest"}); };
-    tr.lastElementChild.appendChild(btn); tb.appendChild(tr);
+    const card = document.createElement("div");
+    card.className = "board";
+    const alive = g.combs.filter(c=>c.alive).length;
+    card.innerHTML = `<div class="bmeta">
+      <span class="asset">${g.asset || ""}</span>
+      <span>game ${g.gameId.slice(-6)}</span>
+      <span>round ${g.instance}</span>
+      <span>${alive} of ${g.combs.length} combs alive</span>
+      <span class="go">click a comb to take it</span></div>`;
+    const combs = document.createElement("div");
+    combs.className = "combs";
+    for(const c of g.combs)
+      combs.appendChild(combBtn(c, { disabled:!c.alive, onclick:() => takeComb(g, c.id, card) }));
+    card.appendChild(combs);
+    box.appendChild(card);
   }
 }
 
-function paintJoin(){
-  const box=$("joinCombs"); box.innerHTML="";
-  if(!seat) return;
-  for(const c of seat.game.combs)
-    box.appendChild(combBtn(c,{ disabled:!c.alive, onclick:joinComb }));
+/** One click: identity if needed, then the seat. */
+async function takeComb(g, combId, card){
+  err("e3","");
+  card.classList.add("busy");
+  try{
+    await ensureMe();
+    seat = { gameId: g.gameId, comb: null, game: g };
+    await joinComb(combId);
+  }catch(e){
+    err("e3", String(e.message || e));
+    card.classList.remove("busy");
+  }
 }
 
 // The relayer queues joins and signs them a moment later, so a 202 means
@@ -332,9 +359,7 @@ async function settled(actionId, ms=20000){
 
 async function joinComb(id){
   err("e3","");
-  const box=$("joinCombs");
   try{
-    box.style.pointerEvents="none";
     $("status").textContent="taking comb "+id+"…";
     const q=await api("/api/agent/join",{ agentWallet:me.wallet, token:me.token, gameId:seat.gameId, combId:id });
     if(q.actionId) await settled(q.actionId);
@@ -349,7 +374,8 @@ async function joinComb(id){
                      : e.message);
     $("status").textContent="";
     loadLobbies();
-  }finally{ box.style.pointerEvents=""; }
+    throw e;                      // the caller clears the board's busy state
+  }
 }
 
 function paintPlay(){
@@ -402,10 +428,10 @@ async function loadLobbies(){
     const j=await api("/api/agent/lobbies");
     lobbies=j.openLobbies||[];
     $("net").textContent=j.cluster||"devnet";
-    paintLobbies();
+    paintBoards();
     if(seat && seat.comb!==null) paintPlay();
-    err("e2","");
-  }catch(e){ err("e2", e.message); }
+    err("e3","");
+  }catch(e){ err("e3", e.message); }
 }
 
 paintMe(); loadLobbies(); setInterval(loadLobbies, 5000);
