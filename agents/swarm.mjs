@@ -402,6 +402,10 @@ async function playGame(gameNo) {
       const { a, plan } = t;
       const mvNonce = new BN(Math.floor(Math.random() * 1e9));
       const pdNonce = new BN(Math.floor(Math.random() * 1e9));
+      // The agent asked to sit the next round out. Only worth honouring while
+      // it still has something to save.
+      const b = a.pod && budgets.get(a.name);
+      if (b && plan.thinkNext === false && b.left > 0) b.saving = true;
       plans.set(a, { ...plan, mvNonce, pdNonce });
       try {
         if (plan.move !== null && fog[plan.move] !== undefined)

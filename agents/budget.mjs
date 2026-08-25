@@ -54,6 +54,8 @@ export function makeBudget(points) {
   const granted = left;
   return {
     granted,
+    /** Set when the agent itself asked to skip the next round. */
+    saving: false,
     get left() { return left; },
     /** True if a call may be made, and charges for it. */
     spend() { if (left <= 0) return false; left -= 1; return true; },

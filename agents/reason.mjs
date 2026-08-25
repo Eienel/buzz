@@ -81,10 +81,18 @@ const SYSTEM =
   "forecast to yourself: if your comb is at or near the bottom of the board you just " +
   "forecast, move. Staying put is correct only when your forecast puts your comb clear of " +
   "last place. Never predict your own comb dies and then stay in it.\n\n" +
+  "WHAT THINKING COSTS: you have a limited number of thinking calls for this whole " +
+  "game, bought with skill points you earned in earlier games. Every call spends one, " +
+  "including this one, and they are not refilled. When they run out you stop reasoning " +
+  "for the rest of the game: you hold your comb and forfeit every remaining prediction. " +
+  "So spend them where they change something. An early board with six combs and an " +
+  "obvious answer is worth less than a late board with three combs and a real choice, " +
+  "and predicting well is what earns the calls you get next game.\n\n" +
   "Reply with JSON only, in this field order:\n" +
   "{\"mine\": <forecast member count of YOUR current comb after this round's moves>,\n" +
   " \"move\": <the comb id you will SIT IN this round>,\n" +
   " \"predict\": <the comb id you forecast dies this round>,\n" +
+  " \"think_next\": <true to spend a call next round, false to save it>,\n" +
   " \"why\": \"<12 words>\"}\n" +
   "Work mine out first, then move, then predict. move must always be a comb id, never null: " +
   "name your current comb only if you worked out it survives. If mine puts your comb at or " +
@@ -106,7 +114,9 @@ function sanitise(raw, fog, self) {
   if (!ok(raw?.predict)) return null;            // no prediction, no round
   const move = ok(raw?.move) ? raw.move : null;  // no move is a real choice: stay put
   const why = typeof raw?.why === "string" ? raw.why.slice(0, 70) : "";
-  return { move: move === self ? null : move, predict: raw.predict, why };
+  // Default to thinking. A model that omits the field has not chosen to skip.
+  const thinkNext = raw?.think_next === false ? false : true;
+  return { move: move === self ? null : move, predict: raw.predict, why, thinkNext };
 }
 
 /**
@@ -123,9 +133,19 @@ export async function decide(fog, self, opts = {}) {
   // it stops reasoning: it holds its comb and forfeits the prediction, exactly
   // as it does when the model misses the window. Being broke and being slow
   // cost the same thing, which is the round.
-  if (opts.budget && !opts.budget.spend()) {
-    if (opts.onSkip) opts.onSkip("out of inference budget");
-    return null;
+  if (opts.budget) {
+    // The agent's own call to sit this one out, made last round when it could
+    // still see the board. Honoured before the balance is even checked: a
+    // saved call is the whole point of letting it decide.
+    if (opts.budget.saving) {
+      opts.budget.saving = false;
+      if (opts.onSkip) opts.onSkip("chose to save a call");
+      return null;
+    }
+    if (!opts.budget.spend()) {
+      if (opts.onSkip) opts.onSkip("out of inference budget");
+      return null;
+    }
   }
 
   // History is the only thing that distinguishes a comb that is steadily
@@ -141,6 +161,10 @@ export async function decide(fog, self, opts = {}) {
     `Last round's counts, and how each comb has trended:\n${trend}\n\n` +
     `${Object.values(fog).reduce((a, b) => a + b, 0)} members across ${Object.keys(fog).length} combs.\n` +
     `Your comb holds ${fog[self]} of them${fog[self] === Math.min(...Object.values(fog)) ? " and is currently tied for smallest" : ""}.\n` +
+    (opts.budget
+      ? `Thinking calls left after this one: ${Math.max(0, opts.budget.left)}. ` +
+        `About ${Math.max(0, Object.keys(fog).length - 1)} rounds remain.\n`
+      : "") +
     `Forecast this round's counts after everyone moves. Name the smallest as predict, ` +
     `and decide whether your own comb is safe to sit in. JSON only.`;
 
