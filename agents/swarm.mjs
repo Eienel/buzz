@@ -15,7 +15,7 @@ import { getOrCreateAssociatedTokenAccount, mintTo, getAssociatedTokenAddressSyn
 import jsSha3 from "js-sha3";
 const { keccak_256 } = jsSha3;
 import { readFileSync } from "node:fs";
-import { decide, reasoningEnabled } from "./reason.mjs";
+import { decide, reasoningEnabled, modelFor, personaFor } from "./reason.mjs";
 import { loadKeypair } from "../server/keypair.mjs";
 
 const { AnchorProvider, Program, Wallet, BN } = anchorPkg;
@@ -31,10 +31,12 @@ const N_AGENTS = Math.max(MIN_COMBS, Number(process.env.AGENTS ?? 5));
 // its wallets and its record.
 const POD_AGENTS = Number(process.env.POD_AGENTS ?? (reasoningEnabled() ? 4 : 0));
 // Measured UsePod latency is 0.5s to 21s, routing variance rather than model
-// choice, and a 24s instance only leaves a 14s commit window. Reasoning agents
-// therefore sit out the fastest games instead of quietly falling back to the
-// herd rule in most rounds, which would make the leaderboard comparison a lie.
-const POD_MIN_TEMPO = Number(process.env.POD_MIN_TEMPO ?? 60);
+// choice, so on a 24s instance the model will often miss the commit window.
+// That is no longer a reason to sit the game out: a reasoning agent that misses
+// stays in its comb and skips only the prediction, so it is still exposed to
+// the board and still counted. Set POD_MIN_TEMPO to gate them off fast games
+// again if the miss rate makes those games uninteresting.
+const POD_MIN_TEMPO = Number(process.env.POD_MIN_TEMPO ?? 0);
 // How many games may be live at once, and how long to wait between starting
 // them so three lobbies do not all crank on the same second.
 const MAX_CONCURRENT = Number(process.env.MAX_CONCURRENT ?? 3);
@@ -184,13 +186,20 @@ async function playGame(gameNo) {
   const podsThisGame = tempo >= POD_MIN_TEMPO ? POD_AGENTS : 0;
   const agents = Array.from({ length: N_AGENTS + podsThisGame }, (_, i) => {
     const pod = i >= N_AGENTS;
+    const podIx = i - N_AGENTS;                       // 0..POD_AGENTS-1
     const name = pod ? `pod-${slot}${i}` : `${stratNames[i % stratNames.length]}-${slot}${i}`;
     return {
       kp: agentKey(name),
       name,
       pod,
+      model: pod ? modelFor(podIx) : null,
       strat: pod
-        ? (fog, self, instance) => decide(fog, self, { instance, instanceSeconds: tempo })
+        ? (fog, self, instance) => decide(fog, self, {
+            instance, instanceSeconds: tempo, history: fogHistory,
+            model: modelFor(podIx), persona: personaFor(podIx),
+            // spread across the range so four pods on one board do not converge
+            temperature: 0.5 + podIx * 0.15,
+          })
         : strategies[stratNames[i % stratNames.length]],
       // one agent per comb for the first MIN_COMBS, so the comb floor is met by
       // construction rather than by luck; the rest spread over the six
@@ -198,7 +207,7 @@ async function playGame(gameNo) {
     };
   });
   log(`game ${gid}: ${asset.name}, ${tempo}s instances, ${N_AGENTS} heuristic` +
-      `${podsThisGame ? ` + ${podsThisGame} reasoning` : " (too fast for reasoning)"} agents…`);
+      `${podsThisGame ? ` + ${podsThisGame} reasoning (${[...new Set(agents.filter((a) => a.pod).map((a) => a.model))].join(", ")})` : ""} agents…`);
   await fundAgents(agents, asset);
 
   // Everything after funding is wrapped so sweepBack ALWAYS runs, a throw
@@ -231,12 +240,16 @@ async function playGame(gameNo) {
 
   // fog = previous instance's finalized member counts
   let fog = {};
+  // Every past fog, so a reasoning agent can see which combs are bleeding and
+  // which just took a crowd. One snapshot alone has no trend in it.
+  const fogHistory = [];
   const readFog = async () => {
     fog = {};
     for (const id of taken) {
       const c = await program.account.circle.fetch(circlePda(id));
       if (c.alive) fog[id] = c.memberCount;
     }
+    fogHistory.push({ ...fog });
   };
   await readFog();
 
@@ -258,15 +271,22 @@ async function playGame(gameNo) {
     const modelled = thought.filter((t) => t?.plan?.by === "model").length;
     const podCount = live.filter((a) => a.pod).length;
     if (podCount) {
-      const skipped = live.filter((a) => a.pod).length - modelled;
+      const skipped = podCount - modelled;
       log(`  ${modelled}/${podCount} reasoning agents answered` +
-        (skipped ? `, ${skipped} sat the round out` : ""));
+        (skipped ? `, ${skipped} held and did not predict` : ""));
+      // One line of the model's own rationale per round. If every agent says
+      // "smallest comb" the prompt is not producing reasoning and we should know.
+      for (const t of thought) {
+        if (t?.a?.pod && t.plan?.why)
+          log(`    ${t.a.name} -> ${t.plan.predict}: ${t.plan.why}`);
+      }
     }
 
     for (const t of thought) {
-      // A null plan is an agent that declined to act: the model did not answer
-      // usably inside the commit window. It commits nothing, holds its comb,
-      // and is exposed to whatever happens there.
+      // A null plan is a model that did not answer usably inside the commit
+      // window. The agent still plays: it holds its comb, stays exposed to
+      // whatever happens there, and simply forfeits the prediction. Guessing
+      // one for it would credit the model with a point it never earned.
       if (!t || !t.plan) continue;
       const { a, plan } = t;
       const mvNonce = new BN(Math.floor(Math.random() * 1e9));

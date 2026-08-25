@@ -18,6 +18,19 @@
 const BASE = (t) => `https://api.usepod.ai/proxy/${t}/v1/chat/completions`;
 const TOKEN = process.env.USEPOD_TOKEN ?? "";
 const MODEL = process.env.USEPOD_MODEL ?? "llama-4-maverick";
+// Four pods asking one model the same question at the same temperature are one
+// agent with four wallets. Each pod gets its own model and its own disposition
+// so the reasoning cohort is four independent opinions, which is the only way
+// the comparison against five heuristics means anything.
+const MODELS = (process.env.USEPOD_MODELS ?? MODEL).split(",").map((m) => m.trim()).filter(Boolean);
+const PERSONAS = [
+  "You weight recent trend over the current snapshot; a comb that has been bleeding keeps bleeding.",
+  "You assume the other agents are more predictable than they look and lean hard on the known field.",
+  "You are cautious: when two combs are close, you take the one that keeps you alive over the one that scores.",
+  "You hunt the point: you will sit somewhere risky if it puts you on the right side of a prediction.",
+];
+export const modelFor = (i) => MODELS[i % MODELS.length];
+export const personaFor = (i) => PERSONAS[i % PERSONAS.length];
 const TIMEOUT_CAP = Number(process.env.USEPOD_TIMEOUT_MS ?? 20000);
 
 // A fixed timeout does not survive short games. Commit is 60% of an instance,
@@ -34,13 +47,40 @@ function budgetFor(instanceSeconds) {
 export const reasoningEnabled = () => TOKEN.length > 0;
 
 const SYSTEM =
-  "You play Last Comb Standing, a survival game. Each round the comb with the " +
-  "fewest members dies, though a rare fate-strike can take another instead. " +
-  "You see only how many members each comb held LAST round, never this round. " +
-  "Everyone else sees the same and moves at the same time, so crowds shift. " +
-  "Answer with JSON only: {\"move\": <comb id or null>, \"predict\": <comb id>}. " +
-  "move is the comb to move to, or null to stay. predict is the comb you think " +
-  "dies this round; a correct call scores a point whether or not you survive.";
+  "You play Last Comb Standing. Six combs, one dies each round, last one alive wins.\n\n" +
+  "THE RULE: the comb holding the FEWEST members AFTER everyone moves dies. Ties go to " +
+  "the comb with the least stake, then pseudo-random. 15% of rounds a fate strike kills " +
+  "a random comb instead.\n\n" +
+  "THE HARD PART: the counts you are shown are LAST round's, taken before anyone moved. " +
+  "Every agent is moving right now, simultaneously, off the same stale numbers you have. " +
+  "So naming the comb that is smallest in the numbers in front of you is almost always " +
+  "WRONG: everyone can see it is smallest, nobody wants to be in the doomed comb, and the " +
+  "ones who can leave it do. Meanwhile the comb that looks safe attracts nobody and can " +
+  "empty out. Work out where the crowd is about to go, subtract the leavers, add the " +
+  "arrivers, then name the smallest comb in the board you just forecast.\n\n" +
+  "WHO YOU ARE PLAYING: five rule-following agents, working off the same stale counts you " +
+  "have. Two always move into whichever comb is currently LARGEST. Two never move at all, " +
+  "ever, whatever the board looks like. One moves to a comb picked at random. That is the " +
+  "whole field, it never changes, and it means the board is largely forecastable: the " +
+  "largest comb gains about two, every other comb loses whichever herd members it held, " +
+  "and one random walker lands somewhere. A comb that is small and is not the largest does " +
+  "NOT refill, because the only agents who would move there are the ones who never move.\n\n" +
+  "YOUR OWN SURVIVAL: you are in one of these combs. If the comb you are sitting in ends " +
+  "the round smallest, you are eliminated and play no further rounds. Apply the same " +
+  "forecast to yourself: if your comb is at or near the bottom of the board you just " +
+  "forecast, move. Staying put is correct only when your forecast puts your comb clear of " +
+  "last place. Never predict your own comb dies and then stay in it.\n\n" +
+  "Reply with JSON only, in this field order:\n" +
+  "{\"mine\": <forecast member count of YOUR current comb after this round's moves>,\n" +
+  " \"move\": <the comb id you will SIT IN this round>,\n" +
+  " \"predict\": <the comb id you forecast dies this round>,\n" +
+  " \"why\": \"<12 words>\"}\n" +
+  "Work mine out first, then move, then predict. move must always be a comb id, never null: " +
+  "name your current comb only if you worked out it survives. If mine puts your comb at or " +
+  "near the bottom, name a different comb. A correct predict scores a point whether or not " +
+  "you survive, and points are what the season pays on, but a dead agent predicts nothing " +
+  "in later rounds. Never predict a comb because it is smallest right now, and never sit in " +
+  "a comb you just forecast to be smallest.";
 
 
 
@@ -54,7 +94,8 @@ function sanitise(raw, fog, self) {
   const ok = (v) => Number.isInteger(v) && ids.includes(v);
   if (!ok(raw?.predict)) return null;            // no prediction, no round
   const move = ok(raw?.move) ? raw.move : null;  // no move is a real choice: stay put
-  return { move: move === self ? null : move, predict: raw.predict };
+  const why = typeof raw?.why === "string" ? raw.why.slice(0, 70) : "";
+  return { move: move === self ? null : move, predict: raw.predict, why };
 }
 
 /**
@@ -62,18 +103,27 @@ function sanitise(raw, fog, self) {
  *
  * A reasoning agent that silently degraded to the herd rule scored points the
  * model never earned, which is exactly the comparison this exists to make. So
- * every failure path abstains instead: the agent commits nothing that round,
- * keeps its stake where it is, and takes whatever the board does to it.
+ * every failure path returns null instead. The caller keeps the agent in the
+ * game and holding its comb; it forfeits only the prediction for that round.
  */
 export async function decide(fog, self, opts = {}) {
   if (!TOKEN) return null;
 
-  const board = Object.entries(fog)
-    .map(([id, m]) => `comb ${id}: ${m} member${m === 1 ? "" : "s"} last round`)
-    .join("\n");
+  // History is the only thing that distinguishes a comb that is steadily
+  // bleeding from one that just took a crowd. Without it every round looks
+  // like the first one and there is nothing to reason over.
+  const hist = (opts.history ?? []).slice(-4);
+  const trend = Object.keys(fog).map((id) => {
+    const seen = hist.map((h) => h[id]).filter((v) => v !== undefined);
+    return `comb ${id}: ${fog[id]} now${seen.length > 1 ? `, was ${seen.join(" -> ")}` : ""}`;
+  }).join("\n");
   const user =
-    `You are in comb ${self}.\nAlive combs and last round's counts:\n${board}\n` +
-    `Round ${opts.instance ?? "?"} of the game. Reply with JSON only.`;
+    `Round ${opts.instance ?? "?"}. You are in comb ${self}.\n` +
+    `Last round's counts, and how each comb has trended:\n${trend}\n\n` +
+    `${Object.values(fog).reduce((a, b) => a + b, 0)} members across ${Object.keys(fog).length} combs.\n` +
+    `Your comb holds ${fog[self]} of them${fog[self] === Math.min(...Object.values(fog)) ? " and is currently tied for smallest" : ""}.\n` +
+    `Forecast this round's counts after everyone moves. Name the smallest as predict, ` +
+    `and decide whether your own comb is safe to sit in. JSON only.`;
 
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), budgetFor(opts.instanceSeconds));
@@ -83,10 +133,15 @@ export async function decide(fog, self, opts = {}) {
       headers: { "content-type": "application/json" },
       signal: ctl.signal,
       body: JSON.stringify({
-        model: MODEL,
-        messages: [{ role: "system", content: SYSTEM }, { role: "user", content: user }],
-        max_tokens: 60,
-        temperature: 0.7,          // identical agents on an identical board would herd
+        model: opts.model ?? MODEL,
+        messages: [
+          { role: "system", content: opts.persona ? `${SYSTEM}\n\nYOUR DISPOSITION: ${opts.persona}` : SYSTEM },
+          { role: "user", content: user },
+        ],
+        max_tokens: 260,   // a forecast needs room to be worked out, not just asserted
+        // Identical agents on an identical board would herd, so each pod is
+        // spread across the range rather than all sitting at one value.
+        temperature: opts.temperature ?? 0.7,
         response_format: { type: "json_object" },
       }),
     });
