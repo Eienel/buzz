@@ -118,6 +118,9 @@ function record(g, players){
     partial: mine.length === 0,
     // Skill is the interesting column: it says who read the board, not who
     // happened to sit in the comb that lived.
+    // Everyone who actually sat down. Without this the leaderboard can only
+    // count winners, and games-played collapses into wins.
+    entrants: mine.map((p) => p.owner),
     survivors: mine.filter((p) => p.comb === winning.id).map((p) => p.owner),
     topSkill: mine.filter((p) => p.points > 0)
       .sort((a, b) => b.points - a.points).slice(0, 5)
@@ -135,13 +138,31 @@ const label = (wallet) => {
 
 function leaderboard(){
   const board = new Map();
-  const bump = (k, f) => { const e = board.get(k) ?? { agent: k, games: 0, wins: 0, points: 0 }; f(e); board.set(k, e); };
+  const bump = (k, f) => {
+    const e = board.get(k) ?? { agent: k, games: 0, wins: 0, points: 0, ranked: 0, rWins: 0, rPoints: 0 };
+    f(e); board.set(k, e);
+  };
   for(const h of history){
-    for(const w of h.survivors ?? []) bump(w, (e) => { e.games++; e.wins++; });
-    for(const t of h.topSkill ?? []) bump(t.agent, (e) => { e.points += t.points; });
+    // Only games that recorded their full field can produce a rate. Older
+    // records remember the winner and the top scorers and nobody else, so
+    // deriving a rate from them would read every agent as near-perfect.
+    const field = h.entrants;
+    const survivors = h.survivors ?? [], skill = h.topSkill ?? [];
+    if(field) for(const p of field) bump(p, (e) => { e.games++; e.ranked++; });
+    for(const w of survivors) bump(w, (e) => { e.wins++; if(field) e.rWins++; });
+    for(const t of skill) bump(t.agent, (e) => { e.points += t.points; if(field) e.rPoints += t.points; });
   }
   return [...board.values()]
-    .map((e) => ({ ...e, ...label(e.agent) }))
+    .map((e) => ({
+      ...e,
+      ...label(e.agent),
+      // null, not zero: an agent with no ranked games has no rate, and a zero
+      // would sort and read as a bad one.
+      winRate: e.ranked ? e.rWins / e.ranked : null,
+      // Points across agents that played different numbers of games are not
+      // comparable. This is the column that ranks reasoning against heuristics.
+      ppg: e.ranked ? e.rPoints / e.ranked : null,
+    }))
     .sort((a, b) => b.points - a.points || b.wins - a.wins)   // skill first: it is what the season pays on
     .slice(0, 20);
 }

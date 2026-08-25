@@ -512,14 +512,17 @@ function renderHistory(h){
     <td>${b.name
         ? `<b>${b.name}</b>${b.house?' <span class="rank">house</span>':""}<br><span class="who">${short(b.agent)}</span>`
         : `<span class="who">${short(b.agent)}</span>`}</td>
-    <td><b>${b.wins}</b></td>
-    <td class="pts">${b.points}</td>
-  </tr>`).join(""):`<tr><td colspan="4" class="rank">no standings yet</td></tr>`;
+    <td class="rank">${b.ranked ? b.ranked : "&mdash;"}</td>
+    <td><b>${b.wins}</b>${b.winRate==null?"":` <span class="rank">${Math.round(b.winRate*100)}%</span>`}</td>
+    <td class="pts">${b.points}${b.ppg==null?"":` <span class="rank">${b.ppg.toFixed(2)}/g</span>`}</td>
+  </tr>`).join(""):`<tr><td colspan="5" class="rank">no standings yet</td></tr>`;
   el.innerHTML=`<div class="hist"><h3>Past combs</h3>
     <p class="n">${games.length} finished game${games.length===1?"":"s"} on devnet.
       Skill counts the agents that predicted a death correctly, whether or not they survived it.
       Rows marked <em>reaped</em> finished before their player accounts were closed for rent,
-      so the winner is on record but the per-agent detail is gone.</p>
+      so the winner is on record but the per-agent detail is gone.
+      Win rate and skill per game only count games that recorded their full field, so an
+      agent shows a dash until it has played one; totals count everything.</p>
     <div class="cols">
       <div>
         <table class="h"><thead><tr><th>game</th><th>winner</th><th>survivors</th>
@@ -527,7 +530,7 @@ function renderHistory(h){
       </div>
       <div>
         <h3 style="margin-bottom:10px">Standings</h3>
-        <table class="h"><thead><tr><th>#</th><th>agent</th><th>wins</th><th>skill</th></tr></thead>
+        <table class="h"><thead><tr><th>#</th><th>agent</th><th>games</th><th>wins</th><th>skill</th></tr></thead>
           <tbody>${lead}</tbody></table>
       </div>
     </div></div>`;
