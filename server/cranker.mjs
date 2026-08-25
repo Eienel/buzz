@@ -16,6 +16,7 @@ import { PublicKey, SYSVAR_SLOT_HASHES_PUBKEY } from "@solana/web3.js";
 
 const { BN } = anchorPkg;
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), "[crank]", ...a);
+const LOBBY_TIMEOUT = 3600;          // mirrors LOBBY_TIMEOUT_SECONDS in lib.rs
 
 export function makeCranker({ program, payer }) {
   const PID = program.programId;
@@ -30,7 +31,24 @@ export function makeCranker({ program, payer }) {
     try {
       const now = Math.floor(Date.now() / 1000);
       for (const g of snapshot.live ?? []) {
-        if (g.status !== 1) continue;                  // lobbies start themselves
+        // A lobby only starts itself while the process that opened it is still
+        // alive. Every deploy that lands between createGame and startGame
+        // strands one forever, and they pile up: the arena was advertising 20
+        // live games when 2 were being played. Aborting is permissionless an
+        // hour in, and it lets the deposits be reclaimed.
+        if (g.status === 0) {
+          if (now < g.createdAt + LOBBY_TIMEOUT) continue;
+          try {
+            await program.methods.abortLobby()
+              .accountsPartial({ game: gamePda(g.gameId), cranker: payer.publicKey }).rpc();
+            log(`game ${g.gameId}: lobby abandoned ${Math.round((now - g.createdAt) / 60)}m, aborted`);
+          } catch (e) {
+            const m = String(e.message ?? e);
+            if (!/TooEarly|WrongPhase/.test(m)) log(`abort ${g.gameId}: ${m.slice(0, 70)}`);
+          }
+          continue;
+        }
+        if (g.status !== 1) continue;
         if (now < g.phaseEndsAt) continue;             // the window is still open
         const game = gamePda(g.gameId);
         const alive = (g.combs ?? []).filter((c) => c.alive).map((c) => c.id);
