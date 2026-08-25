@@ -241,6 +241,10 @@ async function poll(){
     }
     snapshot = { ok:true, updatedAt:Date.now(), programId:PROGRAM_ID, cluster:RPC.includes("devnet")?"devnet":"mainnet",
                  live:games.filter(g=>(g.status===0||g.status===1) && !g.legacy), finished:history.length,
+                 // Settled but not yet swept. Kept apart from `live` so the
+                 // public board still means "being played", while the cranker
+                 // can still see games that owe the treasury their rake.
+                 settling:games.filter(g=>g.status===2 && !g.legacy && Number(g.fees||0)>0),
                  recent: history.slice(0, 10) };
     autoplay.tick(snapshot);          // walk easy-mode intents through the phases
     limiter.reconcile(games.filter(g=>g.status===0||g.status===1).map(g=>g.gameId));
@@ -516,7 +520,12 @@ createServer(async (req,res)=>{
     // more is worth it. Default stays small; the cap is what we actually retain.
     const want = Number(url.searchParams.get("limit"));
     const limit = Number.isFinite(want) && want > 0 ? Math.min(want, HISTORY_MAX) : 50;
-    return send(res, 200, { games: history.slice(0, limit), total: history.length,
+    // Sorted, not just in insertion order. Records written before endedAt came
+    // from the chain carry a "when we noticed" timestamp instead, so the array
+    // order and the times disagree: the board showed 5m ago, then 51h, then 50h,
+    // then 49h, walking backwards through the file.
+    const ordered = [...history].sort((a, b) => (b.endedAt ?? 0) - (a.endedAt ?? 0));
+    return send(res, 200, { games: ordered.slice(0, limit), total: history.length,
                             leaderboard: leaderboard(), houseAgents: houseWallets() });
   }
   if(p === "/api/state"){

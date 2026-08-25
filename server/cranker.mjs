@@ -55,36 +55,30 @@ export function makeCranker({ program, payer, starter }) {
     busy = true;
     try {
       const now = Math.floor(Date.now() / 1000);
-      for (const g of snapshot.live ?? []) {
-        // A settled game still holding its rake. collect_fees is permissionless
-        // and moves the house cut and the jackpot share into the treasury, but
-        // it only ever ran inside the swarm's own settlement block, which is
-        // tied to the playGame call that created the game. Any game the cranker
-        // rescued therefore settled with nobody to collect it: the jackpot
-        // stopped growing, and close_game refuses while the rake is still in
-        // the vault, so the rent could not be reclaimed either.
-        if (g.status === 2 && Number(g.fees ?? 0) > 0) {
-          try {
-            const tp = await tokenProgramOf(g.stakeMint);
-            if (!tp) continue;
-            await program.methods.collectFees()
-              .accountsPartial({ config: configPda, game: gamePda(g.gameId),
-                vault: vaultPda(g.gameId), treasury: treasuryPda(g.stakeMint),
-                treasuryVault: tvaultPda(g.stakeMint), stakeMint: new PublicKey(g.stakeMint),
-                tokenProgram: tp,
-                cranker: payer.publicKey, systemProgram: SystemProgram.programId }).rpc();
-            log(`game ${g.gameId}: swept ${(Number(g.fees) / 1e6).toFixed(2)} in fees to the treasury`);
-          } catch (e) {
-            const m = String(e.message ?? e);
-            if (!/NothingToClaim|WrongPhase/.test(m)) log(`fees ${g.gameId}: ${m.slice(0, 70)}`);
-          }
-          continue;
+
+      // Settled games still holding their rake. collect_fees only ever ran in
+      // the swarm's settlement block, tied to the playGame call that created
+      // the game, so anything the cranker rescued settled with nobody to
+      // collect it: the jackpot stopped growing, and close_game refuses while
+      // the rake is in the vault, so the rent was stuck too.
+      for (const g of snapshot.settling ?? []) {
+        try {
+          const tp = await tokenProgramOf(g.stakeMint);
+          if (!tp) continue;
+          await program.methods.collectFees()
+            .accountsPartial({ config: configPda, game: gamePda(g.gameId),
+              vault: vaultPda(g.gameId), treasury: treasuryPda(g.stakeMint),
+              treasuryVault: tvaultPda(g.stakeMint), stakeMint: new PublicKey(g.stakeMint),
+              tokenProgram: tp,
+              cranker: payer.publicKey, systemProgram: SystemProgram.programId }).rpc();
+          log(`game ${g.gameId}: swept ${(Number(g.fees) / 1e6).toFixed(2)} in fees to the treasury`);
+        } catch (e) {
+          const m = String(e.message ?? e);
+          if (!/NothingToClaim|WrongPhase/.test(m)) log(`fees ${g.gameId}: ${m.slice(0, 70)}`);
         }
-        // A lobby only starts itself while the process that opened it is still
-        // alive. Every deploy that lands between createGame and startGame
-        // strands one forever, and they pile up: the arena was advertising 20
-        // live games when 2 were being played. Aborting is permissionless an
-        // hour in, and it lets the deposits be reclaimed.
+      }
+
+      for (const g of snapshot.live ?? []) {
         if (g.status === 0) {
           // Aborting is the last resort, not the first. A stranded lobby
           // usually has players and their stakes in it: the swarm created the
