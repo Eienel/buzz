@@ -363,9 +363,12 @@ createServer(async (req,res)=>{
     return res.end(snapshot.ok ? "ok" : "rpc: "+snapshot.error);
   }
 
-  if(p === "/") p = "/index.html";
+  // home is the front door now; the long-form docs move to /docs
+  if(p === "/")      p = "/home.html";
+  if(p === "/docs")  p = "/index.html";
   if(p === "/arena") p = "/arena.html";
   if(p === "/play")  p = "/play.html";
+  if(p === "/agents")p = "/agents.html";
   // contain path traversal: resolve inside ROOT only
   const file = join(ROOT, normalize(p).replace(/^(\.\.[/\\])+/, ""));
   if(!file.startsWith(ROOT) || !existsSync(file)){
