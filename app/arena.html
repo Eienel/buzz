@@ -17,11 +17,21 @@
     --honey:#ffb300; --honey2:#ff8f1f; --gold:#ffd280;
     --text:#f3ead9; --dim:#a08f74; --dimmer:#6d5f4c;
     --alive:#5fd68a; --dead:#f2637a; --cool:#6fb0ff;
-    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro Display",
+      system-ui,"Segoe UI",Roboto,sans-serif;
+    /* One easing for everything that moves, so the whole board decelerates
+       with the same weight rather than each piece having its own opinion. */
+    --ease:cubic-bezier(.16,1,.3,1);
   }
   *{box-sizing:border-box}
   body{margin:0;background:var(--ink);color:var(--text);
-    font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}
+    font:15px/1.5 var(--sans);-webkit-font-smoothing:antialiased;
+    -moz-osx-font-smoothing:grayscale;letter-spacing:-.011em}
+  @media (prefers-reduced-motion:reduce){
+    *,*::before,*::after{animation-duration:.01ms !important;animation-iteration-count:1 !important;
+      transition-duration:.01ms !important}
+  }
   a{color:var(--honey);text-decoration:none} a:hover{text-decoration:underline}
 
   /* honeycomb wallpaper */
@@ -171,6 +181,26 @@
 
 
   /* past games and the standing that comes out of them */
+  /* Games arrive in sequence rather than all at once, which reads as the board
+     filling in rather than a page repainting. transform+opacity only, so it
+     stays on the compositor. */
+  @keyframes rise{from{opacity:0;transform:translate3d(0,10px,0)}to{opacity:1;transform:none}}
+  .game{animation:rise .5s var(--ease) both;animation-delay:calc(var(--i,0) * 70ms)}
+  .hex{transition:transform .35s var(--ease),filter .35s var(--ease)}
+  .hex:hover{transform:translate3d(0,-3px,0)}
+  .game:hover{border-color:var(--edge2)}
+  .game{transition:border-color .3s var(--ease)}
+  /* A control that moves under the press feels connected to the click. */
+  .view button,.loadmore{transition:transform .12s var(--ease),border-color .15s,background .15s,color .15s}
+  .view button:active,.loadmore:active{transform:translate3d(0,1px,0)}
+  .m.lead{color:var(--text)}
+  .m.lead b{color:var(--honey)}
+  /* Identifiers and running totals still available, just not competing with
+     the clock and the pot for the first look. */
+  .gmeta{margin-left:auto;display:flex;flex-wrap:wrap;gap:14px;align-items:center;
+    font-family:var(--mono);font-size:11.5px;color:var(--dimmer)}
+  .gmeta b{color:var(--dim);font-weight:600}
+  @media (max-width:720px){ .gmeta{margin-left:0;width:100%;gap:10px} }
   .loadmore{display:block;width:100%;margin-top:12px;padding:10px;border-radius:10px;
     background:transparent;border:1px solid var(--edge);color:var(--text);font:inherit;
     font-size:13.5px;cursor:pointer;transition:border-color .15s,background .15s}
@@ -415,7 +445,7 @@ function render(s){
     A fresh game opens every couple of minutes. Keep this open and one will appear.</div>`; return; }
   const now=Math.floor(Date.now()/1e3);
   const ordered=[...live].sort((a,b)=>(b.status===1)-(a.status===1));
-  root.innerHTML=ordered.slice(0,4).map(g=>{
+  root.innerHTML=ordered.slice(0,4).map((g,gi)=>{
     diff(g);
     const left=Math.max(0,g.phaseEndsAt-now);
     const span=Math.max(1,Math.round(g.instanceSeconds*(g.phase===0?.6:.4)));
@@ -438,17 +468,19 @@ function render(s){
     const feed=(feeds.get(g.gameId)||[]).map(e=>
       `<li><time>${e.t}</time><span class="${e.cls}">${e.text}</span></li>`).join("")
       ||'<li><span>waiting for the next event</span></li>';
-    return `<section class="game">
+    return `<section class="game" style="--i:${gi}">
       <div class="ghead">
         <span class="pill ${g.status===1?"run":"lobby"}"><i></i>${STATUS[g.status]}</span>
         ${g.insane?'<span class="pill insane"><i></i>insane</span>':""}
-        <span class="gid">game #${g.gameId}</span>
-        <span class="m">${IC.inst}instance <b>${g.instance}</b></span>
-        <span class="m">${IC.clock}<b>${PHASE[g.phase]}</b>
+        <span class="m lead">${IC.clock}<b>${PHASE[g.phase]}</b>
           ${g.status===1?`<time class="cd" data-ends="${g.phaseEndsAt}" data-span="${span}">${mmss(left)}</time>`:""}</span>
-        <span class="m">${IC.ppl}players <b>${g.players}</b></span>
-        <span class="m">${IC.pot}pot <b>${sol(g.leftover)}</b></span>
-        <span class="m">${IC.vol}volume <b>${sol(g.deposited)}</b></span>
+        <span class="m lead">${IC.pot}pot <b>${sol(g.leftover)}</b></span>
+        <span class="gmeta">
+          <span class="gid">#${g.gameId}</span>
+          <span>instance <b>${g.instance}</b></span>
+          <span><b>${g.players}</b> players</span>
+          <span>volume <b>${sol(g.deposited)}</b></span>
+        </span>
       </div>
       <div class="bar"><i style="width:${pct}%" data-ends="${g.phaseEndsAt}" data-span="${span}"></i></div>
       ${VIEW==="hive"?combs:`<div class="combs">${combs}</div>`}
