@@ -30,8 +30,20 @@
     background-size:56px 97px}
   .topbar,.wrap{position:relative;z-index:1}
   body{margin:0;background:var(--bg);color:var(--text);
-    font:16px/1.65 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
-    -webkit-font-smoothing:antialiased}
+    font:16px/1.65 var(--sans);-webkit-font-smoothing:antialiased;
+    -moz-osx-font-smoothing:grayscale;letter-spacing:-.011em}
+  /* Sections settle in as you reach them rather than being there already. One
+     easing across the site, transform and opacity only. */
+  @keyframes rise{from{opacity:0;transform:translate3d(0,14px,0)}to{opacity:1;transform:none}}
+  section{animation:rise .55s var(--ease) both;animation-timeline:view();animation-range:entry 0% cover 22%}
+  @supports not (animation-timeline:view()){ section{animation:none} }
+  .topbar a,.card,.cta{transition:transform .12s var(--ease),color .15s var(--ease),
+    border-color .15s var(--ease),background .15s var(--ease)}
+  .cta:active{transform:translate3d(0,1px,0)}
+  @media (prefers-reduced-motion:reduce){
+    *,*::before,*::after{animation-duration:.01ms !important;animation-iteration-count:1 !important;
+      transition-duration:.01ms !important}
+  }
   a{color:var(--info);text-decoration:none}
   a:hover{text-decoration:underline}
   code{font-family:var(--mono);font-size:.88em;background:var(--panel2);
