@@ -209,6 +209,42 @@ async function waitForRunning(gamePda, gid, ms = 90_000) {
     .accountsPartial({ game: gamePda, authority: payer.publicKey }).rpc();
 }
 
+// A game that never finishes is worse than one that fails.
+//
+// Anchor's .rpc() has no timeout, so a stalled RPC hangs the call forever. The
+// main loop waits on Promise.race(inflight), which never settles if every game
+// in flight is hung, so the swarm goes silent: no new games, no crash, and the
+// supervisor never restarts it because the process is still alive. That is
+// exactly how the arena ended up with twelve stranded lobbies and nothing
+// running for half an hour.
+//
+// Five instances at the slowest tempo, doubled, plus room to settle.
+const GAME_DEADLINE_MS = Number(process.env.GAME_DEADLINE_MS
+  ?? (Math.max(...TEMPOS) * 5 * 2 + 300) * 1000);
+
+function withDeadline(promise, ms, what) {
+  let t;
+  return Promise.race([
+    promise.finally(() => clearTimeout(t)),
+    new Promise((_, rej) => { t = setTimeout(() => rej(new Error(`${what} passed its deadline`)), ms); }),
+  ]);
+}
+
+// Last time anything finished. If nothing does for long enough the process is
+// wedged in a way it cannot see, and the only honest move is to die so the
+// supervisor can restart it.
+let lastProgress = Date.now();
+// The per-game deadline already stops the loop wedging, so this only catches
+// a stall somewhere else. Deadline plus five minutes: long enough that a slow
+// game is never mistaken for a hang, short enough that nobody watches a dead
+// arena for half an hour again.
+const STALL_EXIT_MS = Number(process.env.STALL_EXIT_MS ?? GAME_DEADLINE_MS + 300_000);
+setInterval(() => {
+  if (Date.now() - lastProgress < STALL_EXIT_MS) return;
+  log(`no game finished in ${Math.round(STALL_EXIT_MS / 60000)}m, exiting so the supervisor restarts`);
+  process.exit(1);
+}, 30_000).unref();
+
 async function playGame(gameNo) {
   // Only BUZZ has an open season, so only BUZZ games move the leaderboard.
   // A strict alternation made half the arena unranked, which is the wrong
@@ -548,9 +584,9 @@ const inflight = new Set();
 let started = 0;
 const launch = (n) => {
   const task = (async () => {
-    try { await playGame(n); }
+    try { await withDeadline(playGame(n), GAME_DEADLINE_MS, `game ${n}`); }
     catch (e) { log(`game failed: ${e.message?.slice(0, 200)}`); }
-  })().finally(() => inflight.delete(task));
+  })().finally(() => { inflight.delete(task); lastProgress = Date.now(); });
   inflight.add(task);
   return task;
 };
