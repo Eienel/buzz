@@ -18,13 +18,13 @@
 const BASE = (t) => `https://api.usepod.ai/proxy/${t}/v1/chat/completions`;
 const TOKEN = process.env.USEPOD_TOKEN ?? "";
 const MODEL = process.env.USEPOD_MODEL ?? "llama-4-maverick";
-const TIMEOUT_CAP = Number(process.env.USEPOD_TIMEOUT_MS ?? 12000);
+const TIMEOUT_CAP = Number(process.env.USEPOD_TIMEOUT_MS ?? 20000);
 
 // A fixed timeout does not survive short games. Commit is 60% of an instance,
 // so a 24s round leaves a 14s window that also has to carry two on-chain
 // commits per agent. Thinking gets a slice of that window, never the whole
-// thing, so a slow model degrades to the herd rule in time to still commit
-// rather than missing the round entirely.
+// thing, so a model that runs long is cut off with time left to abstain
+// cleanly rather than stalling the round for everyone else.
 function budgetFor(instanceSeconds) {
   if (!instanceSeconds) return TIMEOUT_CAP;
   const commitWindow = instanceSeconds * 0.6 * 1000;
@@ -42,29 +42,31 @@ const SYSTEM =
   "move is the comb to move to, or null to stay. predict is the comb you think " +
   "dies this round; a correct call scores a point whether or not you survive.";
 
-/** Last-resort rule, and the thing every failure path falls back to. */
-function herd(fog, self) {
-  const alive = Object.entries(fog).map(([id, m]) => ({ id: +id, m }));
-  alive.sort((a, b) => b.m - a.m);
-  const thin = alive[alive.length - 1].id;
-  return { move: alive[0].id === self ? null : alive[0].id, predict: thin };
-}
 
-/** Only ids that are actually alive may be used; a model may hallucinate one. */
+
+/**
+ * Only ids that are actually alive may be used; a model may hallucinate one.
+ * Returns null when the answer cannot be used, because a repaired answer is
+ * not the model's answer and scoring it as one corrupts the benchmark.
+ */
 function sanitise(raw, fog, self) {
   const ids = Object.keys(fog).map(Number);
   const ok = (v) => Number.isInteger(v) && ids.includes(v);
-  const move = ok(raw?.move) ? raw.move : null;
-  const predict = ok(raw?.predict) ? raw.predict : herd(fog, self).predict;
-  return { move: move === self ? null : move, predict };
+  if (!ok(raw?.predict)) return null;            // no prediction, no round
+  const move = ok(raw?.move) ? raw.move : null;  // no move is a real choice: stay put
+  return { move: move === self ? null : move, predict: raw.predict };
 }
 
 /**
- * One decision. Returns { move, predict, by } where `by` is "model" or
- * "fallback", so callers can log how often the model actually answered.
+ * One decision, or null when the model did not answer usably in time.
+ *
+ * A reasoning agent that silently degraded to the herd rule scored points the
+ * model never earned, which is exactly the comparison this exists to make. So
+ * every failure path abstains instead: the agent commits nothing that round,
+ * keeps its stake where it is, and takes whatever the board does to it.
  */
 export async function decide(fog, self, opts = {}) {
-  if (!TOKEN) return { ...herd(fog, self), by: "fallback" };
+  if (!TOKEN) return null;
 
   const board = Object.entries(fog)
     .map(([id, m]) => `comb ${id}: ${m} member${m === 1 ? "" : "s"} last round`)
@@ -94,9 +96,11 @@ export async function decide(fog, self, opts = {}) {
     // tolerate a model that wraps its JSON in prose or a code fence
     const m = text.match(/\{[\s\S]*\}/);
     if (!m) throw new Error("no json in reply");
-    return { ...sanitise(JSON.parse(m[0]), fog, self), by: "model" };
+    const plan = sanitise(JSON.parse(m[0]), fog, self);
+    return plan && { ...plan, by: "model" };
   } catch (e) {
-    return { ...herd(fog, self), by: "fallback", error: String(e.message ?? e).slice(0, 90) };
+    if (opts.onSkip) opts.onSkip(String(e.message ?? e).slice(0, 90));
+    return null;
   } finally {
     clearTimeout(timer);
   }

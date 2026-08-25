@@ -29,7 +29,7 @@ const N_AGENTS = Math.max(MIN_COMBS, Number(process.env.AGENTS ?? 5));
 // leaderboard that herd-00 has been building for days. Reasoning agents are
 // appended after the heuristics instead: the control group keeps its names,
 // its wallets and its record.
-const POD_AGENTS = Number(process.env.POD_AGENTS ?? (reasoningEnabled() ? 2 : 0));
+const POD_AGENTS = Number(process.env.POD_AGENTS ?? (reasoningEnabled() ? 4 : 0));
 // Measured UsePod latency is 0.5s to 21s, routing variance rather than model
 // choice, and a 24s instance only leaves a 14s commit window. Reasoning agents
 // therefore sit out the fastest games instead of quietly falling back to the
@@ -257,10 +257,17 @@ async function playGame(gameNo) {
     }));
     const modelled = thought.filter((t) => t?.plan?.by === "model").length;
     const podCount = live.filter((a) => a.pod).length;
-    if (podCount) log(`  ${modelled}/${podCount} reasoning agents answered`);
+    if (podCount) {
+      const skipped = live.filter((a) => a.pod).length - modelled;
+      log(`  ${modelled}/${podCount} reasoning agents answered` +
+        (skipped ? `, ${skipped} sat the round out` : ""));
+    }
 
     for (const t of thought) {
-      if (!t) continue;
+      // A null plan is an agent that declined to act: the model did not answer
+      // usably inside the commit window. It commits nothing, holds its comb,
+      // and is exposed to whatever happens there.
+      if (!t || !t.plan) continue;
       const { a, plan } = t;
       const mvNonce = new BN(Math.floor(Math.random() * 1e9));
       const pdNonce = new BN(Math.floor(Math.random() * 1e9));
