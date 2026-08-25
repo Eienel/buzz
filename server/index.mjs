@@ -19,6 +19,7 @@ import { makeArena, PRICE, challenge, registerAgent, authed, agentName } from ".
 import { makeAutoplay } from "./autoplay.mjs";
 import { makeLimiter, LIMITS } from "./limits.mjs";
 import { makeCranker } from "./cranker.mjs";
+import { makeScheduler } from "./scheduler.mjs";
 import { nameFor, houseWallets } from "./names.mjs";
 import { verifyPayment } from "./x402.mjs";
 import { loadRelayer, startDrain } from "./relayer.mjs";
@@ -230,6 +231,7 @@ async function poll(){
     autoplay.tick(snapshot);          // walk easy-mode intents through the phases
     limiter.reconcile(games.filter(g=>g.status===0||g.status===1).map(g=>g.gameId));
     cranker?.once(snapshot);
+    scheduler?.once(snapshot);
     pollRelayer();
   }catch(e){
     snapshot = { ...snapshot, ok:false, error:String(e.message).slice(0,120), updatedAt:Date.now() };
@@ -271,6 +273,7 @@ const limiter = makeLimiter();
 // them stalled with players inside. Every crank is permissionless; this just
 // uses that.
 let cranker = null;
+let scheduler = null;
 // The relayer's own balance, refreshed alongside the state poll. Joins stop
 // before it runs dry rather than after, because a game it cannot settle is
 // worse than a seat it refused.
@@ -297,6 +300,17 @@ const autoplay = makeAutoplay({ enqueue, gamePdaFor });
 const relayer = loadRelayer(connection);
 startDrain(relayer, actions);
 if (relayer) cranker = makeCranker({ program: relayer.program, payer: relayer.kp });
+// Off by default: turning it on while the swarm still creates its own games
+// would double the arena rather than replace it.
+if (relayer && process.env.RUN_SCHEDULER === "1") {
+  scheduler = makeScheduler({
+    program: relayer.program, payer: relayer.kp,
+    assets: [{ name: "BUZZ", mint: new PublicKey(TREASURY_MINTS.BUZZ),
+               tokenProgram: new PublicKey(process.env.BUZZ_TOKEN_PROGRAM
+                 ?? "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb") }],
+  });
+  console.log("scheduler on");
+}
 if (relayer) relayer.ready().then((r) =>
   console.log(`relayer ${r.pubkey} ${r.allowed ? "allowed" : "NOT ON THE ALLOW-LIST: run agents/allow-relayer.mjs"}`));
 else console.log("no RELAYER_KEYPAIR: agent actions disabled");
@@ -440,6 +454,14 @@ createServer(async (req,res)=>{
   // What the house cut has accrued, per asset. Deliberately reported as accrued
   // rather than spent: converting to SOL and buying back happen off chain and
   // have not run, so any "spent" figure here would be invented.
+  // What is due next, so the board can say it rather than a lobby appearing
+  // from nowhere.
+  if(p === "/api/schedule"){
+    return send(res, 200, scheduler
+      ? { on: true, upcoming: scheduler.upcoming() }
+      : { on: false, upcoming: [] });
+  }
+
   if(p === "/api/treasury"){
     const out = [];
     for(const [symbol, mint] of Object.entries(TREASURY_MINTS)){
