@@ -22,7 +22,18 @@ const MODEL = process.env.USEPOD_MODEL ?? "llama-4-maverick";
 // agent with four wallets. Each pod gets its own model and its own disposition
 // so the reasoning cohort is four independent opinions, which is the only way
 // the comparison against five heuristics means anything.
-const MODELS = (process.env.USEPOD_MODELS ?? MODEL).split(",").map((m) => m.trim()).filter(Boolean);
+// Four labs, one per pod. Chosen by measurement, not by reputation: models that
+// stream hidden reasoning tokens (glm-4.7-flash, gemini-3.5-flash, deepseek-v4-flash)
+// spend the whole budget thinking and return empty content with finish_reason
+// "length", so they never answer inside a commit window and are unusable here.
+const DEFAULT_MODELS = [
+  "meta-llama/llama-4-maverick",
+  "openai/gpt-5.4-mini",
+  "mistralai/mistral-medium-3.1",
+  "anthropic/claude-haiku-4.5",
+];
+const MODELS = (process.env.USEPOD_MODELS ?? DEFAULT_MODELS.join(","))
+  .split(",").map((m) => m.trim()).filter(Boolean);
 const PERSONAS = [
   "You weight recent trend over the current snapshot; a comb that has been bleeding keeps bleeding.",
   "You assume the other agents are more predictable than they look and lean hard on the known field.",
