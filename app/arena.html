@@ -219,6 +219,32 @@
     color:var(--dim)}
   .jackpot b{font-family:var(--mono);font-size:13px;color:var(--gold)}
   .jsym{font-family:var(--mono);font-size:10.5px;color:var(--honey)}
+  /* Betting closes at lock_instance, so most games on screen at any moment
+     cannot take a bet. A row of dead buttons trains people to ignore them, so
+     the control only appears where it does something. */
+  .betbar{display:flex;align-items:center;gap:12px;padding:10px 16px 0}
+  button.bet{font:inherit;font-size:13px;padding:7px 16px;border-radius:99px;cursor:pointer;
+    color:var(--ink);background:linear-gradient(180deg,var(--gold),var(--honey2));
+    border:0;font-weight:700;transition:transform .12s var(--ease),filter .15s}
+  button.bet:hover{filter:brightness(1.08)}
+  button.bet:active{transform:translate3d(0,1px,0)}
+  button.bet[aria-expanded="true"]{background:transparent;color:var(--honey);
+    border:1px solid var(--edge2)}
+  .betpanel{padding:12px 16px 4px;display:grid;gap:1px;background:var(--edge);
+    margin:12px 16px 0;border-radius:12px;overflow:hidden;padding:1px}
+  .brow{display:flex;align-items:center;gap:12px;padding:10px 14px;background:var(--card);
+    font-size:13px}
+  .brow .who{flex:1;min-width:0}
+  .brow b{color:var(--text)}
+  .brow .rec{font-family:var(--mono);font-size:11.5px;color:var(--dim);white-space:nowrap}
+  .brow .rec .hi{color:var(--alive)}
+  .brow .cmb{font-family:var(--mono);font-size:11px;color:var(--dimmer)}
+  .brow button{font:inherit;font-size:12px;padding:5px 13px;border-radius:99px;cursor:pointer;
+    background:transparent;border:1px solid var(--edge2);color:var(--text);
+    transition:border-color .15s,color .15s}
+  .brow button:hover{border-color:var(--honey);color:var(--honey)}
+  .brow.unranked .rec{color:var(--dimmer)}
+  @media(max-width:640px){ .brow{flex-wrap:wrap;gap:6px} .brow .who{flex:1 0 100%} }
   .loadmore{display:block;width:100%;margin-top:12px;padding:10px;border-radius:10px;
     background:transparent;border:1px solid var(--edge);color:var(--text);font:inherit;
     font-size:13.5px;cursor:pointer;transition:border-color .15s,background .15s}
@@ -392,6 +418,27 @@ const mmss=(s)=>s<=0?"cranking":s<60?s+"s":`${Math.floor(s/60)}:${String(s%60).p
 // Hive is the default: it shows the shape of the game, which comb sits next to
 // which and where the crowd actually is. Cards stay for scanning numbers, and
 // anyone who has already chosen keeps their choice.
+// Bets close at lock_instance, mirroring the program rather than guessing: a
+// button offered after that is a button that fails.
+const betsOpen = (g) => g.status === 1 && g.instance <= g.lockInstance;
+
+/** The field, best record first, so backing something is an informed act. */
+function agentRows(g){
+  const as = g.agents || [];
+  if(!as.length) return `<div class="brow"><span class="rank">no agents seated yet</span></div>`;
+  return as.map((a) => {
+    const ranked = a.ranked > 0;
+    const rate = ranked ? `${Math.round(a.winRate*100)}%` : "no record";
+    const ppg  = ranked ? `${a.ppg.toFixed(2)}/g` : "";
+    return `<div class="brow${ranked?"":" unranked"}">
+      <span class="who"><b>${a.name || short(a.owner)}</b>
+        <span class="cmb">comb ${a.comb}</span></span>
+      <span class="rec">${ranked?`${a.ranked}g`:""} <span class="hi">${rate}</span> ${ppg}</span>
+      <button data-back="${a.owner}" data-game="${g.gameId}">Back</button>
+    </div>`;
+  }).join("");
+}
+
 // Games already painted once, so an entrance animation never replays.
 // Past this, an unstarted empty lobby is wreckage rather than a seat.
 const STALE_LOBBY_S=180;
@@ -541,6 +588,11 @@ function render(s){
         </span>
       </div>
       <div class="bar"><i style="width:${pct}%" data-ends="${g.phaseEndsAt}" data-span="${span}"></i></div>
+      ${betsOpen(g) ? `<div class="betbar">
+        <button class="bet" data-game="${g.gameId}">Back an agent</button>
+        <span class="rank">closes after round ${g.lockInstance}</span>
+      </div>
+      <div class="betpanel" id="bp-${g.gameId}" hidden>${agentRows(g)}</div>` : ""}
       ${VIEW==="hive"?combs:`<div class="combs">${combs}</div>`}
       <div class="side"><h4>Feed</h4><ul class="feed">${feed}</ul></div>
     </section>`;
@@ -645,6 +697,23 @@ async function tickHistory(){
   }catch{ document.getElementById("hist").innerHTML=""; }
 }
 document.addEventListener("click",(e)=>{
+  const t=e.target.closest("button.bet");
+  if(t){
+    const panel=document.getElementById("bp-"+t.dataset.game);
+    const open=panel.hidden;
+    panel.hidden=!open;
+    t.setAttribute("aria-expanded",String(open));
+    t.textContent=open?"Hide the field":"Back an agent";
+    return;
+  }
+  const back=e.target.closest("button[data-back]");
+  if(back){
+    // The market instruction is written and compiles but is not deployed, so
+    // saying so beats a button that silently does nothing.
+    back.textContent="soon";
+    back.disabled=true;
+    return;
+  }
   const b=e.target.closest("#more"); if(!b) return;
   histLimit += 24; b.textContent="Loading…"; b.disabled=true; tickHistory();
 });

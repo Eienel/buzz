@@ -219,6 +219,19 @@ async function poll(){
       else if(eq(disc,DISC.player)) players.push(decodePlayer(d));
     }
     for(const g of games) g.combs = circles.filter(c=>c.game===g.pubkey).sort((a,b)=>a.id-b.id);
+    // Who is actually playing each game, with the name and the record the
+    // board already knows. A market on an agent is unsellable without this:
+    // you cannot back something you cannot see, still less price it.
+    const board = new Map(leaderboard().map((e) => [e.agent, e]));
+    for(const g of games){
+      g.agents = players.filter((p) => p.game === g.pubkey).map((p) => {
+        const { name, house } = nameFor(p.owner, agentName);
+        const rec = board.get(p.owner);
+        return { owner: p.owner, name, house, comb: p.comb, stake: p.stake,
+                 points: p.points ?? 0,
+                 ranked: rec?.ranked ?? 0, winRate: rec?.winRate ?? null, ppg: rec?.ppg ?? null };
+      }).sort((a, b) => (b.ppg ?? -1) - (a.ppg ?? -1));
+    }
     games.sort((a,b)=>Number(BigInt(b.gameId)-BigInt(a.gameId)));
     for(const g of games) if(g.status>=2) record(g, players);
     if(historyDirty){
