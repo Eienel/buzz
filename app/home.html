@@ -51,10 +51,6 @@
   .shell{position:relative;z-index:1}
   header{display:flex;align-items:center;gap:18px;padding:20px 30px;flex-wrap:wrap}
   .brand{display:flex;align-items:center;gap:10px;font-weight:800;font-size:21px;letter-spacing:-.3px}
-  .net{font-family:var(--mono);font-size:12px;color:var(--alive);border:1px solid rgba(95,214,138,.4);
-    border-radius:99px;padding:4px 12px;display:inline-flex;align-items:center;gap:7px}
-  .net i{width:6px;height:6px;border-radius:99px;background:var(--alive);animation:blip 1.8s infinite}
-  @keyframes blip{50%{opacity:.25}}
   nav{margin-left:auto;display:flex;gap:24px;flex-wrap:wrap;font-size:14.5px;color:var(--dim)}
   nav a{transition:color .15s} nav a:hover{color:var(--honey)}
   nav a:focus-visible,.cta:focus-visible{outline:2px solid var(--gold);outline-offset:3px;border-radius:6px}
@@ -126,12 +122,24 @@
 <div class="shell">
   <header>
     <span class="brand">
-      <svg width="26" height="26" viewBox="0 0 100 100" aria-hidden="true">
-        <path d="M50 8 L78 24 L78 56 L50 72 L22 56 L22 24 Z" fill="none" stroke="#ffb300"
-              stroke-width="7" stroke-linejoin="round"/>
+      <svg class="mark" width="34" height="34" viewBox="0 0 100 100" aria-hidden="true">
+        <defs>
+          <linearGradient id="cell" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="#ffb75e"/><stop offset="1" stop-color="#ff8a1f"/>
+          </linearGradient>
+        </defs>
+        <g fill="none" stroke="#68749a" stroke-width="4.6" stroke-linejoin="round">
+          <path d="M63.50 26.62 L56.75 38.31 L43.25 38.31 L36.50 26.62 L43.25 14.93 L56.75 14.93 Z"/>
+          <path d="M63.50 73.38 L56.75 85.07 L43.25 85.07 L36.50 73.38 L43.25 61.69 L56.75 61.69 Z"/>
+          <path d="M83.75 38.31 L77.00 50.00 L63.50 50.00 L56.75 38.31 L63.50 26.62 L77.00 26.62 Z"/>
+          <path d="M43.25 38.31 L36.50 50.00 L23.00 50.00 L16.25 38.31 L23.00 26.62 L36.50 26.62 Z"/>
+          <path d="M43.25 61.69 L36.50 73.38 L23.00 73.38 L16.25 61.69 L23.00 50.00 L36.50 50.00 Z"/>
+          <path d="M83.75 61.69 L77.00 73.38 L63.50 73.38 L56.75 61.69 L63.50 50.00 L77.00 50.00 Z"/>
+        </g>
+        <path d="M63.50 50.00 L56.75 61.69 L43.25 61.69 L36.50 50.00 L43.25 38.31 L56.75 38.31 Z"
+              fill="url(#cell)"/>
       </svg>BUZZ.
     </span>
-    <span class="net"><i></i>devnet</span>
     <nav>
       <a href="/docs">Docs</a>
       <a href="/arena" data-enter="/arena">Live arena</a>
