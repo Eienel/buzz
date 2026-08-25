@@ -19,6 +19,7 @@ import { makeArena, PRICE, challenge, registerAgent, authed, agentName } from ".
 import { makeAutoplay } from "./autoplay.mjs";
 import { makeLimiter, LIMITS } from "./limits.mjs";
 import { makeCranker } from "./cranker.mjs";
+import { makeScheduler } from "./scheduler.mjs";
 import { nameFor, houseWallets } from "./names.mjs";
 import { verifyPayment } from "./x402.mjs";
 import { loadRelayer, startDrain } from "./relayer.mjs";
@@ -90,12 +91,39 @@ function decodePlayer(d){let o=8;const p={};
 // spectator arriving after that would see an arena with no past, so the poller
 // snapshots each game the first time it reads as decided, and that snapshot is
 // the record from then on.
+// $BUZZ is a mainnet token; the arena is on devnet. The two are unrelated on
+// chain and only meet here, on the page.
+// The two assets the arena stakes, each with its own treasury PDA.
+const TREASURY_MINTS = { BUZZ: "7yPdd9WxE3zwYQWK5a6bobwfDpQpzst6J7j5tVDPw1q8",
+                         ANSEM: "BxrMzNFPmftcNgn5v4PuUoXAiezZTN7edjXFRqJTusuA" };
+const BUZZ_MINT = process.env.BUZZ_MINT ?? "DoTMzBpSRPEwaycrSUzgSaDEs42PaiQVvYXAmLkcHr5X";
+const CLAW_URL = `https://clawpump.tech/tokens/${BUZZ_MINT}`;
+const TOKEN_TTL_MS = Number(process.env.TOKEN_TTL_MS ?? 30_000);
+let tokenCache = { at: 0, data: null };
+
 const HISTORY_FILE = join(DATA_DIR, "history.json");   // DATA_DIR is a volume in production
 const HISTORY_MAX = Number(process.env.HISTORY_MAX ?? 200);
 let history = [];
 try { history = JSON.parse(readFileSync(HISTORY_FILE, "utf8")); } catch {}
 const recorded = new Set(history.map((h) => h.gameId));
 let historyDirty = false;
+
+/**
+ * Best available end time for a decided game, in ms.
+ *
+ * phase_ends_at is the deadline of the last phase the game ran, which is the
+ * closest thing on chain to an end time. It is sanity-bounded: a game cannot
+ * have ended before it was created (game_id is its creation time in ms) and
+ * cannot end in the future, so a nonsense value falls back to now.
+ */
+function endedAtOf(g){
+  const now = Date.now();
+  const created = Number(g.gameId);
+  const ended = Number(g.phaseEndsAt) * 1000;
+  if(!Number.isFinite(ended) || ended <= 0) return now;
+  if(ended < created || ended > now + 60_000) return now;
+  return ended;
+}
 
 function record(g, players){
   if(recorded.has(g.gameId)) return;
@@ -105,13 +133,21 @@ function record(g, players){
   recorded.add(g.gameId);
   history.unshift({
     gameId: g.gameId,
-    endedAt: Date.now(),
+    // When the game ended, not when we noticed. The poller records a game the
+    // first time it reads as decided, so Date.now() dates a six-hour-old game
+    // to this minute and a restart re-dates a whole backlog to the same one.
+    // phase_ends_at is the chain's own clock for the last phase that ran.
+    endedAt: endedAtOf(g),
     winningComb: winning.id,
     stakeMint: g.stakeMint,
     creator: winning.creator,
     arena: g.numCircles,
     players: Math.max(g.players, mine.length),
     pot: g.deposited,
+    // Whether the jackpot roll fired for this game. Without it the record
+    // cannot answer "has the jackpot ever paid", and reading g.insane off a
+    // history entry silently returns undefined, which counts as no.
+    insane: !!g.insane,
     // True when the rent reaper closed the player accounts before we saw the
     // game decided. The winner is still right (it comes off the game itself);
     // the per-agent columns are simply gone, and saying so beats printing zero.
@@ -195,6 +231,7 @@ async function poll(){
     autoplay.tick(snapshot);          // walk easy-mode intents through the phases
     limiter.reconcile(games.filter(g=>g.status===0||g.status===1).map(g=>g.gameId));
     cranker?.once(snapshot);
+    scheduler?.once(snapshot);
     pollRelayer();
   }catch(e){
     snapshot = { ...snapshot, ok:false, error:String(e.message).slice(0,120), updatedAt:Date.now() };
@@ -236,6 +273,7 @@ const limiter = makeLimiter();
 // them stalled with players inside. Every crank is permissionless; this just
 // uses that.
 let cranker = null;
+let scheduler = null;
 // The relayer's own balance, refreshed alongside the state poll. Joins stop
 // before it runs dry rather than after, because a game it cannot settle is
 // worse than a seat it refused.
@@ -262,6 +300,17 @@ const autoplay = makeAutoplay({ enqueue, gamePdaFor });
 const relayer = loadRelayer(connection);
 startDrain(relayer, actions);
 if (relayer) cranker = makeCranker({ program: relayer.program, payer: relayer.kp });
+// Off by default: turning it on while the swarm still creates its own games
+// would double the arena rather than replace it.
+if (relayer && process.env.RUN_SCHEDULER === "1") {
+  scheduler = makeScheduler({
+    program: relayer.program, payer: relayer.kp,
+    assets: [{ name: "BUZZ", mint: new PublicKey(TREASURY_MINTS.BUZZ),
+               tokenProgram: new PublicKey(process.env.BUZZ_TOKEN_PROGRAM
+                 ?? "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb") }],
+  });
+  console.log("scheduler on");
+}
 if (relayer) relayer.ready().then((r) =>
   console.log(`relayer ${r.pubkey} ${r.allowed ? "allowed" : "NOT ON THE ALLOW-LIST: run agents/allow-relayer.mjs"}`));
 else console.log("no RELAYER_KEYPAIR: agent actions disabled");
@@ -349,9 +398,106 @@ createServer(async (req,res)=>{
     return send(res, r.status, r.body);
   }
 
+  // the card desk: its own record, kept beside the arena rather than inside it
+  if(p === "/api/tcg"){
+    try{
+      const [{ scorecard, all }, { mode }] = await Promise.all([
+        import("../tcg/store.mjs"), import("../tcg/client.mjs")]);
+      return send(res, 200, { ok:true, mode: mode(), scorecard: scorecard(),
+        picks: all().slice(0, 60),
+        spentUsdc: Number(process.env.TCG_SPENT_USDC ?? 0),
+        // The vault starts empty on purpose. It fills from fees earned AFTER the
+        // desk opened, not from what the token made before it existed, so the
+        // bar only ever measures what this actually caused. The split is stated
+        // rather than implied: most of it buys cards, the rest is ours.
+        ...(() => {
+          const since = Number(process.env.TCG_FEES_SINCE_USD ?? 0);
+          const bps = Number(process.env.TCG_VAULT_BPS ?? 7500);
+          return { feesSinceUsd: since, vaultBps: bps,
+                   fundUsd: +(since * bps / 10000).toFixed(2),
+                   fundGoalUsd: Number(process.env.TCG_FUND_GOAL_USD ?? 40) };
+        })() });
+    }catch(e){
+      // the desk is optional; the arena must not fall over because it is absent
+      return send(res, 200, { ok:false, mode:"none", scorecard:{picks:0}, picks:[],
+                              error:String(e.message).slice(0,120) });
+    }
+  }
+
+  // ---- $BUZZ market data ---------------------------------------------------
+  // Proxied rather than fetched from the page: the browser would hit CORS and
+  // every viewer would be a separate call against someone else's rate limit.
+  // One cached read here serves the whole arena.
+  if(p === "/api/token"){
+    const now = Date.now();
+    if(!tokenCache.at || now - tokenCache.at > TOKEN_TTL_MS){
+      try{
+        const r = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${BUZZ_MINT}`,
+                              { signal: AbortSignal.timeout(6000) });
+        const pair = (await r.json())?.pairs?.[0];
+        // Keep the last good reading on a bad one. A ticker that blanks out
+        // every time an upstream hiccups reads as broken rather than as quiet.
+        if(pair) tokenCache = { at: now, data: {
+          mint: BUZZ_MINT, priceUsd: Number(pair.priceUsd), change24h: pair.priceChange?.h24 ?? null,
+          volume24h: pair.volume?.h24 ?? null, liquidity: pair.liquidity?.usd ?? null,
+          mcap: pair.marketCap ?? pair.fdv ?? null, dex: pair.url, claw: CLAW_URL,
+        }};
+        else tokenCache.at = now;
+      }catch{ tokenCache.at = now; }
+    }
+    return tokenCache.data
+      ? send(res, 200, { ...tokenCache.data, asOf: tokenCache.at })
+      : send(res, 503, { error: "no market data yet" });
+  }
+
+  // ---- treasury buckets -----------------------------------------------------
+  // What the house cut has accrued, per asset. Deliberately reported as accrued
+  // rather than spent: converting to SOL and buying back happen off chain and
+  // have not run, so any "spent" figure here would be invented.
+  // What is due next, so the board can say it rather than a lobby appearing
+  // from nowhere.
+  if(p === "/api/schedule"){
+    return send(res, 200, scheduler
+      ? { on: true, upcoming: scheduler.upcoming() }
+      : { on: false, upcoming: [] });
+  }
+
+  if(p === "/api/treasury"){
+    const out = [];
+    for(const [symbol, mint] of Object.entries(TREASURY_MINTS)){
+      try{
+        const [pda] = PublicKey.findProgramAddressSync(
+          [Buffer.from("treasury"), new PublicKey(mint).toBuffer()], PID);
+        const acc = await connection.getAccountInfo(pda);
+        if(!acc || acc.data.length < 104) continue;
+        const d = acc.data;
+        let o = 8 + 32;                     // discriminator + authority
+        const house = u64(d,o); o += 8;
+        const jackpot = u64(d,o); o += 8;
+        o += 2;                             // vault_bump, bump
+        const toSol = u64(d,o); o += 8;
+        const burn = u64(d,o); o += 8;
+        const lbAccruing = u64(d,o); o += 8;
+        const lbClaimable = u64(d,o); o += 8;
+        o += 8 + 8;                       // pts_accruing, pts_claimable
+        const season = d[o] | d[o+1] << 8;
+        const n = (v) => Number(v) / 1e6;
+        out.push({ symbol, mint, season, house:n(house), jackpot:n(jackpot), toSol:n(toSol),
+                   burn:n(burn), lbAccruing:n(lbAccruing), lbClaimable:n(lbClaimable) });
+      }catch{}
+    }
+    return send(res, 200, { cluster: RPC.includes("devnet") ? "devnet" : "mainnet", accrued: out,
+      note: "Accrued on chain. Conversion to SOL and buy-and-burn happen off chain and have not run on devnet." });
+  }
+
   if(p === "/api/history"){
-    return send(res, 200, { games: history.slice(0, 50), leaderboard: leaderboard(),
-                            houseAgents: houseWallets() });
+    // The board polls this every 15s, and a full page of records is ~120KB, so
+    // the caller says how many it wants and gets `total` to know if asking for
+    // more is worth it. Default stays small; the cap is what we actually retain.
+    const want = Number(url.searchParams.get("limit"));
+    const limit = Number.isFinite(want) && want > 0 ? Math.min(want, HISTORY_MAX) : 50;
+    return send(res, 200, { games: history.slice(0, limit), total: history.length,
+                            leaderboard: leaderboard(), houseAgents: houseWallets() });
   }
   if(p === "/api/state"){
     res.writeHead(200,{ "content-type":"application/json",
@@ -363,9 +509,13 @@ createServer(async (req,res)=>{
     return res.end(snapshot.ok ? "ok" : "rpc: "+snapshot.error);
   }
 
-  if(p === "/") p = "/index.html";
+  // home is the front door now; the long-form docs move to /docs
+  if(p === "/")      p = "/home.html";
+  if(p === "/docs")  p = "/index.html";
   if(p === "/arena") p = "/arena.html";
   if(p === "/play")  p = "/play.html";
+  if(p === "/agents")p = "/agents.html";
+  if(p === "/tcg")   p = "/tcg.html";
   // contain path traversal: resolve inside ROOT only
   const file = join(ROOT, normalize(p).replace(/^(\.\.[/\\])+/, ""));
   if(!file.startsWith(ROOT) || !existsSync(file)){

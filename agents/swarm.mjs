@@ -166,6 +166,85 @@ const waitPhaseEnd = async (gamePda, margin = 1500) => {
   if (ms > 0) await sleep(ms);
 };
 
+// The arena the swarm plays in. In production the swarm is a child of the
+// server, so this is the same process's own HTTP port.
+const ARENA_URL = process.env.ARENA_URL ?? `http://127.0.0.1:${process.env.PORT ?? 3000}`;
+// Opt in while the scheduler and the swarm both exist, so turning one on does
+// not silently change what the other does.
+const ADOPT_SCHEDULED = process.env.ADOPT_SCHEDULED === "1";
+
+/**
+ * An open lobby for this asset that the scheduler opened and nobody has filled.
+ *
+ * Returns null on anything unexpected, and the caller opens its own game. A
+ * swarm that cannot reach the arena should keep playing, not stop.
+ */
+async function findScheduledLobby(asset) {
+  if (!ADOPT_SCHEDULED) return null;
+  try {
+    const r = await fetch(`${ARENA_URL}/api/state`, { signal: AbortSignal.timeout(4000) });
+    if (!r.ok) return null;
+    const mint = asset.mint.toBase58();
+    const open = (await r.json()).live?.filter((g) =>
+      g.status === 0 && g.stakeMint === mint && (g.players ?? 0) === 0) ?? [];
+    // Oldest first: a lobby that has been waiting is the one to fill.
+    open.sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
+    return open[0] ?? null;
+  } catch { return null; }
+}
+
+/** Wait for whoever opened the lobby to start it, rather than racing them. */
+async function waitForRunning(gamePda, gid, ms = 90_000) {
+  const until = Date.now() + ms;
+  while (Date.now() < until) {
+    const g = await program.account.game.fetch(gamePda);
+    if (g.status.running) { log(`game ${gid}: scheduler started it`); return; }
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+  // Nobody started it. Start it ourselves rather than stranding the stakes we
+  // just put in: this is exactly the failure the scheduler exists to prevent,
+  // so it should be loud when it happens anyway.
+  log(`game ${gid}: nobody started the lobby in time, starting it`);
+  await program.methods.startGame()
+    .accountsPartial({ game: gamePda, authority: payer.publicKey }).rpc();
+}
+
+// A game that never finishes is worse than one that fails.
+//
+// Anchor's .rpc() has no timeout, so a stalled RPC hangs the call forever. The
+// main loop waits on Promise.race(inflight), which never settles if every game
+// in flight is hung, so the swarm goes silent: no new games, no crash, and the
+// supervisor never restarts it because the process is still alive. That is
+// exactly how the arena ended up with twelve stranded lobbies and nothing
+// running for half an hour.
+//
+// Five instances at the slowest tempo, doubled, plus room to settle.
+const GAME_DEADLINE_MS = Number(process.env.GAME_DEADLINE_MS
+  ?? (Math.max(...TEMPOS) * 5 * 2 + 300) * 1000);
+
+function withDeadline(promise, ms, what) {
+  let t;
+  return Promise.race([
+    promise.finally(() => clearTimeout(t)),
+    new Promise((_, rej) => { t = setTimeout(() => rej(new Error(`${what} passed its deadline`)), ms); }),
+  ]);
+}
+
+// Last time anything finished. If nothing does for long enough the process is
+// wedged in a way it cannot see, and the only honest move is to die so the
+// supervisor can restart it.
+let lastProgress = Date.now();
+// The per-game deadline already stops the loop wedging, so this only catches
+// a stall somewhere else. Deadline plus five minutes: long enough that a slow
+// game is never mistaken for a hang, short enough that nobody watches a dead
+// arena for half an hour again.
+const STALL_EXIT_MS = Number(process.env.STALL_EXIT_MS ?? GAME_DEADLINE_MS + 300_000);
+setInterval(() => {
+  if (Date.now() - lastProgress < STALL_EXIT_MS) return;
+  log(`no game finished in ${Math.round(STALL_EXIT_MS / 60000)}m, exiting so the supervisor restarts`);
+  process.exit(1);
+}, 30_000).unref();
+
 async function playGame(gameNo) {
   // Only BUZZ has an open season, so only BUZZ games move the leaderboard.
   // A strict alternation made half the arena unranked, which is the wrong
@@ -175,13 +254,19 @@ async function playGame(gameNo) {
   const treasuryPda = pda(Buffer.from("treasury"), asset.mint.toBuffer());
   const tvaultPda = pda(Buffer.from("tvault"), asset.mint.toBuffer());
   const allowedPda = pda(Buffer.from("allowed"), asset.mint.toBuffer());
-  const gid = new BN(Date.now());
+  // Either adopt a game the scheduler opened, or open one. Adopting is the
+  // direction of travel: the swarm creating the games it plays is what strands
+  // lobbies, because a lobby only starts itself while its creator is alive.
+  const adopted = await findScheduledLobby(asset);
+  const gid = adopted ? new BN(adopted.gameId) : new BN(Date.now());
   const gamePda = gamePdaOf(gid);
   const vaultPda = pda(Buffer.from("vault"), gamePda.toBuffer());
   const circlePda = (id) => pda(Buffer.from("circle"), gamePda.toBuffer(), Buffer.from([id]));
   const playerPda = (o) => pda(Buffer.from("player"), gamePda.toBuffer(), o.toBuffer());
 
-  const tempo = TEMPOS[Math.floor(Math.random() * TEMPOS.length)];
+  // A game's tempo is fixed when it is created, so an adopted one dictates it.
+  const tempo = adopted ? adopted.instanceSeconds
+                        : TEMPOS[Math.floor(Math.random() * TEMPOS.length)];
   const slot = gameNo % MAX_CONCURRENT;
   const podsThisGame = tempo >= POD_MIN_TEMPO ? POD_AGENTS : 0;
   const agents = Array.from({ length: N_AGENTS + podsThisGame }, (_, i) => {
@@ -215,10 +300,14 @@ async function playGame(gameNo) {
   // the ephemeral agent wallets' balances (their keypairs live only in memory).
   try {
   // lobby: keeper (payer) creates the game; agents create/join circles 0..5
-  await program.methods.createGame(gid, 6, tempo, false).accountsPartial({
-    config: configPda, stakeMint: asset.mint, allowed: allowedPda, game: gamePda, vault: vaultPda,
-    authority: payer.publicKey, tokenProgram: asset.tokenProgram, systemProgram: SystemProgram.programId,
-  }).rpc();
+  if (!adopted) {
+    await program.methods.createGame(gid, 6, tempo, false).accountsPartial({
+      config: configPda, stakeMint: asset.mint, allowed: allowedPda, game: gamePda, vault: vaultPda,
+      authority: payer.publicKey, tokenProgram: asset.tokenProgram, systemProgram: SystemProgram.programId,
+    }).rpc();
+  } else {
+    log(`game ${gid}: adopted a scheduled lobby, ${tempo}s instances`);
+  }
   const taken = new Set();
   for (const a of agents) {
     const stake = new BN(String(BigInt(STAKE_UNITS) * BigInt(10) ** BigInt(asset.decimals)));
@@ -235,8 +324,14 @@ async function playGame(gameNo) {
     }
     log(`  ${a.name} staked into circle ${a.circle}`);
   }
-  await program.methods.startGame().accountsPartial({ game: gamePda, authority: payer.publicKey }).rpc();
-  log(`game ${gid}: started (${taken.size} circles)`);
+  // The scheduler starts what it opened. Racing it is harmless (the loser gets
+  // WrongPhase) but pointless, so only start a game we opened ourselves.
+  if (!adopted) {
+    await program.methods.startGame().accountsPartial({ game: gamePda, authority: payer.publicKey }).rpc();
+    log(`game ${gid}: started (${taken.size} circles)`);
+  } else {
+    await waitForRunning(gamePda, gid);
+  }
 
   // fog = previous instance's finalized member counts
   let fog = {};
@@ -489,9 +584,9 @@ const inflight = new Set();
 let started = 0;
 const launch = (n) => {
   const task = (async () => {
-    try { await playGame(n); }
+    try { await withDeadline(playGame(n), GAME_DEADLINE_MS, `game ${n}`); }
     catch (e) { log(`game failed: ${e.message?.slice(0, 200)}`); }
-  })().finally(() => inflight.delete(task));
+  })().finally(() => { inflight.delete(task); lastProgress = Date.now(); });
   inflight.add(task);
   return task;
 };

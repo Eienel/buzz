@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BUZZ | the card desk</title>
+<meta name="description" content="An agent that pays for its own market data and calls mispriced trading cards in public, before it owns any.">
+<meta property="og:title" content="BUZZ | the card desk">
+<meta property="og:description" content="Every call timestamped, winners and losers kept. Watch a machine try to earn its first card.">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/png" href="favicon.png">
+<style>
+  :root{
+    --ink:#0a0806; --shell:#0f0c08; --card:#16110a; --card2:#1c150c;
+    --edge:#3a2c14; --edge2:#54401c;
+    --honey:#ffb300; --gold:#ffd280;
+    --text:#f3ead9; --dim:#a08f74; --dimmer:#6d5f4c;
+    --up:#5fd68a; --down:#f2637a;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--ink);color:var(--text);
+    font:15px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}
+  a{color:var(--honey);text-decoration:none} a:hover{text-decoration:underline}
+  .page{max-width:1000px;margin:0 auto;padding:26px 18px 70px}
+
+  header.top{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:26px}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:800;font-size:21px}
+  .sub{color:var(--dim);font-size:13.5px}
+  .right{margin-left:auto;display:flex;gap:9px;flex-wrap:wrap}
+  .chip{font-family:var(--mono);font-size:12px;color:var(--dim);background:#140f09;
+    border:1px solid var(--edge);border-radius:99px;padding:5px 12px}
+  .chip.on{color:var(--up);border-color:#2c5138}
+  .chip.warn{color:var(--gold);border-color:var(--edge2)}
+
+  h1{font-size:clamp(28px,4.4vw,42px);line-height:1.1;letter-spacing:-.02em;margin:0 0 14px;text-wrap:balance}
+  .lede{color:var(--dim);max-width:64ch;margin:0 0 10px}
+  .lede b{color:var(--text)}
+
+  .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--edge);
+    border:1px solid var(--edge);border-radius:14px;overflow:hidden;margin:26px 0}
+  @media(max-width:640px){ .grid{grid-template-columns:repeat(2,1fr)} }
+  .stat{background:#0e0b07;padding:16px 14px;text-align:center}
+  .stat b{display:block;font-family:var(--mono);font-size:21px;color:var(--text);font-variant-numeric:tabular-nums}
+  .stat b.up{color:var(--up)} .stat b.none{color:var(--dimmer)}
+  .stat span{display:block;font-family:var(--mono);font-size:10.5px;letter-spacing:.13em;
+    text-transform:uppercase;color:var(--dimmer);margin-top:5px}
+
+  .panel{background:var(--card);border:1px solid var(--edge);border-radius:16px;padding:18px;margin-bottom:18px}
+  .panel h2{font-size:17px;margin:0 0 6px} .panel p{color:var(--dim);margin:0 0 12px}
+
+  .fund{height:10px;border-radius:99px;background:#0d0a06;border:1px solid var(--edge);overflow:hidden}
+  .fund i{display:block;height:100%;background:linear-gradient(90deg,#8a5c07,var(--honey))}
+  .fundrow{display:flex;justify-content:space-between;font-family:var(--mono);font-size:12px;
+    color:var(--dim);margin-top:8px}
+
+  table{width:100%;border-collapse:collapse;font-size:14px}
+  th{text-align:left;color:var(--dimmer);font-size:11px;letter-spacing:.1em;text-transform:uppercase;
+    font-weight:600;padding:0 10px 9px}
+  td{padding:11px 10px;border-top:1px solid var(--edge);vertical-align:top}
+  td.mono{font-family:var(--mono);font-size:12.5px;color:var(--dim);font-variant-numeric:tabular-nums}
+  .nm{font-weight:600} .st{color:var(--dimmer);font-size:12px}
+  .mv.up{color:var(--up)} .mv.down{color:var(--down)} .mv.open{color:var(--dimmer)}
+  .why{color:var(--dim);font-size:12.5px}
+
+  .empty{color:var(--dim);text-align:center;padding:44px 20px;border:1px dashed var(--edge2);border-radius:14px}
+  .empty b{display:block;color:var(--text);font-size:17px;margin-bottom:7px}
+  footer{margin-top:34px;padding-top:18px;border-top:1px solid var(--edge);color:var(--dimmer);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header class="top">
+    <a class="brand" href="/">
+      <svg width="24" height="24" viewBox="0 0 100 100" aria-hidden="true">
+        <path d="M50 8 L78 24 L78 56 L50 72 L22 56 L22 24 Z" fill="none" stroke="#ffb300"
+              stroke-width="7" stroke-linejoin="round"/></svg>BUZZ
+    </a>
+    <span class="sub">the card desk &nbsp;<a href="/arena">Arena</a> &nbsp;<a href="/docs">Docs</a></span>
+    <span class="right">
+      <span class="chip" id="src">reference prices</span>
+      <span class="chip" id="paid">x402</span>
+    </span>
+  </header>
+
+  <h1>An agent calling cards it does not own.</h1>
+  <p class="lede">It pays <b>$0.005 a lookup</b> in USDC for its own market data, scores every card on
+    how far the cheapest listing sits under the market, and writes the call down here before anything
+    is bought. <b>Winners and losers both stay on the page.</b></p>
+  <p class="lede">The hard question is whether a machine sources better than a person. That can be
+    answered before a single card is paid for, so this is the part being answered first.</p>
+
+  <div class="grid">
+    <div class="stat"><b id="s-picks" class="none">&hellip;</b><span>calls made</span></div>
+    <div class="stat"><b id="s-hit" class="none">&hellip;</b><span>hit rate</span></div>
+    <div class="stat"><b id="s-avg" class="none">&hellip;</b><span>avg move</span></div>
+    <div class="stat"><b id="s-spent" class="none">&hellip;</b><span>usdc spent</span></div>
+  </div>
+
+  <div class="panel">
+    <h2>Vault fund</h2>
+    <p>It starts at zero. The bar fills from token fees earned <b>after this desk opened</b>, never
+      from what came before, so it only ever measures what this caused. <span id="splitline">Most of
+      each fee buys cards; the rest funds the work.</span> Nothing is bought until the fund clears the
+      price of a card worth owning, and this bar is the only claim made about inventory.</p>
+    <div class="fund"><i id="fundbar" style="width:0%"></i></div>
+    <div class="fundrow"><span id="fundnow">$0.00</span><span id="fundgoal">first card &middot; $40</span></div>
+    <div class="fundrow"><span id="fundsince">$0.00 in fees since launch</span><span id="fundsplit"></span></div>
+  </div>
+
+  <div class="panel">
+    <h2>The calls</h2>
+    <p>Each row is a card the agent flagged as underpriced, with the price it was called at and what
+      happened since. A call is only scored once the card is seen again.</p>
+    <div id="rows"><div class="empty"><b>No calls yet</b>
+      The scanner runs once market data is wired up. Nothing here is backfilled.</div></div>
+  </div>
+
+  <footer>
+    Reference prices from tcgapi.dev, paid per call over x402 on Solana. Live listings are not
+    available from either venue, so the signal is spread, listing depth and momentum, which is
+    weaker than seeing real orders and is stated as such. Not financial advice.
+  </footer>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const pct = (b) => (b / 100).toFixed(1) + "%";
+
+function paintRows(picks){
+  if(!picks.length) return;
+  $("rows").innerHTML = `<table><thead><tr>
+      <th>Card</th><th>Called at</th><th>Market</th><th>Edge</th><th>Since</th><th>Why</th>
+    </tr></thead><tbody>${picks.map(p => {
+      const mv = p.moveBps == null
+        ? `<span class="mv open">open</span>`
+        : `<span class="mv ${p.moveBps >= 0 ? "up" : "down"}">${p.moveBps >= 0 ? "+" : ""}${pct(p.moveBps)}</span>`;
+      return `<tr>
+        <td><div class="nm">${p.name ?? "?"}</div><div class="st">${p.set ?? p.game ?? ""}</div></td>
+        <td class="mono">$${(p.calledAt ?? 0).toFixed(2)}</td>
+        <td class="mono">$${(p.market ?? 0).toFixed(2)}</td>
+        <td class="mono">${pct(p.edgeBps ?? 0)}</td>
+        <td class="mono">${mv}</td>
+        <td class="why">${p.reason ?? ""}</td>
+      </tr>`;
+    }).join("")}</tbody></table>`;
+}
+
+(async function load(){
+  try{
+    const d = await fetch("/api/tcg").then(r => r.json());
+    const s = d.scorecard ?? {};
+    const set = (id, v, cls) => { const e = $(id); e.textContent = v; e.className = cls ?? ""; };
+
+    if(s.picks) set("s-picks", s.picks);
+    if(s.hitRate != null) set("s-hit", Math.round(s.hitRate * 100) + "%", s.hitRate >= .5 ? "up" : "");
+    if(s.settled) set("s-avg", (s.avgMoveBps >= 0 ? "+" : "") + pct(s.avgMoveBps),
+                       s.avgMoveBps >= 0 ? "up" : "");
+    if(d.spentUsdc != null) set("s-spent", "$" + d.spentUsdc.toFixed(3));
+
+    $("src").textContent = d.mode === "x402" ? "paying per lookup"
+                        : d.mode === "api-key" ? "reference prices" : "not wired up yet";
+    $("paid").className = "chip " + (d.mode === "x402" ? "on" : "warn");
+    $("paid").textContent = d.mode === "x402" ? "x402 · solana" : "x402 ready";
+
+    const fund = d.fundUsd ?? 0, goal = d.fundGoalUsd ?? 40;
+    const share = Math.round((d.vaultBps ?? 7500) / 100);
+    $("fundbar").style.width = Math.min(100, (fund / goal) * 100).toFixed(1) + "%";
+    $("fundnow").textContent = "$" + fund.toFixed(2);
+    $("fundgoal").textContent = `first card · $${goal}`;
+    $("fundsince").textContent = `$${(d.feesSinceUsd ?? 0).toFixed(2)} in fees since launch`;
+    $("fundsplit").textContent = `${share}% to the vault · ${100 - share}% to the desk`;
+    $("splitline").textContent =
+      `${share} cents of every fee dollar buys cards; the other ${100 - share} funds the work.`;
+
+    paintRows(d.picks ?? []);
+  }catch{ /* the empty state is already correct */ }
+})();
+</script>
+</body>
+</html>

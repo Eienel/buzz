@@ -16,7 +16,13 @@ import { PublicKey, SYSVAR_SLOT_HASHES_PUBKEY } from "@solana/web3.js";
 
 const { BN } = anchorPkg;
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), "[crank]", ...a);
-const LOBBY_TIMEOUT = 3600;          // mirrors LOBBY_TIMEOUT_SECONDS in lib.rs
+const LOBBY_TIMEOUT = 3600;
+// A lobby that has enough combs and has sat this long is not still filling, it
+// is orphaned. Long enough that a healthy swarm always wins the race to its own
+// startGame, short enough that stakes are not parked for an hour.
+const STRANDED_AFTER = Number(process.env.STRANDED_AFTER ?? 120);
+// Mirrors MIN_CIRCLES in lib.rs: below this, start_game refuses.
+const MIN_CIRCLES = 4;          // mirrors LOBBY_TIMEOUT_SECONDS in lib.rs
 
 export function makeCranker({ program, payer }) {
   const PID = program.programId;
@@ -37,6 +43,27 @@ export function makeCranker({ program, payer }) {
         // live games when 2 were being played. Aborting is permissionless an
         // hour in, and it lets the deposits be reclaimed.
         if (g.status === 0) {
+          // Aborting is the last resort, not the first. A stranded lobby
+          // usually has players and their stakes in it: the swarm created the
+          // game, agents joined, and the process died before startGame. Those
+          // deposits sit locked for the whole timeout for no reason, because
+          // the game is perfectly startable. The cranker signs with the same
+          // key the swarm creates games with, so it is that game's authority
+          // and can start it.
+          if (g.aliveCircles >= MIN_CIRCLES && now >= g.createdAt + STRANDED_AFTER) {
+            try {
+              await program.methods.startGame()
+                .accountsPartial({ game: gamePda(g.gameId), authority: payer.publicKey }).rpc();
+              log(`game ${g.gameId}: lobby stranded ${Math.round((now - g.createdAt) / 60)}m with ` +
+                  `${g.players} players, started`);
+              continue;
+            } catch (e) {
+              const m = String(e.message ?? e);
+              // Not ours to start, or it started underneath us. Neither is news.
+              if (!/Unauthorized|WrongPhase|NotEnoughCircles/.test(m))
+                log(`start ${g.gameId}: ${m.slice(0, 70)}`);
+            }
+          }
           if (now < g.createdAt + LOBBY_TIMEOUT) continue;
           try {
             await program.methods.abortLobby()
