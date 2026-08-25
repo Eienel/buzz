@@ -376,8 +376,13 @@ createServer(async (req,res)=>{
   }
 
   if(p === "/api/history"){
-    return send(res, 200, { games: history.slice(0, 50), leaderboard: leaderboard(),
-                            houseAgents: houseWallets() });
+    // The board polls this every 15s, and a full page of records is ~120KB, so
+    // the caller says how many it wants and gets `total` to know if asking for
+    // more is worth it. Default stays small; the cap is what we actually retain.
+    const want = Number(url.searchParams.get("limit"));
+    const limit = Number.isFinite(want) && want > 0 ? Math.min(want, HISTORY_MAX) : 50;
+    return send(res, 200, { games: history.slice(0, limit), total: history.length,
+                            leaderboard: leaderboard(), houseAgents: houseWallets() });
   }
   if(p === "/api/state"){
     res.writeHead(200,{ "content-type":"application/json",

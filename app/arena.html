@@ -171,6 +171,11 @@
 
 
   /* past games and the standing that comes out of them */
+  .loadmore{display:block;width:100%;margin-top:12px;padding:10px;border-radius:10px;
+    background:transparent;border:1px solid var(--edge);color:var(--text);font:inherit;
+    font-size:13.5px;cursor:pointer;transition:border-color .15s,background .15s}
+  .loadmore:hover{border-color:var(--honey);background:rgba(255,179,0,.06)}
+  .loadmore:disabled{opacity:.5;cursor:default}
   .hist{margin-top:26px;border-top:1px solid var(--edge);padding-top:22px}
   .hist h3{margin:0 0 4px;font-size:13px;letter-spacing:.9px;text-transform:uppercase;color:var(--dimmer)}
   .hist p.n{margin:0 0 14px;color:var(--dimmer);font-size:12.5px}
@@ -198,12 +203,7 @@
 
 <header class="top">
   <a class="brand" href="/">
-    <svg width="30" height="30" viewBox="0 0 100 100" aria-hidden="true">
-      <g fill="none" stroke="#ffb300" stroke-width="6" stroke-linejoin="round">
-        <path d="M50 8 L74 22 L74 50 L50 64 L26 50 L26 22 Z" opacity=".45"/>
-      </g>
-      <path d="M50 30 L68 40 L68 60 L50 70 L32 60 L32 40 Z" fill="#ffb300"/>
-    </svg>
+    <img src="/mark.svg" width="30" height="30" alt="">
     BUZZ
   </a>
   <span class="sub">last comb standing, live arena &nbsp;<a href="/docs">Docs</a> &nbsp;<a href="/play">Play</a> &nbsp;<a href="/agents">Play with your agent</a></span>
@@ -212,7 +212,6 @@
       <button data-v="cards">cards</button><button data-v="hive">hive</button>
     </span>
     <span class="chip" id="tally">&nbsp;</span>
-    <span class="chip">devnet</span>
     <span class="chip live" id="conn"><i></i>Live</span>
   </div>
 </header>
@@ -494,7 +493,7 @@ function renderHistory(h){
   const games=h.games||[], board=h.leaderboard||[];
   if(!games.length){ el.innerHTML=`<div class="hist"><h3>Past combs</h3>
     <p class="n">No game has finished yet. The first result lands here.</p></div>`; return; }
-  const rows=games.slice(0,12).map(g=>`<tr>
+  const rows=games.map(g=>`<tr>
     <td><b>#${g.gameId}</b><br><span class="rank">${ago(g.endedAt)}</span></td>
     <td><span class="wcomb"><i></i>comb ${g.winningComb}</span><br>
         <span class="rank">of ${g.arena||g.combs||"?"}</span></td>
@@ -528,6 +527,9 @@ function renderHistory(h){
       <div>
         <table class="h"><thead><tr><th>game</th><th>winner</th><th>survivors</th>
           <th>best call</th><th>volume</th></tr></thead><tbody>${rows}</tbody></table>
+        ${(h.total ?? games.length) > games.length
+          ? `<button id="more" class="loadmore">Load more<span class="rank"> ${games.length} of ${h.total}</span></button>`
+          : games.length > 12 ? `<p class="n" style="text-align:center">That is every game on record.</p>` : ""}
       </div>
       <div>
         <h3 style="margin-bottom:10px">Standings</h3>
@@ -539,12 +541,19 @@ function renderHistory(h){
 // On a static host there is no /api/history, and an empty panel saying "no
 // game has finished yet" would be a lie rather than a blank. So the panel only
 // appears where the server that keeps the record is actually running.
+// How many past games the panel is currently asking for. The poll stays cheap
+// at the default and only grows when someone actually asks to see further back.
+let histLimit = 12;
 async function tickHistory(){
-  try{ const r=await fetch("/api/history",{cache:"no-store"});
+  try{ const r=await fetch(`/api/history?limit=${histLimit}`,{cache:"no-store"});
        if(r.ok) renderHistory(await r.json());
        else document.getElementById("hist").innerHTML="";
   }catch{ document.getElementById("hist").innerHTML=""; }
 }
+document.addEventListener("click",(e)=>{
+  const b=e.target.closest("#more"); if(!b) return;
+  histLimit += 24; b.textContent="Loading…"; b.disabled=true; tickHistory();
+});
 tickHistory(); setInterval(tickHistory,15000);
 
 </script>
