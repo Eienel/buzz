@@ -231,7 +231,7 @@
   .backb:hover{color:var(--honey);border-color:var(--honey)}
   .backb:active{transform:translate3d(0,1px,0)}
   .backb[aria-expanded="true"]{color:var(--ink);background:var(--honey);border-color:var(--honey)}
-  .backmenu{position:absolute;top:26px;right:0;min-width:212px;z-index:40;
+  .backmenu{position:fixed;min-width:212px;z-index:200;
     background:var(--card2);border:1px solid var(--edge2);border-radius:12px;
     box-shadow:0 18px 44px rgba(0,0,0,.6);overflow:hidden;
     animation:rise .22s var(--ease) both}
@@ -437,45 +437,51 @@ const agentsIn = (g, combId) => (g.agents || []).filter((a) => a.comb === combId
  */
 function backBtn(g, cb){
   if(!betsOpen(g) || !cb.alive) return "";
-  const as = agentsIn(g, cb.id);
-  if(!as.length) return "";
-  const rows = as.map((a) => {
-    const ranked = a.ranked > 0;
-    return `<button class="bopt" data-back="${a.owner}">
-      <span class="bn">${a.name || short(a.owner)}</span>
-      <span class="brec">${ranked ? `${Math.round(a.winRate*100)}% &middot; ${a.ppg.toFixed(2)}/g` : "no record"}</span>
-    </button>`;
-  }).join("");
-  return `<div class="backwrap">
-    <button class="backb" data-comb="${g.gameId}-${cb.id}" title="Back an agent in this comb">back</button>
-    <div class="backmenu" id="bm-${g.gameId}-${cb.id}" hidden>
-      <div class="bmh">comb ${cb.id} &middot; ${as.length} agent${as.length===1?"":"s"}</div>
-      ${rows}
-    </div>
-  </div>`;
+  const n = agentsIn(g, cb.id).length;
+  if(!n) return "";
+  return `<div class="backwrap"><button class="backb" data-g="${g.gameId}" data-c="${cb.id}"
+    title="Back an agent in this comb">back</button></div>`;
 }
 
-/** The field, best record first, so backing something is an informed act. */
-function agentRows(g){
-  const as = g.agents || [];
-  if(!as.length) return `<div class="brow"><span class="rank">no agents seated yet</span></div>`;
-  return as.map((a) => {
-    const ranked = a.ranked > 0;
-    const rate = ranked ? `${Math.round(a.winRate*100)}%` : "no record";
-    const ppg  = ranked ? `${a.ppg.toFixed(2)}/g` : "";
-    return `<div class="brow${ranked?"":" unranked"}">
-      <span class="who"><b>${a.name || short(a.owner)}</b>
-        <span class="cmb">comb ${a.comb}</span></span>
-      <span class="rec">${ranked?`${a.ranked}g`:""} <span class="hi">${rate}</span> ${ppg}</span>
-      <button data-back="${a.owner}" data-game="${g.gameId}">Back</button>
-    </div>`;
-  }).join("");
+// The menu lives on the body, not in the comb. A comb clips its own overflow to
+// keep its hexagonal edge, and z-index cannot escape overflow:hidden, so a menu
+// rendered inside one gets cut off halfway down its second row.
+const menuEl = document.createElement("div");
+menuEl.className = "backmenu"; menuEl.hidden = true;
+document.body.appendChild(menuEl);
+
+function openBackMenu(btn){
+  const g = (LAST_LIVE || []).find((x) => String(x.gameId) === btn.dataset.g);
+  const cb = Number(btn.dataset.c);
+  const as = g ? agentsIn(g, cb) : [];
+  if(!as.length) return;
+  menuEl.innerHTML = `<div class="bmh">comb ${cb} &middot; ${as.length} agent${as.length===1?"":"s"}</div>` +
+    as.map((a) => {
+      const ranked = a.ranked > 0;
+      return `<button class="bopt" data-back="${a.owner}">
+        <span class="bn">${a.name || short(a.owner)}</span>
+        <span class="brec">${ranked ? `${Math.round(a.winRate*100)}% &middot; ${a.ppg.toFixed(2)}/g` : "no record"}</span>
+      </button>`;
+    }).join("");
+  menuEl.hidden = false;
+  // Placed against the viewport, then nudged back inside it if the comb sits
+  // near an edge.
+  const r = btn.getBoundingClientRect();
+  const w = menuEl.offsetWidth, h = menuEl.offsetHeight;
+  let left = Math.min(r.right - w, window.innerWidth - w - 10);
+  let top = r.bottom + 6;
+  if(top + h > window.innerHeight - 10) top = Math.max(10, r.top - h - 6);
+  menuEl.style.left = Math.max(10, left) + "px";
+  menuEl.style.top = top + "px";
+  btn.setAttribute("aria-expanded", "true");
 }
 
 // Games already painted once, so an entrance animation never replays.
 // Past this, an unstarted empty lobby is wreckage rather than a seat.
 const STALE_LOBBY_S=180;
 const seenGames = new Set();
+// The most recent live games, so a click can find the comb it belongs to.
+let LAST_LIVE = [];
 let VIEW="hive";
 try{ VIEW=localStorage.getItem("buzz.view")||"hive"; }catch{}
 // ?view=hive wins over the stored choice, so a link can carry the view with it
@@ -564,6 +570,7 @@ function render(s){
   const nowS=Math.floor(Date.now()/1e3);
   const usable=(g)=>g.status!==0||g.players>0||nowS-(g.createdAt||0)<STALE_LOBBY_S;
   const live=(s.live||[]).filter(g=>(g.combs||[]).length>0&&inMarket(g)&&usable(g));
+  LAST_LIVE = live;
   // A lobby is not a game being played. Counting the two together told visitors
   // there were twenty games running when two were, which is the kind of number
   // that stops being believed once someone checks it.
@@ -726,18 +733,13 @@ async function tickHistory(){
   }catch{ document.getElementById("hist").innerHTML=""; }
 }
 document.addEventListener("click",(e)=>{
-  // One menu at a time, and a click anywhere else shuts it.
-  const shutMenus = (except) => {
-    for(const m of document.querySelectorAll(".backmenu")) if(m!==except) m.hidden=true;
-    for(const b of document.querySelectorAll(".backb")) b.setAttribute("aria-expanded","false");
-  };
+  const shut = () => { menuEl.hidden = true;
+    for(const b of document.querySelectorAll(".backb")) b.setAttribute("aria-expanded","false"); };
   const t=e.target.closest(".backb");
   if(t){
-    const menu=document.getElementById("bm-"+t.dataset.comb);
-    const open=menu.hidden;
-    shutMenus(open?menu:null);
-    menu.hidden=!open;
-    t.setAttribute("aria-expanded",String(open));
+    const wasOpen = t.getAttribute("aria-expanded")==="true";
+    shut();
+    if(!wasOpen) openBackMenu(t);
     return;
   }
   const back=e.target.closest(".bopt");
@@ -748,7 +750,7 @@ document.addEventListener("click",(e)=>{
     back.disabled=true;
     return;
   }
-  shutMenus(null);
+  shut();
   const b=e.target.closest("#more"); if(!b) return;
   histLimit += 24; b.textContent="Loading…"; b.disabled=true; tickHistory();
 });
