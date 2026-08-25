@@ -18,7 +18,7 @@
 const BASE = (t) => `https://api.usepod.ai/proxy/${t}/v1/chat/completions`;
 const TOKEN = process.env.USEPOD_TOKEN ?? "";
 const MODEL = process.env.USEPOD_MODEL ?? "deepseek-v3.2";
-const TIMEOUT_MS = Number(process.env.USEPOD_TIMEOUT_MS ?? 6000);
+const TIMEOUT_MS = Number(process.env.USEPOD_TIMEOUT_MS ?? 12000);
 
 export const reasoningEnabled = () => TOKEN.length > 0;
 
