@@ -90,6 +90,13 @@ function decodePlayer(d){let o=8;const p={};
 // spectator arriving after that would see an arena with no past, so the poller
 // snapshots each game the first time it reads as decided, and that snapshot is
 // the record from then on.
+// $BUZZ is a mainnet token; the arena is on devnet. The two are unrelated on
+// chain and only meet here, on the page.
+const BUZZ_MINT = process.env.BUZZ_MINT ?? "DoTMzBpSRPEwaycrSUzgSaDEs42PaiQVvYXAmLkcHr5X";
+const CLAW_URL = `https://clawpump.tech/tokens/${BUZZ_MINT}`;
+const TOKEN_TTL_MS = Number(process.env.TOKEN_TTL_MS ?? 30_000);
+let tokenCache = { at: 0, data: null };
+
 const HISTORY_FILE = join(DATA_DIR, "history.json");   // DATA_DIR is a volume in production
 const HISTORY_MAX = Number(process.env.HISTORY_MAX ?? 200);
 let history = [];
@@ -373,6 +380,32 @@ createServer(async (req,res)=>{
       return send(res, 200, { ok:false, mode:"none", scorecard:{picks:0}, picks:[],
                               error:String(e.message).slice(0,120) });
     }
+  }
+
+  // ---- $BUZZ market data ---------------------------------------------------
+  // Proxied rather than fetched from the page: the browser would hit CORS and
+  // every viewer would be a separate call against someone else's rate limit.
+  // One cached read here serves the whole arena.
+  if(p === "/api/token"){
+    const now = Date.now();
+    if(!tokenCache.at || now - tokenCache.at > TOKEN_TTL_MS){
+      try{
+        const r = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${BUZZ_MINT}`,
+                              { signal: AbortSignal.timeout(6000) });
+        const pair = (await r.json())?.pairs?.[0];
+        // Keep the last good reading on a bad one. A ticker that blanks out
+        // every time an upstream hiccups reads as broken rather than as quiet.
+        if(pair) tokenCache = { at: now, data: {
+          mint: BUZZ_MINT, priceUsd: Number(pair.priceUsd), change24h: pair.priceChange?.h24 ?? null,
+          volume24h: pair.volume?.h24 ?? null, liquidity: pair.liquidity?.usd ?? null,
+          mcap: pair.marketCap ?? pair.fdv ?? null, dex: pair.url, claw: CLAW_URL,
+        }};
+        else tokenCache.at = now;
+      }catch{ tokenCache.at = now; }
+    }
+    return tokenCache.data
+      ? send(res, 200, { ...tokenCache.data, asOf: tokenCache.at })
+      : send(res, 503, { error: "no market data yet" });
   }
 
   if(p === "/api/history"){

@@ -193,6 +193,11 @@
   /* A control that moves under the press feels connected to the click. */
   .view button,.loadmore{transition:transform .12s var(--ease),border-color .15s,background .15s,color .15s}
   .view button:active,.loadmore:active{transform:translate3d(0,1px,0)}
+  .tkr{font-family:var(--mono);font-size:12px;color:var(--text);text-decoration:none;
+    display:inline-flex;align-items:center;gap:8px;transition:border-color .15s var(--ease)}
+  .tkr:hover{border-color:var(--honey);text-decoration:none}
+  .tkr .sym{color:var(--dim)}
+  .tkr .up{color:var(--alive)} .tkr .dn{color:var(--dead)}
   .m.lead{color:var(--text)}
   .m.lead b{color:var(--honey)}
   /* Identifiers and running totals still available, just not competing with
@@ -242,6 +247,8 @@
       <button data-v="cards">cards</button><button data-v="hive">hive</button>
     </span>
     <span class="chip" id="tally">&nbsp;</span>
+    <a class="chip tkr" id="tkr" href="https://clawpump.tech/tokens/DoTMzBpSRPEwaycrSUzgSaDEs42PaiQVvYXAmLkcHr5X"
+       target="_blank" rel="noopener" hidden></a>
     <span class="chip live" id="conn"><i></i>Live</span>
   </div>
 </header>
@@ -587,6 +594,26 @@ document.addEventListener("click",(e)=>{
   histLimit += 24; b.textContent="Loading…"; b.disabled=true; tickHistory();
 });
 tickHistory(); setInterval(tickHistory,15000);
+
+// $BUZZ is a mainnet token and this arena is on devnet, so the ticker is the
+// one place the two meet. It stays hidden until there is a real number rather
+// than showing a dash that looks like a bug.
+async function tickToken(){
+  const el=document.getElementById("tkr"); if(!el) return;
+  try{
+    const r=await fetch("/api/token",{cache:"no-store"}); if(!r.ok) return;
+    const t=await r.json();
+    if(!Number.isFinite(t.priceUsd)) return;
+    const c=t.change24h, dir=c==null?"":(c>=0?"up":"dn");
+    // Sub-cent prices need their significant digits, not two decimal places.
+    const px=t.priceUsd<0.01?t.priceUsd.toPrecision(3):t.priceUsd.toFixed(4);
+    el.innerHTML=`<span class="sym">$BUZZ</span>$${px}`+
+      (c==null?"":` <span class="${dir}">${c>=0?"+":""}${c.toFixed(1)}%</span>`);
+    if(t.claw) el.href=t.claw;
+    el.hidden=false;
+  }catch{}
+}
+tickToken(); setInterval(tickToken,30000);
 
 </script>
 </body>
