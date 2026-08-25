@@ -30,6 +30,11 @@ const N_AGENTS = Math.max(MIN_COMBS, Number(process.env.AGENTS ?? 5));
 // appended after the heuristics instead: the control group keeps its names,
 // its wallets and its record.
 const POD_AGENTS = Number(process.env.POD_AGENTS ?? (reasoningEnabled() ? 2 : 0));
+// Measured UsePod latency is 0.5s to 21s, routing variance rather than model
+// choice, and a 24s instance only leaves a 14s commit window. Reasoning agents
+// therefore sit out the fastest games instead of quietly falling back to the
+// herd rule in most rounds, which would make the leaderboard comparison a lie.
+const POD_MIN_TEMPO = Number(process.env.POD_MIN_TEMPO ?? 60);
 // How many games may be live at once, and how long to wait between starting
 // them so three lobbies do not all crank on the same second.
 const MAX_CONCURRENT = Number(process.env.MAX_CONCURRENT ?? 3);
@@ -37,7 +42,10 @@ const STAGGER_MS = Number(process.env.STAGGER_SECONDS ?? 25) * 1000;
 // Tempos a game may be dealt. A fast lobby and a slow one running side by side
 // is the point: spectators always have something resolving, and agents have to
 // handle both a 60 second and a 5 minute think.
-const TEMPOS = (process.env.TEMPOS ?? "60,90,300").split(",").map(Number);
+// Instance length, not game length: a game runs until one comb is left, so
+// with five or six combs that is four or five instances. 24 / 60 / 120 gives
+// games of roughly two, five and ten minutes.
+const TEMPOS = (process.env.TEMPOS ?? "24,60,120").split(",").map(Number);
 // One game in this many is played in the second asset; the rest are the ranked
 // one. 4 means three quarters of the arena counts toward the season.
 const BUZZ_EVERY = Number(process.env.RANKED_RATIO ?? 4);
@@ -173,7 +181,8 @@ async function playGame(gameNo) {
 
   const tempo = TEMPOS[Math.floor(Math.random() * TEMPOS.length)];
   const slot = gameNo % MAX_CONCURRENT;
-  const agents = Array.from({ length: N_AGENTS + POD_AGENTS }, (_, i) => {
+  const podsThisGame = tempo >= POD_MIN_TEMPO ? POD_AGENTS : 0;
+  const agents = Array.from({ length: N_AGENTS + podsThisGame }, (_, i) => {
     const pod = i >= N_AGENTS;
     const name = pod ? `pod-${slot}${i}` : `${stratNames[i % stratNames.length]}-${slot}${i}`;
     return {
@@ -181,14 +190,15 @@ async function playGame(gameNo) {
       name,
       pod,
       strat: pod
-        ? (fog, self, instance) => decide(fog, self, { instance })
+        ? (fog, self, instance) => decide(fog, self, { instance, instanceSeconds: tempo })
         : strategies[stratNames[i % stratNames.length]],
       // one agent per comb for the first MIN_COMBS, so the comb floor is met by
       // construction rather than by luck; the rest spread over the six
       circle: i < MIN_COMBS ? i : i % 6, dead: false,
     };
   });
-  log(`game ${gid}: ${asset.name}, ${tempo}s instances, funding ${N_AGENTS} agents…`);
+  log(`game ${gid}: ${asset.name}, ${tempo}s instances, ${N_AGENTS} heuristic` +
+      `${podsThisGame ? ` + ${podsThisGame} reasoning` : " (too fast for reasoning)"} agents…`);
   await fundAgents(agents, asset);
 
   // Everything after funding is wrapped so sweepBack ALWAYS runs, a throw

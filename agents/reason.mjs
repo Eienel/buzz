@@ -17,8 +17,19 @@
 
 const BASE = (t) => `https://api.usepod.ai/proxy/${t}/v1/chat/completions`;
 const TOKEN = process.env.USEPOD_TOKEN ?? "";
-const MODEL = process.env.USEPOD_MODEL ?? "deepseek-v3.2";
-const TIMEOUT_MS = Number(process.env.USEPOD_TIMEOUT_MS ?? 12000);
+const MODEL = process.env.USEPOD_MODEL ?? "llama-4-maverick";
+const TIMEOUT_CAP = Number(process.env.USEPOD_TIMEOUT_MS ?? 12000);
+
+// A fixed timeout does not survive short games. Commit is 60% of an instance,
+// so a 24s round leaves a 14s window that also has to carry two on-chain
+// commits per agent. Thinking gets a slice of that window, never the whole
+// thing, so a slow model degrades to the herd rule in time to still commit
+// rather than missing the round entirely.
+function budgetFor(instanceSeconds) {
+  if (!instanceSeconds) return TIMEOUT_CAP;
+  const commitWindow = instanceSeconds * 0.6 * 1000;
+  return Math.max(2500, Math.min(TIMEOUT_CAP, commitWindow * 0.45));
+}
 
 export const reasoningEnabled = () => TOKEN.length > 0;
 
@@ -63,7 +74,7 @@ export async function decide(fog, self, opts = {}) {
     `Round ${opts.instance ?? "?"} of the game. Reply with JSON only.`;
 
   const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(), TIMEOUT_MS);
+  const timer = setTimeout(() => ctl.abort(), budgetFor(opts.instanceSeconds));
   try {
     const r = await fetch(BASE(TOKEN), {
       method: "POST",
