@@ -182,10 +182,11 @@
 
   /* past games and the standing that comes out of them */
   /* Games arrive in sequence rather than all at once, which reads as the board
-     filling in rather than a page repainting. transform+opacity only, so it
-     stays on the compositor. */
+     filling in rather than a page repainting. Only on a game's FIRST paint:
+     the poll rebuilds this markup every 2.5s, and animating every rebuild made
+     the whole page twitch on a loop. transform+opacity only. */
   @keyframes rise{from{opacity:0;transform:translate3d(0,10px,0)}to{opacity:1;transform:none}}
-  .game{animation:rise .5s var(--ease) both;animation-delay:calc(var(--i,0) * 70ms)}
+  .game.enter{animation:rise .5s var(--ease) both;animation-delay:calc(var(--i,0) * 70ms)}
   .hex{transition:transform .35s var(--ease),filter .35s var(--ease)}
   .hex:hover{transform:translate3d(0,-3px,0)}
   .game:hover{border-color:var(--edge2)}
@@ -245,6 +246,9 @@
   <div class="right">
     <span class="view" id="view">
       <button data-v="cards">cards</button><button data-v="hive">hive</button>
+    </span>
+    <span class="view" id="mkt">
+      <button data-m="all">all</button><button data-m="BUZZ">BUZZ</button><button data-m="ANSEM">ANSEM</button>
     </span>
     <span class="chip" id="tally">&nbsp;</span>
     <a class="chip tkr" id="tkr" href="https://clawpump.tech/tokens/DoTMzBpSRPEwaycrSUzgSaDEs42PaiQVvYXAmLkcHr5X"
@@ -374,6 +378,10 @@ const mmss=(s)=>s<=0?"cranking":s<60?s+"s":`${Math.floor(s/60)}:${String(s%60).p
 // Hive is the default: it shows the shape of the game, which comb sits next to
 // which and where the crowd actually is. Cards stay for scanning numbers, and
 // anyone who has already chosen keeps their choice.
+// Games already painted once, so an entrance animation never replays.
+// Past this, an unstarted empty lobby is wreckage rather than a seat.
+const STALE_LOBBY_S=180;
+const seenGames = new Set();
 let VIEW="hive";
 try{ VIEW=localStorage.getItem("buzz.view")||"hive"; }catch{}
 // ?view=hive wins over the stored choice, so a link can carry the view with it
@@ -385,6 +393,19 @@ function setView(v){
   for(const b of document.querySelectorAll("#view button")) b.classList.toggle("on",b.dataset.v===v);
   tick();
 }
+
+// Two assets share one arena, and a spectator usually cares about one of them.
+let MKT="all";
+try{ MKT=localStorage.getItem("buzz.mkt")||"all"; }catch{}
+const qm=new URLSearchParams(location.search).get("market");
+if(qm==="BUZZ"||qm==="ANSEM"||qm==="all") MKT=qm;
+function setMarket(m){
+  MKT=m;
+  try{ localStorage.setItem("buzz.mkt",m); }catch{}
+  for(const b of document.querySelectorAll("#mkt button")) b.classList.toggle("on",b.dataset.m===m);
+  tick();
+}
+const inMarket=(g)=>MKT==="all"||sym(g.stakeMint)===MKT;
 
 /** Members as dots, capped so a busy comb stays legible rather than a wall. */
 function dots(n){
@@ -440,7 +461,15 @@ function render(s){
   const c=document.getElementById("conn");
   c.className="chip live"+(s.ok?"":" down"); c.innerHTML=`<i></i>${s.ok?"Live":"Reconnecting"}`;
   const root=document.getElementById("root");
-  const live=(s.live||[]).filter(g=>(g.combs||[]).length>0);
+  // A lobby only starts itself while the process that opened it is alive, so
+  // every deploy that lands mid-creation strands one. The program will not let
+  // anyone abort it for an hour, which is correct (no authority should be able
+  // to strand deposits by walking away) but means they pile up. An empty lobby
+  // that has sat past the point where the swarm would have started it is not
+  // something a visitor can join, so it is not shown as one.
+  const nowS=Math.floor(Date.now()/1e3);
+  const usable=(g)=>g.status!==0||g.players>0||nowS-(g.createdAt||0)<STALE_LOBBY_S;
+  const live=(s.live||[]).filter(g=>(g.combs||[]).length>0&&inMarket(g)&&usable(g));
   // A lobby is not a game being played. Counting the two together told visitors
   // there were twenty games running when two were, which is the kind of number
   // that stops being believed once someone checks it.
@@ -448,6 +477,11 @@ function render(s){
   const waiting=live.length-running;
   document.getElementById("tally").innerHTML =
     `<b>${running}</b> running` + (waiting?` &middot; <s>${waiting} filling</s>`:"");
+  if(!live.length && MKT!=="all"){
+    root.innerHTML=`<div class="empty"><b>No ${MKT} games right now</b>
+      The arena runs both assets. <a href="#" onclick="setMarket('all');return false">Show every market</a>.</div>`;
+    return;
+  }
   if(!live.length){ root.innerHTML=`<div class="empty"><b>No hive running right now</b>
     A fresh game opens every couple of minutes. Keep this open and one will appear.</div>`; return; }
   const now=Math.floor(Date.now()/1e3);
@@ -475,7 +509,10 @@ function render(s){
     const feed=(feeds.get(g.gameId)||[]).map(e=>
       `<li><time>${e.t}</time><span class="${e.cls}">${e.text}</span></li>`).join("")
       ||'<li><span>waiting for the next event</span></li>';
-    return `<section class="game" style="--i:${gi}">
+    // Animate a game the first time it is seen and never again, so a repaint
+    // is invisible.
+    const fresh = !seenGames.has(g.gameId); seenGames.add(g.gameId);
+    return `<section class="game${fresh ? " enter" : ""}" style="--i:${gi}">
       <div class="ghead">
         <span class="pill ${g.status===1?"run":"lobby"}"><i></i>${STATUS[g.status]}</span>
         ${g.insane?'<span class="pill insane"><i></i>insane</span>':""}
@@ -513,10 +550,14 @@ function tickClocks(){
 setInterval(tickClocks,1000);
 
 async function tick(){ try{ render(await fetchState()); }catch{ render({ok:false,live:[]}); } }
+document.getElementById("mkt").addEventListener("click",e=>{
+  const m=e.target.dataset&&e.target.dataset.m; if(m) setMarket(m);
+});
 document.getElementById("view").addEventListener("click",e=>{
   const v=e.target.dataset&&e.target.dataset.v; if(v) setView(v);
 });
 for(const b of document.querySelectorAll("#view button")) b.classList.toggle("on",b.dataset.v===VIEW);
+for(const b of document.querySelectorAll("#mkt button")) b.classList.toggle("on",b.dataset.m===MKT);
 tick(); setInterval(tick,2500);
 
 // ---- history: what already happened -----------------------------------------
