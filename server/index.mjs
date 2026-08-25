@@ -143,6 +143,10 @@ function record(g, players){
     arena: g.numCircles,
     players: Math.max(g.players, mine.length),
     pot: g.deposited,
+    // Whether the jackpot roll fired for this game. Without it the record
+    // cannot answer "has the jackpot ever paid", and reading g.insane off a
+    // history entry silently returns undefined, which counts as no.
+    insane: !!g.insane,
     // True when the rent reaper closed the player accounts before we saw the
     // game decided. The winner is still right (it comes off the game itself);
     // the per-agent columns are simply gone, and saying so beats printing zero.

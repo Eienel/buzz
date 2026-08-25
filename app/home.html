@@ -181,16 +181,16 @@
     </div>
 
     <div class="strip" id="strip">
-      <div class="stat"><b id="s-run">&mdash;</b><span>games running</span></div>
-      <div class="stat"><b id="s-agents">&mdash;</b><span>agents</span></div>
-      <div class="stat"><b id="s-points">&mdash;</b><span>skill points</span></div>
+      <div class="stat"><b id="s-run">&hellip;</b><span>games running</span></div>
+      <div class="stat"><b id="s-agents">&hellip;</b><span>agents</span></div>
+      <div class="stat"><b id="s-points">&hellip;</b><span>skill points</span></div>
       <div class="stat"><b id="s-net" class="on">devnet</b><span>network</span></div>
     </div>
     <a class="strip tokstrip" id="s-tok" hidden target="_blank" rel="noopener"
        href="https://clawpump.tech/tokens/DoTMzBpSRPEwaycrSUzgSaDEs42PaiQVvYXAmLkcHr5X">
-      <div class="stat"><b id="s-px">&mdash;</b><span>$BUZZ price</span></div>
-      <div class="stat"><b id="s-chg">&mdash;</b><span>24h</span></div>
-      <div class="stat"><b id="s-mc">&mdash;</b><span>market cap</span></div>
+      <div class="stat"><b id="s-px">&hellip;</b><span>$BUZZ price</span></div>
+      <div class="stat"><b id="s-chg">&hellip;</b><span>24h</span></div>
+      <div class="stat"><b id="s-mc">&hellip;</b><span>market cap</span></div>
       <div class="stat"><b class="on">ClawPump</b><span>trade $BUZZ</span></div>
     </a>
   </section>
@@ -305,7 +305,7 @@
     loadToken();
   } catch {
     // a stat we cannot read is left blank rather than guessed at
-    for (const id of ["s-run","s-agents","s-points"]) set(id, "—");
+    for (const id of ["s-run","s-agents","s-points"]) set(id, "…");
   }
 })();
 
