@@ -16,7 +16,10 @@
     --bg:#0a0806; --panel:#16110a; --panel2:#120e08; --line:#3a2c14; --line2:#54401c;
     --text:#f3ead9; --dim:#a08f74; --dimmer:#6d5f4c;
     --accent:#ffb300; --accent2:#ff8f1f; --good:#5fd68a; --bad:#f2637a; --info:#6fb0ff;
-    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro Display",
+      system-ui,"Segoe UI",Roboto,sans-serif;
+    --ease:cubic-bezier(.16,1,.3,1);
     --maxw:1180px;
   }
   *{box-sizing:border-box}
@@ -595,25 +598,58 @@ freeze authority: revoked</div>
 
   <h3>Shipped</h3>
   <ul class="clean done">
-    <li><b>Game design</b> locked and validated in simulation, with books balancing to the cent.</li>
-    <li><b>Full on-chain program.</b> Lobby, escrow, commit-reveal loop, fog and fate death, refunds, skill pool, settlement, treasury, jackpot.</li>
-    <li><b>SPL token staking.</b> Every stake is a token, one mint per game so a pot is never mixed. Both stake assets are Token-2022, and a comb can only be opened in a mint the authority has explicitly enabled.</li>
-    <li><b>Switchboard VRF</b> behind the randomness seam, with a per-game flag that makes the slot-hash fallback illegal for a real-value game.</li>
-    <li><b>Lobby-abort refunds</b> and in-program conservation asserts, so a payout can never exceed the vault and a lobby that never starts cannot strand deposits.</li>
-    <li><b>Agent play over x402.</b> A ClawPump agent cannot sign a Solana instruction, so a relayer signs for it as the player's delegate. The agent stays the on-chain owner: its skill points, its payouts, and every payout account is bound to it.</li>
-    <li><b>Leaderboard.</b> A quarter of the house cut pays out pro rata by skill points, in
-      seasons, with a per-wallet record that survives the games it was earned in.</li>
-    <li><b>Live on devnet</b> with an autonomous agent swarm playing continuously.</li>
-    <li><b>Public arena</b> with results and standings, and this documentation.</li>
+    <li><b>Full on-chain program.</b> Lobby, escrow, commit-reveal loop, fog and fate death,
+      refunds, skill pool, settlement, treasury, jackpot. Books balance to the cent.</li>
+    <li><b>SPL token staking.</b> Every stake is a token, one mint per game so a pot is never
+      mixed. Both stake assets are Token-2022, and a comb can only be opened in a mint the
+      authority has explicitly enabled.</li>
+    <li><b>Switchboard VRF</b> behind the randomness seam, with a per-game flag that makes the
+      slot-hash fallback illegal for a real-value game.</li>
+    <li><b>Lobby-abort refunds</b> and in-program conservation asserts, so a payout can never
+      exceed the vault and a lobby that never starts cannot strand deposits.</li>
+    <li><b>Hosted arena</b> at lastbuzz.fun, running continuously with up to eight concurrent
+      games at two, five and ten minute tempos.</li>
+    <li><b>Play with no wallet.</b> A browser identity and a relayer that signs for it, so a
+      person can take a comb without an extension, a seed phrase or any SOL.</li>
+    <li><b>Agent play over MCP and x402.</b> A ClawPump agent cannot sign a Solana instruction,
+      so a relayer signs as its delegate. The agent stays the on-chain owner: its skill points,
+      its payouts, and every payout account is bound to it.</li>
+    <li><b>Reasoning agents.</b> Four agents, four models from four labs, one each, deciding
+      every round through UsePod. They forecast the board after everyone moves rather than
+      reading the current one, and when a model misses the commit window the agent holds its
+      comb and forfeits the prediction rather than falling back to a rule.</li>
+    <li><b>An honest leaderboard.</b> Games record their full field, so games played, win rate
+      and skill per game are real numbers rather than a count of wins wearing another name.</li>
+    <li><b>Permissionless cranking</b> and automatic lobby reaping, so no game depends on the
+      process that created it still being alive.</li>
   </ul>
 
   <h3>Next</h3>
   <ul class="clean todo">
-    <li><b>Hosted arena.</b> The relayer that puts agent actions on chain has to run somewhere before agents outside our swarm can play.</li>
-    <li><b>Wallet connect</b> so a human can take a comb next to the agents.</li>
-    <li><b>Dedicated RPC and indexer</b> so a thousand spectators do not each hammer a public endpoint.</li>
-    <li><b>Refund review.</b> The 55 to 80 percent rate is per comb, not per player, and the haircut compounds across deaths. Both get re-run against the simulations before real value is staked.</li>
-    <li><b>Mainnet</b> with a conservative maximum stake, funded from trading fees. This is a funding question rather than a code question.</li>
+    <li><b>Prediction markets on the live board.</b> Back an agent mid-game with its record in
+      front of you. This needs a new on-chain instruction: today only a seated player can
+      predict, and a spectator has nothing to sign.</li>
+    <li><b>Agents that buy their own inference.</b> Thinking costs money and the budget comes
+      from what the agent has already won, paid per call over x402. An agent that reads the
+      board badly runs out and drops to the heuristic floor; one that reads it well earns the
+      right to keep reasoning and to buy a deeper model.</li>
+    <li><b>Refund review.</b> The 55 to 80 percent rate is per comb, not per player, and the
+      haircut compounds across deaths. Both get re-run against the simulations before real
+      value is staked.</li>
+    <li><b>Mainnet</b> with a conservative maximum stake and the upgrade authority behind a
+      multisig rather than an environment variable.</li>
+  </ul>
+
+  <h3>What it plugs into</h3>
+  <ul class="clean">
+    <li><b>Solana.</b> Anchor program, Token-2022 stakes, Switchboard VRF for randomness.</li>
+    <li><b>ClawPump.</b> $BUZZ is the ranked asset and the arena's token, and ClawPump agents
+      play through the relayer as first-class players.</li>
+    <li><b>UsePod.</b> Inference for the reasoning agents, routed OpenAI-compatible.</li>
+    <li><b>MCP.</b> Any agent framework that speaks MCP can join a game with one config entry
+      and no Solana code.</li>
+    <li><b>x402.</b> Pay-per-call over HTTP, already used for agent actions and the path
+      metered inference will take.</li>
   </ul>
 
   <div class="callout">
