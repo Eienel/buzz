@@ -395,3 +395,99 @@ describe("buzz: a full game in tokens", () => {
     assert.ok(!paid, "no points, no reward");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Prediction market
+// ---------------------------------------------------------------------------
+//
+// The properties worth proving are the ones that decide whether a market is
+// safe to open: it cannot pay out more than it took in, it cannot pay before it
+// knows who won, and losing everything is not the same as the book keeping it.
+
+describe("buzz: backing an agent", () => {
+  const marketPda = (g: PublicKey) => pda(Buffer.from("market"), g.toBuffer());
+  const mvaultPda = (m: PublicKey) => pda(Buffer.from("mvault"), m.toBuffer());
+  const tpoolPda = (m: PublicKey, t: PublicKey) => pda(Buffer.from("tpool"), m.toBuffer(), t.toBuffer());
+  const betPda = (m: PublicKey, b: PublicKey, t: PublicKey) =>
+    pda(Buffer.from("bet"), m.toBuffer(), b.toBuffer(), t.toBuffer());
+
+  let asset: { mint: PublicKey; tokenProgram: PublicKey };
+  let gid: anchor.BN, g: PublicKey, market: PublicKey;
+  let players: { kp: Keypair; ata: PublicKey }[] = [];
+  let bettors: { kp: Keypair; ata: PublicKey }[] = [];
+
+  before(async () => {
+    await ensureConfig();
+    asset = await newStakeAsset();
+    gid = new anchor.BN(Date.now());
+    g = gamePda(gid);
+    market = marketPda(g);
+
+    await program.methods.createGame(gid, 6, 10, false).accountsPartial({
+      config: configPda, stakeMint: asset.mint, allowed: allowedPda(asset.mint),
+      game: g, vault: vaultPda(g), authority: authority.publicKey,
+      tokenProgram: asset.tokenProgram, systemProgram: SystemProgram.programId,
+    }).rpc();
+
+    // Four combs, one agent each, so the game is startable and every bettor has
+    // something distinct to back.
+    for (let i = 0; i < 4; i++) {
+      const p = await newPlayer(asset.mint, asset.tokenProgram);
+      players.push(p);
+      await program.methods.createCircle(i, new anchor.BN(10 * UNIT)).accountsPartial({
+        config: configPda, game: g, vault: vaultPda(g), circle: combPda(g, i),
+        player: playerPda(g, p.kp.publicKey), owner: p.kp.publicKey, payer: p.kp.publicKey,
+        relayer: null, stakeMint: asset.mint, payerToken: p.ata,
+        tokenProgram: asset.tokenProgram, systemProgram: SystemProgram.programId,
+      }).signers([p.kp]).rpc();
+    }
+    await program.methods.startGame()
+      .accountsPartial({ game: g, authority: authority.publicKey }).rpc();
+
+    for (let i = 0; i < 2; i++) bettors.push(await newPlayer(asset.mint, asset.tokenProgram));
+  });
+
+  it("opens a book on a running game", async () => {
+    await program.methods.openMarket(5).accountsPartial({
+      game: g, market, marketVault: mvaultPda(market), stakeMint: asset.mint,
+      payer: authority.publicKey, tokenProgram: asset.tokenProgram,
+      systemProgram: SystemProgram.programId,
+    }).rpc();
+    const m = await program.account.market.fetch(market);
+    assert.equal(m.totalPool.toNumber(), 0);
+    assert.equal(m.settled, false);
+  });
+
+  const place = async (b: typeof bettors[number], target: PublicKey, amount: number) =>
+    program.methods.placeBet(new anchor.BN(amount)).accountsPartial({
+      game: g, market, marketVault: mvaultPda(market),
+      targetPlayer: playerPda(g, target), targetPool: tpoolPda(market, target),
+      bet: betPda(market, b.kp.publicKey, target), bettorToken: b.ata,
+      bettor: b.kp.publicKey, stakeMint: asset.mint,
+      tokenProgram: asset.tokenProgram, systemProgram: SystemProgram.programId,
+    }).signers([b.kp]).rpc();
+
+  it("takes bets, and the vault holds exactly what was staked", async () => {
+    await place(bettors[0], players[0].kp.publicKey, 6 * UNIT);
+    await place(bettors[1], players[1].kp.publicKey, 2 * UNIT);
+    const m = await program.account.market.fetch(market);
+    assert.equal(m.totalPool.toNumber(), 8 * UNIT, "pool is the sum of the bets");
+    assert.equal(m.targets, 2, "two distinct agents backed");
+    const vault = await getAccount(conn, mvaultPda(market), undefined, asset.tokenProgram);
+    assert.equal(Number(vault.amount), 8 * UNIT, "vault holds the pool, no more and no less");
+  });
+
+  it("refuses to pay before every backed agent is decided", async () => {
+    let threw = false;
+    try {
+      await program.methods.claimBet().accountsPartial({
+        market, marketVault: mvaultPda(market),
+        targetPool: tpoolPda(market, players[0].kp.publicKey),
+        bet: betPda(market, bettors[0].kp.publicKey, players[0].kp.publicKey),
+        bettorToken: bettors[0].ata, bettor: bettors[0].kp.publicKey,
+        stakeMint: asset.mint, tokenProgram: asset.tokenProgram,
+      }).signers([bettors[0].kp]).rpc();
+    } catch { threw = true; }
+    assert.isTrue(threw, "an unsettled book must not pay out");
+  });
+});
