@@ -15,6 +15,7 @@ import { getOrCreateAssociatedTokenAccount, mintTo, getAssociatedTokenAddressSyn
 import jsSha3 from "js-sha3";
 const { keccak_256 } = jsSha3;
 import { readFileSync } from "node:fs";
+import { decide, reasoningEnabled } from "./reason.mjs";
 import { loadKeypair } from "../server/keypair.mjs";
 
 const { AnchorProvider, Program, Wallet, BN } = anchorPkg;
@@ -23,6 +24,12 @@ const RPC = process.env.RPC ?? "https://api.devnet.solana.com";
 // At least MIN_COMBS agents, one per comb, or the game cannot legally start.
 const MIN_COMBS = 4;
 const N_AGENTS = Math.max(MIN_COMBS, Number(process.env.AGENTS ?? 5));
+// Agent wallets are derived from `${strategy}-${slot}${i}`, so folding a fourth
+// strategy into the rotation would rename every existing agent and orphan a
+// leaderboard that herd-00 has been building for days. Reasoning agents are
+// appended after the heuristics instead: the control group keeps its names,
+// its wallets and its record.
+const POD_AGENTS = Number(process.env.POD_AGENTS ?? (reasoningEnabled() ? 2 : 0));
 // How many games may be live at once, and how long to wait between starting
 // them so three lobbies do not all crank on the same second.
 const MAX_CONCURRENT = Number(process.env.MAX_CONCURRENT ?? 3);
@@ -166,12 +173,16 @@ async function playGame(gameNo) {
 
   const tempo = TEMPOS[Math.floor(Math.random() * TEMPOS.length)];
   const slot = gameNo % MAX_CONCURRENT;
-  const agents = Array.from({ length: N_AGENTS }, (_, i) => {
-    const name = `${stratNames[i % stratNames.length]}-${slot}${i}`;
+  const agents = Array.from({ length: N_AGENTS + POD_AGENTS }, (_, i) => {
+    const pod = i >= N_AGENTS;
+    const name = pod ? `pod-${slot}${i}` : `${stratNames[i % stratNames.length]}-${slot}${i}`;
     return {
       kp: agentKey(name),
       name,
-      strat: strategies[stratNames[i % stratNames.length]],
+      pod,
+      strat: pod
+        ? (fog, self, instance) => decide(fog, self, { instance })
+        : strategies[stratNames[i % stratNames.length]],
       // one agent per comb for the first MIN_COMBS, so the comb floor is met by
       // construction rather than by luck; the rest spread over the six
       circle: i < MIN_COMBS ? i : i % 6, dead: false,
@@ -227,9 +238,20 @@ async function playGame(gameNo) {
 
     // commit phase: every live agent commits a move + prediction
     const plans = new Map();
-    for (const a of agents) {
-      if (a.dead) continue;
-      const plan = a.strat(fog, a.circle);
+    // Thinking happens concurrently; a model agent can take seconds, and doing
+    // that one after another would run past the commit window.
+    const live = agents.filter((a) => !a.dead);
+    const thought = await Promise.all(live.map(async (a) => {
+      try { return { a, plan: await a.strat(fog, a.circle, instance) }; }
+      catch (e) { log(`  ${a.name} strategy failed: ${String(e.message).slice(0, 60)}`); return null; }
+    }));
+    const modelled = thought.filter((t) => t?.plan?.by === "model").length;
+    const podCount = live.filter((a) => a.pod).length;
+    if (podCount) log(`  ${modelled}/${podCount} reasoning agents answered`);
+
+    for (const t of thought) {
+      if (!t) continue;
+      const { a, plan } = t;
       const mvNonce = new BN(Math.floor(Math.random() * 1e9));
       const pdNonce = new BN(Math.floor(Math.random() * 1e9));
       plans.set(a, { ...plan, mvNonce, pdNonce });
