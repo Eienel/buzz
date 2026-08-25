@@ -12,7 +12,7 @@
 // else.
 
 import anchorPkg from "@coral-xyz/anchor";
-import { PublicKey, SYSVAR_SLOT_HASHES_PUBKEY } from "@solana/web3.js";
+import { PublicKey, SystemProgram, SYSVAR_SLOT_HASHES_PUBKEY } from "@solana/web3.js";
 
 const { BN } = anchorPkg;
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), "[crank]", ...a);
@@ -30,6 +30,24 @@ export function makeCranker({ program, payer, starter }) {
   const pda = (...s) => PublicKey.findProgramAddressSync(s, PID)[0];
   const gamePda = (id) => pda(Buffer.from("game"), new BN(id).toArrayLike(Buffer, "le", 8));
   const combPda = (g, i) => pda(Buffer.from("circle"), g.toBuffer(), Buffer.from([i]));
+  const vaultPda = (id) => pda(Buffer.from("vault"), gamePda(id).toBuffer());
+  const configPda = pda(Buffer.from("config"));
+  const treasuryPda = (m) => pda(Buffer.from("treasury"), new PublicKey(m).toBuffer());
+  // "tvault", not "treasury_vault": the seed is the short one, learned the hard
+  // way during the rent recovery.
+  const tvaultPda = (m) => pda(Buffer.from("tvault"), new PublicKey(m).toBuffer());
+
+  // A mint's token program is whoever owns the mint account. Assuming it is the
+  // same lesson the rent recovery already paid for: a game with a plain SPL
+  // mint would fail every sweep silently. Cached, since it never changes.
+  const tokenPrograms = new Map();
+  async function tokenProgramOf(mint) {
+    if (tokenPrograms.has(mint)) return tokenPrograms.get(mint);
+    const info = await program.provider.connection.getAccountInfo(new PublicKey(mint));
+    if (!info) return null;
+    tokenPrograms.set(mint, info.owner);
+    return info.owner;
+  }
   let busy = false;
 
   async function once(snapshot) {
@@ -38,6 +56,30 @@ export function makeCranker({ program, payer, starter }) {
     try {
       const now = Math.floor(Date.now() / 1000);
       for (const g of snapshot.live ?? []) {
+        // A settled game still holding its rake. collect_fees is permissionless
+        // and moves the house cut and the jackpot share into the treasury, but
+        // it only ever ran inside the swarm's own settlement block, which is
+        // tied to the playGame call that created the game. Any game the cranker
+        // rescued therefore settled with nobody to collect it: the jackpot
+        // stopped growing, and close_game refuses while the rake is still in
+        // the vault, so the rent could not be reclaimed either.
+        if (g.status === 2 && Number(g.fees ?? 0) > 0) {
+          try {
+            const tp = await tokenProgramOf(g.stakeMint);
+            if (!tp) continue;
+            await program.methods.collectFees()
+              .accountsPartial({ config: configPda, game: gamePda(g.gameId),
+                vault: vaultPda(g.gameId), treasury: treasuryPda(g.stakeMint),
+                treasuryVault: tvaultPda(g.stakeMint), stakeMint: new PublicKey(g.stakeMint),
+                tokenProgram: tp,
+                cranker: payer.publicKey, systemProgram: SystemProgram.programId }).rpc();
+            log(`game ${g.gameId}: swept ${(Number(g.fees) / 1e6).toFixed(2)} in fees to the treasury`);
+          } catch (e) {
+            const m = String(e.message ?? e);
+            if (!/NothingToClaim|WrongPhase/.test(m)) log(`fees ${g.gameId}: ${m.slice(0, 70)}`);
+          }
+          continue;
+        }
         // A lobby only starts itself while the process that opened it is still
         // alive. Every deploy that lands between createGame and startGame
         // strands one forever, and they pile up: the arena was advertising 20
