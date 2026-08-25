@@ -349,6 +349,32 @@ createServer(async (req,res)=>{
     return send(res, r.status, r.body);
   }
 
+  // the card desk: its own record, kept beside the arena rather than inside it
+  if(p === "/api/tcg"){
+    try{
+      const [{ scorecard, all }, { mode }] = await Promise.all([
+        import("../tcg/store.mjs"), import("../tcg/client.mjs")]);
+      return send(res, 200, { ok:true, mode: mode(), scorecard: scorecard(),
+        picks: all().slice(0, 60),
+        spentUsdc: Number(process.env.TCG_SPENT_USDC ?? 0),
+        // The vault starts empty on purpose. It fills from fees earned AFTER the
+        // desk opened, not from what the token made before it existed, so the
+        // bar only ever measures what this actually caused. The split is stated
+        // rather than implied: most of it buys cards, the rest is ours.
+        ...(() => {
+          const since = Number(process.env.TCG_FEES_SINCE_USD ?? 0);
+          const bps = Number(process.env.TCG_VAULT_BPS ?? 7500);
+          return { feesSinceUsd: since, vaultBps: bps,
+                   fundUsd: +(since * bps / 10000).toFixed(2),
+                   fundGoalUsd: Number(process.env.TCG_FUND_GOAL_USD ?? 40) };
+        })() });
+    }catch(e){
+      // the desk is optional; the arena must not fall over because it is absent
+      return send(res, 200, { ok:false, mode:"none", scorecard:{picks:0}, picks:[],
+                              error:String(e.message).slice(0,120) });
+    }
+  }
+
   if(p === "/api/history"){
     return send(res, 200, { games: history.slice(0, 50), leaderboard: leaderboard(),
                             houseAgents: houseWallets() });
@@ -369,6 +395,7 @@ createServer(async (req,res)=>{
   if(p === "/arena") p = "/arena.html";
   if(p === "/play")  p = "/play.html";
   if(p === "/agents")p = "/agents.html";
+  if(p === "/tcg")   p = "/tcg.html";
   // contain path traversal: resolve inside ROOT only
   const file = join(ROOT, normalize(p).replace(/^(\.\.[/\\])+/, ""));
   if(!file.startsWith(ROOT) || !existsSync(file)){
