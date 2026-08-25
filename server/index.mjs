@@ -92,6 +92,9 @@ function decodePlayer(d){let o=8;const p={};
 // the record from then on.
 // $BUZZ is a mainnet token; the arena is on devnet. The two are unrelated on
 // chain and only meet here, on the page.
+// The two assets the arena stakes, each with its own treasury PDA.
+const TREASURY_MINTS = { BUZZ: "7yPdd9WxE3zwYQWK5a6bobwfDpQpzst6J7j5tVDPw1q8",
+                         ANSEM: "BxrMzNFPmftcNgn5v4PuUoXAiezZTN7edjXFRqJTusuA" };
 const BUZZ_MINT = process.env.BUZZ_MINT ?? "DoTMzBpSRPEwaycrSUzgSaDEs42PaiQVvYXAmLkcHr5X";
 const CLAW_URL = `https://clawpump.tech/tokens/${BUZZ_MINT}`;
 const TOKEN_TTL_MS = Number(process.env.TOKEN_TTL_MS ?? 30_000);
@@ -104,6 +107,23 @@ try { history = JSON.parse(readFileSync(HISTORY_FILE, "utf8")); } catch {}
 const recorded = new Set(history.map((h) => h.gameId));
 let historyDirty = false;
 
+/**
+ * Best available end time for a decided game, in ms.
+ *
+ * phase_ends_at is the deadline of the last phase the game ran, which is the
+ * closest thing on chain to an end time. It is sanity-bounded: a game cannot
+ * have ended before it was created (game_id is its creation time in ms) and
+ * cannot end in the future, so a nonsense value falls back to now.
+ */
+function endedAtOf(g){
+  const now = Date.now();
+  const created = Number(g.gameId);
+  const ended = Number(g.phaseEndsAt) * 1000;
+  if(!Number.isFinite(ended) || ended <= 0) return now;
+  if(ended < created || ended > now + 60_000) return now;
+  return ended;
+}
+
 function record(g, players){
   if(recorded.has(g.gameId)) return;
   const winning = (g.combs ?? []).find((c) => c.alive);
@@ -112,7 +132,11 @@ function record(g, players){
   recorded.add(g.gameId);
   history.unshift({
     gameId: g.gameId,
-    endedAt: Date.now(),
+    // When the game ended, not when we noticed. The poller records a game the
+    // first time it reads as decided, so Date.now() dates a six-hour-old game
+    // to this minute and a restart re-dates a whole backlog to the same one.
+    // phase_ends_at is the chain's own clock for the last phase that ran.
+    endedAt: endedAtOf(g),
     winningComb: winning.id,
     stakeMint: g.stakeMint,
     creator: winning.creator,
@@ -406,6 +430,36 @@ createServer(async (req,res)=>{
     return tokenCache.data
       ? send(res, 200, { ...tokenCache.data, asOf: tokenCache.at })
       : send(res, 503, { error: "no market data yet" });
+  }
+
+  // ---- treasury buckets -----------------------------------------------------
+  // What the house cut has accrued, per asset. Deliberately reported as accrued
+  // rather than spent: converting to SOL and buying back happen off chain and
+  // have not run, so any "spent" figure here would be invented.
+  if(p === "/api/treasury"){
+    const out = [];
+    for(const [symbol, mint] of Object.entries(TREASURY_MINTS)){
+      try{
+        const [pda] = PublicKey.findProgramAddressSync(
+          [Buffer.from("treasury"), new PublicKey(mint).toBuffer()], PID);
+        const acc = await connection.getAccountInfo(pda);
+        if(!acc || acc.data.length < 104) continue;
+        const d = acc.data;
+        let o = 8 + 32;                     // discriminator + authority
+        const house = u64(d,o); o += 8;
+        const jackpot = u64(d,o); o += 8;
+        o += 2;                             // vault_bump, bump
+        const toSol = u64(d,o); o += 8;
+        const burn = u64(d,o); o += 8;
+        const lbAccruing = u64(d,o); o += 8;
+        const lbClaimable = u64(d,o);
+        const n = (v) => Number(v) / 1e6;
+        out.push({ symbol, mint, house:n(house), jackpot:n(jackpot), toSol:n(toSol),
+                   burn:n(burn), lbAccruing:n(lbAccruing), lbClaimable:n(lbClaimable) });
+      }catch{}
+    }
+    return send(res, 200, { cluster: RPC.includes("devnet") ? "devnet" : "mainnet", accrued: out,
+      note: "Accrued on chain. Conversion to SOL and buy-and-burn happen off chain and have not run on devnet." });
   }
 
   if(p === "/api/history"){
