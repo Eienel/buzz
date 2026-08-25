@@ -456,9 +456,11 @@ createServer(async (req,res)=>{
         const toSol = u64(d,o); o += 8;
         const burn = u64(d,o); o += 8;
         const lbAccruing = u64(d,o); o += 8;
-        const lbClaimable = u64(d,o);
+        const lbClaimable = u64(d,o); o += 8;
+        o += 8 + 8;                       // pts_accruing, pts_claimable
+        const season = d[o] | d[o+1] << 8;
         const n = (v) => Number(v) / 1e6;
-        out.push({ symbol, mint, house:n(house), jackpot:n(jackpot), toSol:n(toSol),
+        out.push({ symbol, mint, season, house:n(house), jackpot:n(jackpot), toSol:n(toSol),
                    burn:n(burn), lbAccruing:n(lbAccruing), lbClaimable:n(lbClaimable) });
       }catch{}
     }

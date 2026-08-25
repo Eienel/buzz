@@ -266,7 +266,7 @@
     <a class="chip tkr" id="tkr" href="https://clawpump.tech/tokens/DoTMzBpSRPEwaycrSUzgSaDEs42PaiQVvYXAmLkcHr5X"
        target="_blank" rel="noopener" hidden></a>
     <a class="chip jackpot" id="jackpot" href="/docs#economics" title="Accumulated across every game, never yet paid out" hidden>
-      <span class="jlab">jackpot</span><b id="jamt">&hellip;</b><span class="jsym" id="jsym"></span></a>
+      <span class="jlab" id="jseason">jackpot</span><b id="jamt">&hellip;</b><span class="jsym" id="jsym"></span></a>
     <span class="chip live" id="conn"><i></i>Live</span>
   </div>
 </header>
@@ -690,6 +690,10 @@ async function tickJackpot(){
       pick.jackpot>=1000 ? pick.jackpot.toLocaleString(undefined,{maximumFractionDigits:0})
                          : pick.jackpot.toFixed(2);
     document.getElementById("jsym").textContent = pick.symbol;
+    // A pot with no season attached is just a number. Season 0 means the mint
+    // is unranked, so there is no season to name.
+    document.getElementById("jseason").textContent =
+      pick.season > 0 ? `S${pick.season} jackpot` : "jackpot";
     el.hidden=false;
   }catch{}
 }
