@@ -142,7 +142,7 @@ export async function decide(fog, self, opts = {}) {
       if (opts.onSkip) opts.onSkip("chose to save a call");
       return null;
     }
-    if (!opts.budget.spend()) {
+    if (opts.budget.left <= 0) {
       if (opts.onSkip) opts.onSkip("out of inference budget");
       return null;
     }
@@ -195,6 +195,12 @@ export async function decide(fog, self, opts = {}) {
     const m = text.match(/\{[\s\S]*\}/);
     if (!m) throw new Error("no json in reply");
     const plan = sanitise(JSON.parse(m[0]), fog, self);
+    // Charge for an answer, not for an attempt. Charging on the attempt meant a
+    // 24s round, where the think budget is 6.5s, could burn a whole game's
+    // allowance on calls that timed out and returned nothing: the agent paid
+    // for silence and then abstained for the rest of the game. That is what
+    // took the reasoning cohort from 0.171 skill per game to 0.067.
+    if (plan && opts.budget) opts.budget.spend();
     return plan && { ...plan, by: "model" };
   } catch (e) {
     if (opts.onSkip) opts.onSkip(String(e.message ?? e).slice(0, 90));

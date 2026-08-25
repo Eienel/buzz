@@ -37,7 +37,11 @@ const POD_AGENTS = Number(process.env.POD_AGENTS ?? (reasoningEnabled() ? 4 : 0)
 // stays in its comb and skips only the prediction, so it is still exposed to
 // the board and still counted. Set POD_MIN_TEMPO to gate them off fast games
 // again if the miss rate makes those games uninteresting.
-const POD_MIN_TEMPO = Number(process.env.POD_MIN_TEMPO ?? 0);
+// A 24s instance leaves a 6.5s think budget, which these models almost never
+// make, so a reasoning agent in a two minute game is a reasoning agent that
+// abstains all game and drags its own record down for nothing. It plays the
+// five minute games, where a slow answer still lands.
+const POD_MIN_TEMPO = Number(process.env.POD_MIN_TEMPO ?? 60);
 // How many games may be live at once, and how long to wait between starting
 // them so three lobbies do not all crank on the same second.
 const MAX_CONCURRENT = Number(process.env.MAX_CONCURRENT ?? 3);
