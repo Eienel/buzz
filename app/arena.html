@@ -219,32 +219,32 @@
     color:var(--dim)}
   .jackpot b{font-family:var(--mono);font-size:13px;color:var(--gold)}
   .jsym{font-family:var(--mono);font-size:10.5px;color:var(--honey)}
-  /* Betting closes at lock_instance, so most games on screen at any moment
-     cannot take a bet. A row of dead buttons trains people to ignore them, so
-     the control only appears where it does something. */
-  .betbar{display:flex;align-items:center;gap:12px;padding:10px 16px 0}
-  button.bet{font:inherit;font-size:13px;padding:7px 16px;border-radius:99px;cursor:pointer;
-    color:var(--ink);background:linear-gradient(180deg,var(--gold),var(--honey2));
-    border:0;font-weight:700;transition:transform .12s var(--ease),filter .15s}
-  button.bet:hover{filter:brightness(1.08)}
-  button.bet:active{transform:translate3d(0,1px,0)}
-  button.bet[aria-expanded="true"]{background:transparent;color:var(--honey);
-    border:1px solid var(--edge2)}
-  .betpanel{padding:12px 16px 4px;display:grid;gap:1px;background:var(--edge);
-    margin:12px 16px 0;border-radius:12px;overflow:hidden;padding:1px}
-  .brow{display:flex;align-items:center;gap:12px;padding:10px 14px;background:var(--card);
-    font-size:13px}
-  .brow .who{flex:1;min-width:0}
-  .brow b{color:var(--text)}
-  .brow .rec{font-family:var(--mono);font-size:11.5px;color:var(--dim);white-space:nowrap}
-  .brow .rec .hi{color:var(--alive)}
-  .brow .cmb{font-family:var(--mono);font-size:11px;color:var(--dimmer)}
-  .brow button{font:inherit;font-size:12px;padding:5px 13px;border-radius:99px;cursor:pointer;
-    background:transparent;border:1px solid var(--edge2);color:var(--text);
-    transition:border-color .15s,color .15s}
-  .brow button:hover{border-color:var(--honey);color:var(--honey)}
-  .brow.unranked .rec{color:var(--dimmer)}
-  @media(max-width:640px){ .brow{flex-wrap:wrap;gap:6px} .brow .who{flex:1 0 100%} }
+  /* Hangs off the right edge of a comb, because that is the thing being
+     backed. The comb needs a positioning context; both views already clip
+     their own overflow, so the menu escapes on a layer of its own. */
+  .backwrap{position:absolute;top:8px;right:8px;z-index:3}
+  .comb,.hex{position:relative}
+  .backb{font:inherit;font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;
+    padding:3px 9px;border-radius:99px;cursor:pointer;color:var(--dim);
+    background:rgba(10,8,6,.72);border:1px solid var(--edge2);
+    transition:color .15s,border-color .15s,transform .12s var(--ease)}
+  .backb:hover{color:var(--honey);border-color:var(--honey)}
+  .backb:active{transform:translate3d(0,1px,0)}
+  .backb[aria-expanded="true"]{color:var(--ink);background:var(--honey);border-color:var(--honey)}
+  .backmenu{position:absolute;top:26px;right:0;min-width:212px;z-index:40;
+    background:var(--card2);border:1px solid var(--edge2);border-radius:12px;
+    box-shadow:0 18px 44px rgba(0,0,0,.6);overflow:hidden;
+    animation:rise .22s var(--ease) both}
+  .bmh{padding:8px 12px;font-family:var(--mono);font-size:10.5px;color:var(--dimmer);
+    border-bottom:1px solid var(--edge);text-transform:uppercase;letter-spacing:.08em}
+  .bopt{display:flex;flex-direction:column;gap:2px;width:100%;text-align:left;
+    padding:9px 12px;background:transparent;border:0;cursor:pointer;font:inherit;
+    border-bottom:1px solid var(--edge);transition:background .15s}
+  .bopt:last-child{border-bottom:0}
+  .bopt:hover{background:rgba(255,179,0,.07)}
+  .bopt .bn{color:var(--text);font-size:13px;font-weight:600}
+  .bopt .brec{font-family:var(--mono);font-size:11px;color:var(--dim)}
+  .bopt[disabled]{opacity:.55;cursor:default}
   .loadmore{display:block;width:100%;margin-top:12px;padding:10px;border-radius:10px;
     background:transparent;border:1px solid var(--edge);color:var(--text);font:inherit;
     font-size:13.5px;cursor:pointer;transition:border-color .15s,background .15s}
@@ -420,7 +420,40 @@ const mmss=(s)=>s<=0?"cranking":s<60?s+"s":`${Math.floor(s/60)}:${String(s%60).p
 // anyone who has already chosen keeps their choice.
 // Bets close at lock_instance, mirroring the program rather than guessing: a
 // button offered after that is a button that fails.
-const betsOpen = (g) => g.status === 1 && g.instance <= g.lockInstance;
+// Backing closes when the board gets small. Tied to something a spectator can
+// see rather than to lock_instance, which is an instruction detail: with three
+// combs left it is a coin flip dressed as a prediction, and the odds a
+// parimutuel would offer stop meaning anything.
+const MIN_COMBS_TO_BACK = 4;
+const betsOpen = (g) =>
+  g.status === 0 || (g.status === 1 && (g.aliveCircles ?? 0) >= MIN_COMBS_TO_BACK);
+
+/** The agents sitting in one comb, best skill-per-game first. */
+const agentsIn = (g, combId) => (g.agents || []).filter((a) => a.comb === combId);
+
+/**
+ * The control that hangs off a comb. Nothing when the book is shut or the comb
+ * is empty: an affordance that cannot be used is worse than none.
+ */
+function backBtn(g, cb){
+  if(!betsOpen(g) || !cb.alive) return "";
+  const as = agentsIn(g, cb.id);
+  if(!as.length) return "";
+  const rows = as.map((a) => {
+    const ranked = a.ranked > 0;
+    return `<button class="bopt" data-back="${a.owner}">
+      <span class="bn">${a.name || short(a.owner)}</span>
+      <span class="brec">${ranked ? `${Math.round(a.winRate*100)}% &middot; ${a.ppg.toFixed(2)}/g` : "no record"}</span>
+    </button>`;
+  }).join("");
+  return `<div class="backwrap">
+    <button class="backb" data-comb="${g.gameId}-${cb.id}" title="Back an agent in this comb">back</button>
+    <div class="backmenu" id="bm-${g.gameId}-${cb.id}" hidden>
+      <div class="bmh">comb ${cb.id} &middot; ${as.length} agent${as.length===1?"":"s"}</div>
+      ${rows}
+    </div>
+  </div>`;
+}
 
 /** The field, best record first, so backing something is an informed act. */
 function agentRows(g){
@@ -497,7 +530,7 @@ function hive(g,totalStake){
         <div class="hid">comb ${cb.id}</div>
         ${dots(cb.members)}
         <div class="hband">${doomed?"dying":lbl}</div>
-        <div class="hamt">${sol(cb.stake)} ${sym(g.stakeMint)}</div></div></div>`;
+        <div class="hamt">${sol(cb.stake)} ${sym(g.stakeMint)}</div></div>${backBtn(g,cb)}</div>`;
     }).join("")}</div>`).join("")}</div>`;
 }
 
@@ -565,7 +598,7 @@ function render(s){
         <div class="cid">comb ${cb.id}</div>
         <div class="band">${doomed?"dying":lbl}</div>
         ${honeyFill(Number(cb.stake)/totalStake,false)}
-        <div class="amt">${sol(cb.stake)} ${sym(g.stakeMint)}</div></div>`;
+        <div class="amt">${sol(cb.stake)} ${sym(g.stakeMint)}</div>${backBtn(g,cb)}</div>`;
     }).join("");
     const feed=(feeds.get(g.gameId)||[]).map(e=>
       `<li><time>${e.t}</time><span class="${e.cls}">${e.text}</span></li>`).join("")
@@ -588,11 +621,7 @@ function render(s){
         </span>
       </div>
       <div class="bar"><i style="width:${pct}%" data-ends="${g.phaseEndsAt}" data-span="${span}"></i></div>
-      ${betsOpen(g) ? `<div class="betbar">
-        <button class="bet" data-game="${g.gameId}">Back an agent</button>
-        <span class="rank">closes after round ${g.lockInstance}</span>
-      </div>
-      <div class="betpanel" id="bp-${g.gameId}" hidden>${agentRows(g)}</div>` : ""}
+
       ${VIEW==="hive"?combs:`<div class="combs">${combs}</div>`}
       <div class="side"><h4>Feed</h4><ul class="feed">${feed}</ul></div>
     </section>`;
@@ -697,23 +726,29 @@ async function tickHistory(){
   }catch{ document.getElementById("hist").innerHTML=""; }
 }
 document.addEventListener("click",(e)=>{
-  const t=e.target.closest("button.bet");
+  // One menu at a time, and a click anywhere else shuts it.
+  const shutMenus = (except) => {
+    for(const m of document.querySelectorAll(".backmenu")) if(m!==except) m.hidden=true;
+    for(const b of document.querySelectorAll(".backb")) b.setAttribute("aria-expanded","false");
+  };
+  const t=e.target.closest(".backb");
   if(t){
-    const panel=document.getElementById("bp-"+t.dataset.game);
-    const open=panel.hidden;
-    panel.hidden=!open;
+    const menu=document.getElementById("bm-"+t.dataset.comb);
+    const open=menu.hidden;
+    shutMenus(open?menu:null);
+    menu.hidden=!open;
     t.setAttribute("aria-expanded",String(open));
-    t.textContent=open?"Hide the field":"Back an agent";
     return;
   }
-  const back=e.target.closest("button[data-back]");
+  const back=e.target.closest(".bopt");
   if(back){
-    // The market instruction is written and compiles but is not deployed, so
-    // saying so beats a button that silently does nothing.
-    back.textContent="soon";
+    // The market instruction compiles but is not deployed, so saying so beats a
+    // control that silently does nothing.
+    back.querySelector(".brec").textContent="market not deployed yet";
     back.disabled=true;
     return;
   }
+  shutMenus(null);
   const b=e.target.closest("#more"); if(!b) return;
   histLimit += 24; b.textContent="Loading…"; b.disabled=true; tickHistory();
 });
