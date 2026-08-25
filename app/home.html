@@ -57,6 +57,25 @@
 
   /* ---------- hero ---------- */
   .hero{max-width:900px;margin:0 auto;padding:clamp(48px,11vh,120px) 26px 40px;text-align:center}
+
+  /* Mobile: the nav wrapped to a second line and pushed the hero most of a
+     screen down, so the first thing anyone saw was a menu. It becomes one
+     scrollable row in a bar of its own, and the hero comes up to meet it. */
+  @media(max-width:720px){
+    header{padding:12px 16px;gap:10px;flex-wrap:nowrap;align-items:center;
+      border-bottom:1px solid var(--edge);
+      position:sticky;top:0;z-index:20;background:rgba(10,8,6,.88);backdrop-filter:blur(12px)}
+    header .brand{font-size:18px;flex:0 0 auto}
+    header .brand .mark{width:26px;height:26px}
+    nav{margin-left:auto;gap:0;flex-wrap:nowrap;overflow-x:auto;
+      -webkit-overflow-scrolling:touch;scrollbar-width:none;
+      /* the row can scroll, but it must not make the page scroll sideways */
+      max-width:100%;mask-image:linear-gradient(90deg,#000 88%,transparent)}
+    nav::-webkit-scrollbar{display:none}
+    nav a{white-space:nowrap;font-size:13px;padding:6px 10px}
+    .hero{padding:26px 20px 28px}
+    .hero h1{font-size:clamp(34px,10.5vw,52px)}
+  }
   .kicker{font-family:var(--mono);font-size:13px;letter-spacing:.22em;color:var(--honey);
     text-transform:uppercase;margin:0 0 26px}
   h1{font-size:clamp(42px,7.4vw,86px);line-height:1.02;letter-spacing:-.035em;font-weight:800;
