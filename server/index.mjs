@@ -356,6 +356,9 @@ const readBody = (req) => new Promise((resolve) => {
 const THOUGHTS_MAX = Number(process.env.THOUGHTS_MAX ?? 400);
 const thoughts = [];
 const txCache = new Map();
+// Enough to answer "is the swarm reaching us at all" from outside, which
+// otherwise takes a trip to the host's log viewer every single time.
+const intake = { posts: 0, accepted: 0, rejected: 0, lastRejectAt: null, lastReject: null };
 // Derived from the seed both processes already share, so a swarm running as
 // its own Railway service authenticates with nothing configured. See the note
 // in agents/feed.mjs: this is worth exactly what SWARM_SEED is worth, which is
@@ -396,8 +399,13 @@ const send = (res, status, body) => {
 };
 
 createServer(async (req,res)=>{
-  const url = new URL(req.url, "http://x");
-  let p = decodeURIComponent(url.pathname);
+  // Leading slashes collapsed before parsing, not after: new URL("//api/x")
+  // reads "//" as protocol-relative and hands back host "api" with path "/x",
+  // so the doubled slash never reaches pathname to be cleaned up there. A
+  // FEED_URL with a trailing slash asks for exactly that, and the 404 reads
+  // like a missing endpoint rather than a spare character.
+  const url = new URL(req.url.replace(/^\/{2,}/, "/"), "http://x");
+  let p = decodeURIComponent(url.pathname).replace(/\/{2,}/g, "/");
 
   // ---- agent surface -------------------------------------------------------
   if(p === "/api/agent/lobbies"){
@@ -562,9 +570,19 @@ createServer(async (req,res)=>{
   // memory and bounded: this is a window on what the arena is doing right now,
   // not a second history file, and the on-chain record is already the archive.
   if(p === "/api/agent/thought"){
-    if(!feedAuthed(req)) return send(res, 401, { error: "not the swarm" });
+    intake.posts++;
+    if(!feedAuthed(req)){
+      intake.rejected++; intake.lastRejectAt = Date.now();
+      intake.lastReject = req.headers["x-feed-secret"] ? "secret did not match" : "no secret sent";
+      return send(res, 401, { error: "not the swarm" });
+    }
     const b = await readBody(req);
-    if(b.agent == null || b.game == null) return send(res, 400, { error: "agent and game are required" });
+    if(b.agent == null || b.game == null){
+      intake.rejected++; intake.lastRejectAt = Date.now();
+      intake.lastReject = "agent and game are required";
+      return send(res, 400, { error: "agent and game are required" });
+    }
+    intake.accepted++;
     thoughts.push({ ...b, at: Date.now(), hit: null });
     if(thoughts.length > THOUGHTS_MAX) thoughts.splice(0, thoughts.length - THOUGHTS_MAX);
     return send(res, 202, { ok: true });
@@ -652,6 +670,7 @@ createServer(async (req,res)=>{
       // Always the unfiltered roster, so filtering to one agent cannot hide
       // the buttons that get you back to the others.
       agents: [...new Set(thoughts.map((t) => t.agent))].sort(),
+      intake,
       cluster: CLUSTER,
     });
   }
