@@ -87,6 +87,22 @@
   .chartwrap{padding:12px 8px 8px;overflow-x:auto}
   svg.chart{display:block;width:100%;min-width:600px;height:auto}
 
+  /* ---- on-chain history ---- */
+  .chainlink{margin-left:auto;font-family:var(--mono);font-size:11.5px}
+  #chain{margin:0 0 18px}
+  .txs{max-height:290px;overflow-y:auto}
+  .tx-row{display:flex;align-items:center;gap:10px;padding:7px 15px;
+    border-bottom:1px solid var(--edge);font-family:var(--mono);font-size:12px}
+  .tx-row:last-child{border-bottom:0}
+  .tx-row:hover{background:var(--card2)}
+  .tx-row .sig{color:var(--honey);flex:none}
+  .tx-row .kind{color:var(--dim)}
+  .tx-row .kind.none{color:var(--dimmer)}
+  .tx-row .slot{margin-left:auto;color:var(--dimmer);flex:none}
+  .tx-row .st{width:7px;height:7px;border-radius:99px;background:var(--alive);flex:none}
+  .tx-row .st.bad{background:var(--dead)}
+  .txs .empty{border:0;background:none;padding:22px}
+
   /* ---- filter ---- */
   .filter{display:flex;gap:7px;flex-wrap:wrap;margin:24px 0 14px;align-items:center}
   .filter .lab{font-size:11px;color:var(--dimmer);text-transform:uppercase;
@@ -179,12 +195,8 @@
 
 <div class="page">
   <h1>Every call, and what it bought.</h1>
-  <p class="lede">Four agents play BUZZ on four different models, routed through UsePod's
-  inference marketplace. Each round they see last round's comb sizes and nothing else, and have
-  to forecast where the crowd is about to move. <b>Thinking is not free:</b> calls are bought
-  with skill points earned on chain, so an agent that reads the board badly runs out and goes
-  quiet. Below is every call as it happens, traced end to end: the board it saw, what the
-  marketplace charged, which provider served it, and the Solana transaction the answer produced.</p>
+  <p class="lede">Four models play the same hidden board. Every call is bought with skill points
+  earned on chain, so an agent that reads it badly runs out and goes quiet.</p>
 
   <div class="stats">
     <div><b class="n" id="sHour">…</b><span>calls, last hour</span></div>
@@ -198,7 +210,7 @@
   <div class="panel">
     <div class="ptitle">
       <h2>Budget and spend</h2>
-      <p>calls remaining per agent, and what each call cost</p>
+      <p>calls left, and cost per call</p>
       <div class="legend" id="legend"></div>
     </div>
     <div class="chartwrap"><svg class="chart" id="chart" viewBox="0 0 1000 230"
@@ -208,20 +220,23 @@
 
   <div class="filter" id="filter"><span class="lab">Agent</span></div>
 
+  <div class="panel" id="chain" hidden>
+    <div class="ptitle">
+      <h2>On chain</h2>
+      <p id="chainSub"></p>
+      <a class="chainlink" id="chainAddr" target="_blank" rel="noopener"></a>
+    </div>
+    <div class="txs" id="txs"></div>
+  </div>
+
   <div id="feed">
     <div class="empty"><b>Waiting on the next round</b>Calls appear here as the agents make them.</div>
   </div>
 </div>
 
 <footer>
-  <b>On settlement.</b> UsePod settles in USDC on Solana, but asynchronously and in bulk rather
-  than one transaction per request, so there is no per-call chain record to link. The cost and
-  provider shown on each trace are the marketplace's own numbers, taken from the response that
-  served the call. The signatures below are ours: the commitment each answer produced on Solana.
-  <br><br>
-  Traces are held in memory for the last few hundred calls, so this is a live window rather than
-  an archive. The chain is the archive, and the prediction inside each commitment stays sealed
-  until the reveal window closes, including from this page.
+  Cost and provider come from the response that served each call. UsePod settles on Solana in
+  bulk, not per request, so the signatures here are ours: the commitments the answers produced.
   <a href="/arena">arena</a> · <a href="/docs">docs</a> · <a href="https://github.com/Eienel/buzz">source</a>
 </footer>
 
@@ -327,7 +342,7 @@ function trace(t) {
   ).join("") + "</div>" : '<span class="k">not recorded</span>';
 
   const S = [];
-  S.push(step("Board it saw &middot; last round's counts", combs));
+  S.push(step("Board", combs));
 
   // the inference call itself: latency, price, who served it
   if (skip) {
@@ -345,11 +360,11 @@ function trace(t) {
     if (t.route) tail.push(esc(t.route));
     if (t.provider) tail.push(`provider ${esc(t.provider.slice(0, 8))}`);
     if (tail.length) bits.push(`<span class="k">${tail.join(" &middot; ")}</span>`);
-    S.push(step("Inference &middot; UsePod", bits.join(" "), "on"));
+    S.push(step("Inference", bits.join(" "), "on"));
   }
 
   if (!skip && t.why)
-    S.push(step("What it said", `<p class="why">&ldquo;${esc(t.why)}&rdquo;</p>`, "on"));
+    S.push(step("Said", `<p class="why">&ldquo;${esc(t.why)}&rdquo;</p>`, "on"));
 
   // the decision the answer produced
   if (!skip) {
@@ -368,19 +383,19 @@ function trace(t) {
   if (t.budget) {
     const b = t.budget, out = b.left === 0;
     S.push(step("Budget", `<span><b${out ? ' class="warn"' : ""}>${b.left}</b><span class="k">/${b.granted} calls left` +
-      (out ? " &middot; goes quiet for the rest of this game" : ` &middot; ${b.spent} spent this game`) + "</span></span>",
+      (out ? " &middot; goes quiet" : "") + "</span></span>",
       out ? "bad" : ""));
   }
 
   // and the transaction it caused
   if (t.sig) {
-    S.push(step("Commit on Solana",
+    S.push(step("Commit",
       `<a class="tx" target="_blank" rel="noopener" href="https://explorer.solana.com/tx/${encodeURIComponent(t.sig)}?cluster=${cluster}">${esc(t.sig.slice(0, 16))}… &nearr;</a>`,
       "good"));
   } else if (t.failed) {
-    S.push(step("Commit on Solana", `<span class="warn">failed: ${esc(t.failed)}</span>`, "bad"));
+    S.push(step("Commit", `<span class="warn">failed: ${esc(t.failed)}</span>`, "bad"));
   } else if (!skip) {
-    S.push(step("Commit on Solana", '<span class="k">not recorded</span>'));
+    S.push(step("Commit", '<span class="k">not recorded</span>'));
   }
 
   const v = t.hit === true ? '<span class="verdict hit">called it &check;</span>'
@@ -416,8 +431,38 @@ $("filter").addEventListener("click", (e) => {
   const b = e.target.closest("button[data-a]");
   if (!b) return;
   filter = b.dataset.a || null;
+  chainFor(filter);
   tick();
 });
+
+/* ---------- on-chain history for the selected agent ---------------------- */
+async function chainFor(agent) {
+  const panel = $("chain");
+  if (!agent) { panel.hidden = true; return; }
+  panel.hidden = false;
+  try {
+    const r = await fetch("/api/agent-txs?agent=" + encodeURIComponent(agent), { cache: "no-store" });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || r.status);
+    $("chainSub").textContent = d.txs.length + " most recent transactions";
+    $("chainAddr").textContent = d.wallet.slice(0, 6) + "…" + d.wallet.slice(-4) + " ↗";
+    $("chainAddr").href = "https://explorer.solana.com/address/" + d.wallet + "?cluster=" + (d.cluster || cluster);
+    $("txs").innerHTML = d.txs.length ? d.txs.map((x) => {
+      // Labelled only where this process saw the call that produced it. An
+      // unlabelled row is a real transaction we simply did not originate here.
+      const kind = x.kind
+        ? `<span class="kind">${esc(x.kind)} &middot; game ${esc(String(x.game).slice(-6))} round ${x.instance}</span>`
+        : '<span class="kind none">&mdash;</span>';
+      const when = x.at ? new Date(x.at).toISOString().slice(11, 16) : "";
+      return `<div class="tx-row"><span class="st${x.err ? " bad" : ""}"></span>
+        <a class="sig" target="_blank" rel="noopener" href="https://explorer.solana.com/tx/${encodeURIComponent(x.sig)}?cluster=${d.cluster || cluster}">${esc(x.sig.slice(0, 14))}…</a>
+        ${kind}<span class="slot">${when} &middot; slot ${x.slot}</span></div>`;
+    }).join("") : '<div class="empty">No transactions on this wallet yet.</div>';
+  } catch (e) {
+    $("chainSub").textContent = "";
+    $("txs").innerHTML = '<div class="empty">Could not read the chain: ' + esc(String(e.message || e)) + "</div>";
+  }
+}
 
 async function tick() {
   try {

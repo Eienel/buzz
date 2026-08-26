@@ -352,6 +352,7 @@ const readBody = (req) => new Promise((resolve) => {
 // which is only interesting live.
 const THOUGHTS_MAX = Number(process.env.THOUGHTS_MAX ?? 400);
 const thoughts = [];
+const txCache = new Map();
 const FEED_SECRET = process.env.FEED_SECRET ?? "";
 // Named for the explorer links, which need to know which cluster to open.
 const CLUSTER = /mainnet/.test(RPC) ? "mainnet-beta" : /testnet/.test(RPC) ? "testnet" : "devnet";
@@ -560,6 +561,34 @@ createServer(async (req,res)=>{
       if(t.game === String(gameId) && t.instance === instance) t.doomed = doomed;
     }
     return send(res, 202, { ok: true });
+  }
+  // Every transaction an agent has ever sent, read straight off the chain.
+  // The feed's buffer only knows the calls this process has seen; the wallet
+  // outlives every restart, so this is the durable answer to what an agent has
+  // actually done. Cached because getSignaturesForAddress is not free and the
+  // page polls.
+  if(p === "/api/agent-txs"){
+    const name = url.searchParams.get("agent");
+    const known = houseWallets().find((h) => h.name === name);
+    if(!known) return send(res, 404, { error: "unknown agent" });
+    const c = txCache.get(name);
+    if(c && Date.now() - c.at < 20_000) return send(res, 200, c.body);
+    try{
+      const sigs = await connection.getSignaturesForAddress(new PublicKey(known.wallet), { limit: 25 });
+      // Naming an instruction would cost a getParsedTransaction per signature.
+      // The buffer already knows what it asked for, so anything it recognises
+      // gets a label for free and the rest stay honestly unlabelled.
+      const seen = new Map(thoughts.filter((t) => t.sig).map((t) => [t.sig, t]));
+      const body = { agent: name, wallet: known.wallet, cluster: CLUSTER,
+        txs: sigs.map((x) => {
+          const t = seen.get(x.signature);
+          return { sig: x.signature, slot: x.slot, err: !!x.err,
+            at: x.blockTime ? x.blockTime * 1000 : null,
+            kind: t ? "commit" : null, game: t?.game ?? null, instance: t?.instance ?? null };
+        }) };
+      txCache.set(name, { at: Date.now(), body });
+      return send(res, 200, body);
+    }catch(e){ return send(res, 502, { error: String(e.message ?? e).slice(0, 140) }); }
   }
   if(p === "/api/thoughts"){
     const want = Number(url.searchParams.get("limit"));
