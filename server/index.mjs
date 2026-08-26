@@ -763,8 +763,15 @@ createServer(async (req,res)=>{
     // Filtering happens here rather than in the page so a narrowed view gets a
     // full window of that agent's calls instead of whatever survived a slice
     // taken across all four.
+    // Narrow by wallet or by model. Nine pod wallets run only three models
+    // (each slot runs the same three), so a per-wallet view splits one model's
+    // record three ways and reads as nine thin, noisy lines. Grouping by model
+    // is the comparison anyone actually wants: which model plays this better.
     const who = url.searchParams.get("agent");
-    const all = who ? thoughts.filter((t) => t.agent === who) : thoughts;
+    const whichModel = url.searchParams.get("model");
+    const all = who ? thoughts.filter((t) => t.agent === who)
+              : whichModel ? thoughts.filter((t) => t.model === whichModel)
+              : thoughts;
     const graded = all.filter((t) => t.hit !== null);
     const hits = graded.filter((t) => t.hit).length;
     const hour = Date.now() - 3600_000;
@@ -776,7 +783,7 @@ createServer(async (req,res)=>{
       // The chart reads this: oldest first, one point per call, trimmed to what
       // a sparkline can actually resolve.
       series: all.slice(-160).map((t) => ({
-        at: t.at, agent: t.agent, instance: t.instance, game: t.game,
+        at: t.at, agent: t.agent, model: t.model ?? null, instance: t.instance, game: t.game,
         left: t.budget?.left ?? null, granted: t.budget?.granted ?? null,
         cost: t.cost ?? 0, ms: t.ms ?? null, hit: t.hit, skipped: !!t.skipped,
       })),

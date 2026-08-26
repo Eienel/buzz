@@ -88,10 +88,18 @@ const ASSETS = Object.entries(mints).map(([name, m]) => ({
   tokenProgram: new PublicKey(m.tokenProgram),
 }));
 const GAME_INTERVAL = Number(process.env.GAME_INTERVAL_SECONDS ?? 180) * 1000; // idle between games
-// Per-agent funding: stake + fixed headroom for Circle/Player PDA rent
-// (~0.0036), tx fees, and the agent wallet's own rent-exempt minimum (~0.0009).
-// A multiplier breaks at small stakes, the headroom cost is constant.
-const FUND = 8_000_000; // SOL for fees and PDA rent only; the stake is a token
+// Per-agent funding: fixed headroom for PDA rent and tx fees. The stake is a
+// token, not SOL, so this scales with account sizes rather than with the stake.
+//
+// The old 0.008 was measured against Circle plus Player and nothing else, and
+// it was short. Rent-exempt is (128 + size) * 6960 * 2 lamports: Player is 188
+// bytes (0.0044), Circle 0.0025, the agent wallet's own minimum 0.0009. That
+// leaves nothing for AgentStats (67 bytes, 0.0027), which claim_skill and
+// claim_winnings create with `payer = actor` on an agent's FIRST claim. So a
+// wallet that had never claimed could never afford to start, and the reasoning
+// agents, which are the newest wallets, never got a stats account at all.
+// Sweeping returns whatever is unspent, so the extra is float rather than cost.
+const FUND = 16_000_000; // 0.016 SOL: fees, PDA rent, and room for a first claim
 
 const payer = loadKeypair(process.env.PAYER, `${process.env.HOME}/.config/solana/id.json`);
 const connection = new Connection(RPC, "confirmed");
@@ -180,6 +188,13 @@ async function sweepBack(agents) {
 }
 
 const fetchGame = (g) => program.account.game.fetch(g);
+// Settlement reads nine player accounts in a burst, which is when a public RPC
+// starts answering 429. One retry turns a transient refusal into a delay
+// rather than a game that never pays out.
+const fetchPlayer = async (p) => {
+  try { return await program.account.player.fetch(p); }
+  catch { await sleep(1200); return program.account.player.fetch(p); }
+};
 const waitPhaseEnd = async (gamePda, margin = 1500) => {
   const g = await fetchGame(gamePda);
   const ms = g.phaseEndsAt.toNumber() * 1000 - Date.now() + margin;
@@ -575,8 +590,17 @@ async function playGame(gameNo) {
     }
     for (const a of agents) {
       const P = playerPda(a.kp.publicKey);
-      const st = await program.account.player.fetch(P);
       try {
+        // Inside the try, deliberately. This fetch used to sit above it, so a
+        // single RPC hiccup on one agent threw out of the whole loop and NOBODY
+        // settled that game: no claim_winnings, no claim_skill, no cash_out.
+        // Settlement is the burstiest moment in a game (nine agents, three
+        // calls each, back to back), which is exactly when a public RPC answers
+        // 429, so this was not rare. It is why the reasoning agents had no
+        // AgentStats account at all after hundreds of games: their skill points
+        // were scored on chain and then never claimed, so every pod walked into
+        // every game on the base allowance.
+        const st = await fetchPlayer(P);
         if (st.status.active && st.currentCircle === winner)
           await program.methods.claimWinnings().accountsPartial({ game: gamePda, vault: vaultPda, winningCircle: circlePda(winner), player: P, owner: a.kp.publicKey, actor: a.kp.publicKey,
             stats: statsPda(a.kp.publicKey), treasury: treasuryPda,

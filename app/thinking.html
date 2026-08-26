@@ -306,6 +306,14 @@ const $ = (id) => document.getElementById(id);
 const PALETTE = ["#ffb300", "#6fb0ff", "#5fd68a", "#c98bff", "#ff8f6f", "#8be3d5",
                  "#e0c341", "#4f8fd6", "#3fae74", "#a86fd6", "#d97a5c", "#63b8ad"];
 let cluster = "devnet", filter = null, colours = new Map(), maxMs = 1;
+// Nine pod wallets run only three models: each of the three concurrent slots
+// runs the same roster. Grouping by wallet therefore splits one model's record
+// three ways and draws nine thin lines that say nothing, so the default view
+// groups by model, which is the comparison worth making. Wallet grouping stays
+// for reading one agent's chain history, which is per wallet by definition.
+let groupBy = "model";
+// short name (what is shown) -> full id (what the API filters on)
+const modelIds = new Map();
 
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -322,6 +330,8 @@ const usd = (v) => v == null ? "…"
   : v >= 0.01 ? "$" + v.toFixed(4)
   : (v * 1e6).toFixed(v * 1e6 >= 100 ? 0 : 1) + "µ$";
 const colourOf = (a) => colours.get(a) || "var(--dim)";
+/** Which series a call belongs to under the current grouping. */
+const keyOf = (p) => groupBy === "model" ? (shortModel(p.model) || "unnamed") : p.agent;
 // The chart does arithmetic on feed values, so a non-numeric one does not
 // render wrong, it renders NaN into every coordinate and empties the panel.
 // Escaping fixed that for the traces; the chart needs the numeric equivalent.
@@ -355,14 +365,15 @@ function chart(series) {
   // one line per agent, in the order its own calls happened. A budget refills
   // between games, so these step down and jump back up: that sawtooth is the
   // agent spending a game's allowance and being granted the next one.
-  const byAgent = new Map();
+  const byKey = new Map();
   series.forEach((p, i) => {
     const left = num(p.left);
     if (left == null) return;
-    if (!byAgent.has(p.agent)) byAgent.set(p.agent, []);
-    byAgent.get(p.agent).push({ i, p, left });
+    const k = keyOf(p);
+    if (!byKey.has(k)) byKey.set(k, []);
+    byKey.get(k).push({ i, p, left });
   });
-  for (const [agent, pts] of byAgent) {
+  for (const [agent, pts] of byKey) {
     const c = colourOf(agent);
     const dim = filter && filter !== agent;
     const d = pts.map((q, k) => (k ? "L" : "M") + x(q.i).toFixed(1) + " " + y(q.left).toFixed(1)).join(" ");
@@ -384,11 +395,11 @@ function chart(series) {
   series.forEach((p, i) => {
     const cost = num(p.cost);
     if (!cost) return;
-    const dim = filter && filter !== p.agent;
+    const dim = filter && filter !== keyOf(p);
     const h = Math.max(1.5, (cost / maxCost) * BAR_H);
     parts.push(`<rect x="${(x(i) - bw / 2).toFixed(1)}" y="${(BAR_Y + BAR_H - h).toFixed(1)}"
-      width="${bw.toFixed(1)}" height="${h.toFixed(1)}" rx="1.2" fill="${colourOf(p.agent)}"
-      opacity="${dim ? .15 : .68}"><title>${esc(p.agent)} · round ${esc(p.instance)} · ${esc(usd(cost))}</title></rect>`);
+      width="${bw.toFixed(1)}" height="${h.toFixed(1)}" rx="1.2" fill="${colourOf(keyOf(p))}"
+      opacity="${dim ? .15 : .68}"><title>${esc(keyOf(p))} · round ${esc(p.instance)} · ${esc(usd(cost))}</title></rect>`);
   });
   parts.push(`<text x="${PADL}" y="${H - 4}" fill="#6a5d4b" font-size="10" font-family="ui-monospace,monospace">oldest</text>`);
   parts.push(`<text x="${W - PADR}" y="${H - 4}" fill="#6a5d4b" font-size="10" text-anchor="end" font-family="ui-monospace,monospace">newest</text>`);
@@ -484,11 +495,15 @@ function trace(t) {
 }
 
 /* ---------- wiring ------------------------------------------------------- */
-function drawFilter(agents) {
+function drawFilter(keys) {
   const f = $("filter");
-  const want = ['<span class="lab">Agent</span>',
+  const want = [
+    `<span class="lab">By</span>`,
+    `<button data-g="model" aria-pressed="${groupBy === "model"}">model</button>`,
+    `<button data-g="agent" aria-pressed="${groupBy === "agent"}">wallet</button>`,
+    `<span class="lab">${groupBy === "model" ? "Model" : "Agent"}</span>`,
     `<button data-a="" aria-pressed="${!filter}">all</button>`]
-    .concat(agents.map((a) =>
+    .concat(keys.map((a) =>
       `<button data-a="${esc(a)}" aria-pressed="${filter === a}" style="${filter === a ? "" : "color:" + colourOf(a)}">${esc(a)}</button>`))
     .join("");
   // Rewriting the row on every poll would drop a click landing mid-tick.
@@ -496,10 +511,23 @@ function drawFilter(agents) {
 }
 
 $("filter").addEventListener("click", (e) => {
+  const g = e.target.closest("button[data-g]");
+  if (g) {
+    if (g.dataset.g === groupBy) return;
+    groupBy = g.dataset.g;
+    // The selection means something different under the other grouping, so it
+    // does not survive the switch. Carrying it over silently showed an empty
+    // feed and looked like the arena had stopped.
+    filter = null;
+    chainFor(null);
+    tick();
+    return;
+  }
   const b = e.target.closest("button[data-a]");
   if (!b) return;
   filter = b.dataset.a || null;
-  chainFor(filter);
+  // Chain history is per wallet: a model does not have one.
+  chainFor(groupBy === "agent" ? filter : null);
   tick();
 });
 
@@ -534,7 +562,10 @@ async function chainFor(agent) {
 
 async function tick() {
   try {
-    const q = "/api/thoughts?limit=40" + (filter ? "&agent=" + encodeURIComponent(filter) : "");
+    const param = groupBy === "model"
+      ? "&model=" + encodeURIComponent(modelIds.get(filter) ?? filter ?? "")
+      : "&agent=" + encodeURIComponent(filter ?? "");
+    const q = "/api/thoughts?limit=40" + (filter ? param : "");
     const r = await fetch(q, { cache: "no-store" });
     if (!r.ok) throw new Error(r.status);
     const d = await r.json();
@@ -542,9 +573,15 @@ async function tick() {
     $("conn").classList.remove("down");
     $("conn").lastChild.nodeValue = "Live";
 
-    // Colours are assigned once from the unfiltered roster, so an agent keeps
-    // the same colour whether or not it is the one being filtered to.
-    (d.agents || []).forEach((a, i) => { if (!colours.has(a)) colours.set(a, PALETTE[i % PALETTE.length]); });
+    // Colours are assigned once from the unfiltered roster, so a series keeps
+    // the same colour whether or not it is the one being filtered to. Models
+    // and wallets share one map: the names cannot collide, and a model keeps
+    // its colour across a switch to wallet grouping and back.
+    for (const m of d.stats?.models || []) modelIds.set(shortModel(m), m);
+    const roster = groupBy === "model"
+      ? [...modelIds.keys()].sort()
+      : (d.agents || []);
+    roster.forEach((a) => { if (!colours.has(a)) colours.set(a, PALETTE[colours.size % PALETTE.length]); });
 
     const s = d.stats || {};
     // Every tile is scoped to the visible window. It used to say "last hour"
@@ -563,9 +600,9 @@ async function tick() {
     // as the arena's total.
     $("scope").textContent = filter ? "Live inference · " + filter : "Live inference";
 
-    $("legend").innerHTML = (d.agents || []).map((a) =>
+    $("legend").innerHTML = roster.map((a) =>
       `<span><i style="background:${colourOf(a)}"></i>${esc(a)}</span>`).join("");
-    drawFilter(d.agents || []);
+    drawFilter(roster);
 
     const calls = d.calls || [];
     maxMs = Math.max(1, ...calls.map((t) => t.ms || 0));
