@@ -261,6 +261,33 @@
   .bopt .bn{color:var(--text);font-size:13px;font-weight:600}
   .bopt .brec{font-family:var(--mono);font-size:11px;color:var(--dim)}
   .bopt[disabled]{opacity:.55;cursor:default}
+
+  /* the bet panel */
+  .betveil{position:fixed;inset:0;z-index:300;background:rgba(8,6,3,.72);
+    display:flex;align-items:center;justify-content:center;padding:16px}
+  .betveil[hidden]{display:none}
+  .betbox{width:100%;max-width:380px;background:var(--panel);border:1px solid var(--line);
+    border-radius:16px;padding:20px;box-shadow:0 24px 60px -20px rgba(0,0,0,.7)}
+  .betbox h3{margin:0 0 2px;font-size:16px;color:var(--text)}
+  .betbox .who{font-family:var(--mono);font-size:12px;color:var(--dim);margin-bottom:14px}
+  .odds{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--line);
+    border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-bottom:14px}
+  .odds div{background:var(--panel2);padding:9px 11px}
+  .odds .k{font-size:11px;color:var(--dim);margin-bottom:3px}
+  .odds .v{font-family:var(--mono);font-size:14px;color:var(--text)}
+  .betrow{display:flex;gap:8px;align-items:stretch;margin-bottom:10px}
+  .betrow input{flex:1;min-width:0;background:var(--panel2);border:1px solid var(--line);
+    border-radius:9px;padding:10px 12px;color:var(--text);font-family:var(--mono);font-size:14px}
+  .betrow input:focus{outline:none;border-color:var(--accent)}
+  .betgo{background:var(--accent);color:#1a1204;border:0;border-radius:9px;padding:10px 16px;
+    font-weight:700;font-size:13px;cursor:pointer;white-space:nowrap}
+  .betgo:disabled{opacity:.5;cursor:default}
+  .betgo:active:not(:disabled){transform:translateY(1px)}
+  .betnote{font-size:12px;color:var(--dim);line-height:1.5}
+  .betnote a{color:var(--accent)}
+  .beterr{font-size:12px;color:#ff8f6f;line-height:1.5;word-break:break-word}
+  .betclose{float:right;background:none;border:0;color:var(--dim);font-size:20px;
+    line-height:1;cursor:pointer;padding:0 2px}
   .loadmore{display:block;width:100%;margin-top:12px;padding:10px;border-radius:10px;
     background:transparent;border:1px solid var(--edge);color:var(--text);font:inherit;
     font-size:13.5px;cursor:pointer;transition:border-color .15s,background .15s}
@@ -484,12 +511,13 @@ const mmss=(s)=>s<=0?"cranking":s<60?s+"s":`${Math.floor(s/60)}:${String(s%60).p
 // combs left it is a coin flip dressed as a prediction, and the odds a
 // parimutuel would offer stop meaning anything.
 const MIN_COMBS_TO_BACK = 4;
-// The market instructions compile and pass their tests but are not on devnet
-// yet, so the action behind this control cannot run. Six dead affordances per
-// game, four games on screen, is a board advertising something it cannot do.
-// One flag, flipped as part of shipping the deploy rather than as a change of
-// its own, and the per-comb control returns exactly as it is written here.
-const MARKET_LIVE = false;
+// The book is open. Kept as a flag so it can be shut from one line if the
+// market has to come down without a deploy that touches anything else.
+const MARKET_LIVE = true;
+// A single bet, in stake-token units. Mirrors BET_MAX on the server, which is
+// the one that actually enforces it: a parimutuel pool IS the odds, so one bet
+// ten times everyone else's makes every other price in that game noise.
+const BET_MAX = 100;
 const betsOpen = (g) =>
   MARKET_LIVE &&
   (g.status === 0 || (g.status === 1 && (g.aliveCircles ?? 0) >= MIN_COMBS_TO_BACK));
@@ -536,7 +564,7 @@ function openBackMenu(btn){
   menuEl.innerHTML = `<div class="bmh">comb ${cb} &middot; ${as.length} agent${as.length===1?"":"s"}</div>` +
     as.map((a) => {
       const ranked = a.ranked > 0;
-      return `<button class="bopt" data-back="${a.owner}">
+      return `<button class="bopt" data-back="${a.owner}" data-name="${a.name || short(a.owner)}" data-game="${g.gameId}">
         <span class="bn">${a.name || short(a.owner)}</span>
         <span class="brec">${ranked ? `${Math.round(a.winRate*100)}% &middot; ${a.ppg.toFixed(2)}/g` : "no record"}</span>
       </button>`;
@@ -553,6 +581,147 @@ function openBackMenu(btn){
   menuEl.style.top = top + "px";
   btn.setAttribute("aria-expanded", "true");
 }
+
+/* ---------- the bet panel ------------------------------------------------
+ *
+ * The relayer stakes, not the bettor. That is not a shortcut, it is the only
+ * path that works: the stake is BUZZ on devnet, a token we mint, so a stranger
+ * arriving with Phantom holds exactly none of it and a wallet bet would fail
+ * for everyone who is not us. The relayer already exists to let ClawPump agents
+ * play without signing, and place_bet takes the same `bettor`/`payer` split the
+ * game does, so betting borrows that rather than inventing a second rule.
+ *
+ * The identity is a keypair this browser generates and keeps. It never signs
+ * anything on chain, but it has to be a real key rather than a label: the
+ * payout lands in a token account it owns, and moving those tokens later needs
+ * the key. So it is shown, and it can be exported.
+ */
+const veil = document.createElement("div");
+veil.className = "betveil"; veil.hidden = true;
+document.body.appendChild(veil);
+let betCtx = null;
+
+// 464KB, fetched the first time somebody actually bets rather than on every
+// page load by everyone who is only watching. Needed for Keypair.generate: the
+// identity has to be a real ed25519 key, and the browser will not make one.
+let web3Loading = null;
+function loadWeb3(){
+  if(window.solanaWeb3) return Promise.resolve(window.solanaWeb3);
+  if(!web3Loading) web3Loading = new Promise((resolve, reject) => {
+    const el = document.createElement("script");
+    el.src = "/vendor-solana-web3.min.js";
+    el.onload = () => resolve(window.solanaWeb3);
+    el.onerror = () => { web3Loading = null; reject(new Error("could not load the Solana library")); };
+    document.head.appendChild(el);
+  });
+  return web3Loading;
+}
+
+const ID_KEY = "buzz.bettor.v1";
+/**
+ * This browser's betting identity, made on first use.
+ *
+ * Stored as the raw secret key, because that is what an export has to hand
+ * back for the winnings to be movable. localStorage is per origin and never
+ * leaves the machine; the server only ever sees the public half.
+ */
+async function identity(){
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(ID_KEY) || "null"); } catch {}
+  if(saved?.pk && saved?.sk) return saved;
+  const web3 = await loadWeb3();
+  const kp = web3.Keypair.generate();
+  const rec = { pk: kp.publicKey.toBase58(), sk: Array.from(kp.secretKey) };
+  try { localStorage.setItem(ID_KEY, JSON.stringify(rec)); }
+  catch { /* private window: the identity lasts this session only, and says so */ }
+  return rec;
+}
+
+const fmtUnits = (raw, dec = 9) => {
+  const n = Number(raw) / Math.pow(10, dec);
+  return n >= 1000 ? Math.round(n).toLocaleString() : n.toFixed(n < 1 ? 3 : 1);
+};
+const cell = (k, v) => `<div><div class="k">${k}</div><div class="v">${v}</div></div>`;
+function betError(msg){ const el = veil.querySelector(".beterr"); if(el) el.textContent = msg; }
+
+/** Live odds for one agent, refreshed while the panel is open. */
+async function paintOdds(){
+  if(!betCtx) return;
+  const box = veil.querySelector(".odds");
+  if(!box) return;
+  try{
+    const r = await fetch(`/api/market?game=${encodeURIComponent(betCtx.game)}`, { cache: "no-store" });
+    const d = await r.json();
+    const m = d.market;
+    if(!m){ box.innerHTML = cell("book", "not open yet") + cell("on this agent", "…"); return; }
+    const onThis = Number(m.pools?.[betCtx.target]?.total ?? 0);
+    const total = Number(m.totalPool);
+    // What a unit staked right now returns if this agent survives and nobody
+    // else bets. It moves as the pool moves, which is the whole point of a
+    // parimutuel, so it is labelled as a rate rather than a promise.
+    const mult = onThis > 0 ? (total / onThis) : null;
+    box.innerHTML =
+      cell("pool on this agent", onThis ? fmtUnits(onThis) : "nothing yet") +
+      cell("whole pool", total ? fmtUnits(total) : "nothing yet") +
+      cell("pays now", mult ? mult.toFixed(2) + "x" : "first in") +
+      cell("bets close", "instance " + m.lockInstance);
+  }catch{ /* the panel still works without the odds */ }
+}
+
+function shutBet(){ veil.hidden = true; betCtx = null; }
+
+function openBetPanel(target, name, game){
+  betCtx = { target, name, game };
+  veil.innerHTML = `<div class="betbox">
+    <button class="betclose" aria-label="Close">&times;</button>
+    <h3>Back ${esc(name)}</h3>
+    <div class="who">${esc(short(target))} &middot; game ${esc(String(game).slice(-6))}</div>
+    <div class="odds"></div>
+    <div class="betrow">
+      <input type="number" min="1" max="${BET_MAX}" step="1" value="10" aria-label="Amount to stake">
+      <button class="betgo">Back</button>
+    </div>
+    <div class="beterr"></div>
+    <div class="betnote">Parimutuel: the whole pool is split across whoever backed a
+      survivor, so the price moves as people bet. Devnet tokens, max ${BET_MAX} a bet.
+      <a href="/docs#backing" target="_blank" rel="noopener">How it works</a></div>
+  </div>`;
+  veil.hidden = false;
+  paintOdds();
+  veil.querySelector("input")?.focus();
+}
+
+veil.addEventListener("click", async (e) => {
+  if(e.target === veil || e.target.closest(".betclose")) { shutBet(); return; }
+  const go = e.target.closest(".betgo");
+  if(!go || !betCtx) return;
+  const amount = Number(veil.querySelector("input").value);
+  if(!Number.isFinite(amount) || amount <= 0 || amount > BET_MAX){
+    betError(`Stake between 1 and ${BET_MAX}.`); return;
+  }
+  go.disabled = true; go.textContent = "Backing…"; betError("");
+  try{
+    const me = await identity();
+    const r = await fetch("/api/bet/relay", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ game: betCtx.game, target: betCtx.target, bettor: me.pk, amount }),
+    });
+    const d = await r.json();
+    if(!r.ok) throw new Error(d.error || `server said ${r.status}`);
+    go.textContent = "Backed";
+    veil.querySelector(".betnote").innerHTML =
+      `Backed as <b>${esc(short(me.pk))}</b>. ` +
+      `<a href="https://explorer.solana.com/tx/${encodeURIComponent(d.sig)}?cluster=devnet"
+        target="_blank" rel="noopener">View on the explorer</a>`;
+    paintOdds();
+    setTimeout(shutBet, 3200);
+  }catch(err){
+    betError(String(err?.message ?? err).slice(0, 180));
+    go.disabled = false; go.textContent = "Back";
+  }
+});
+document.addEventListener("keydown", (e) => { if(e.key === "Escape" && !veil.hidden) shutBet(); });
+setInterval(() => { if(!veil.hidden) paintOdds(); }, 5000);
 
 // Games already painted once, so an entrance animation never replays.
 // Past this, an unstarted empty lobby is wreckage rather than a seat.
@@ -822,10 +991,8 @@ document.addEventListener("click",(e)=>{
   }
   const back=e.target.closest(".bopt");
   if(back){
-    // The market instruction compiles but is not deployed, so saying so beats a
-    // control that silently does nothing.
-    back.querySelector(".brec").textContent="market not deployed yet";
-    back.disabled=true;
+    shut();
+    openBetPanel(back.dataset.back, back.dataset.name, back.dataset.game);
     return;
   }
   shut();

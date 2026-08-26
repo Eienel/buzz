@@ -260,7 +260,7 @@ async function poll(){
     cranker?.once(snapshot);
     scheduler?.once(snapshot);
     book?.once(snapshot);
-    pollRelayer().then(pollFuel);
+    pollRelayer().then(pollFuel).then(pollFloat);
   }catch(e){
     snapshot = { ...snapshot, ok:false, error:String(e.message).slice(0,120), updatedAt:Date.now() };
   }
@@ -306,6 +306,42 @@ let book = null;
 // Small and unbounded is fine: one entry per game id the arena has asked about,
 // and the arena only asks about games that are on the board.
 const marketCache = new Map();
+let bettorCache = { at: 0, body: null };
+const BETTORS_TTL_MS = Number(process.env.BETTORS_TTL_MS ?? 20_000);
+// A ceiling on a single bet, in stake-token units. The bet is staked in the
+// game's SPL token, not in SOL: SOL only ever pays transaction fees here.
+//
+// Devnet tokens are valueless, so this is not about risk. It is that a
+// parimutuel pool IS the odds, so one bet ten times everyone else's owns the
+// pool outright and every other price in that game becomes noise. Agents stake
+// 10 units a seat, so 100 is ten seats' worth: enough to matter, not enough to
+// be the whole book.
+const BET_MAX = Number(process.env.BET_MAX ?? 100);
+// The relayer funds every bet on this path, so a bet costs the house rather
+// than the bettor. That is what makes it playable with no wallet and no devnet
+// BUZZ, and it is also what makes it farmable: nothing stops one person
+// minting browser identities and backing every agent in every game. These caps
+// do not fix that, they bound it. The real fix is skin in the game.
+const BET_PER_IP_HOUR = Number(process.env.BET_PER_IP_HOUR ?? 40);
+const BET_PER_ID_HOUR = Number(process.env.BET_PER_ID_HOUR ?? 20);
+const betHits = new Map();                     // key -> array of timestamps
+function tooMany(key, limit){
+  const now = Date.now(), cut = now - 3600_000;
+  const hits = (betHits.get(key) ?? []).filter((t) => t > cut);
+  if(hits.length >= limit){ betHits.set(key, hits); return true; }
+  hits.push(now); betHits.set(key, hits);
+  return false;
+}
+// Bounded: without this the map grows one entry per identity, forever.
+setInterval(() => {
+  const cut = Date.now() - 3600_000;
+  for(const [k, v] of betHits){
+    const kept = v.filter((t) => t > cut);
+    if(kept.length) betHits.set(k, kept); else betHits.delete(k);
+  }
+}, 600_000).unref();
+// Base58, and the length range a 32-byte key encodes to.
+const isPubkey = (v) => typeof v === "string" && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(v);
 // The relayer's own balance, refreshed alongside the state poll. Joins stop
 // before it runs dry rather than after, because a game it cannot settle is
 // worse than a seat it refused.
@@ -407,6 +443,54 @@ async function topUp(){
     console.log(`[fuel] ${fuel.note}`);
   }
 }
+// ---- the book's float --------------------------------------------------------
+//
+// The relayer stakes its own BUZZ on every bet placed through it, so the book
+// runs on a float rather than on the bettor's money. A small bet cap would
+// stretch that float; it would not stop it emptying, and a book that stops
+// taking bets mid-promotion is worse than one that never opened.
+//
+// The payer holds mint authority on both devnet stake mints, so the honest fix
+// is to top the float up rather than to ration it. This is a devnet-only move
+// and deliberately so: it is exactly the thing that must not exist on mainnet,
+// where the float has to be bought like everybody else's.
+const FLOAT_FLOOR  = Number(process.env.FLOAT_FLOOR  ?? 2000);
+const FLOAT_TOPUP  = Number(process.env.FLOAT_TOPUP  ?? 10000);
+const FLOAT_EVERY_MS = Number(process.env.FLOAT_EVERY_MS ?? 300_000);
+const FLOAT_AUTO   = process.env.FLOAT_AUTO !== "0";
+let lastFloatAt = 0, floatNote = null;
+
+async function pollFloat(){
+  if(!FLOAT_AUTO || !relayer || !starter) return;
+  if(Date.now() - lastFloatAt < FLOAT_EVERY_MS) return;
+  lastFloatAt = Date.now();
+  try{
+    const mint = new PublicKey(TREASURY_MINTS.BUZZ);
+    const mintAcc = await connection.getAccountInfo(mint);
+    if(!mintAcc) return;
+    const { getOrCreateAssociatedTokenAccount, mintTo, getMint } =
+      await import("@solana/spl-token");
+    const info = await getMint(connection, mint, undefined, mintAcc.owner);
+    // Only the mint authority can do this, and on mainnet that will not be us.
+    if(!info.mintAuthority || !info.mintAuthority.equals(starter.publicKey)){
+      floatNote = "not the mint authority: the book's float cannot be topped up here";
+      return;
+    }
+    const ata = await getOrCreateAssociatedTokenAccount(connection, starter, mint,
+      relayer.kp.publicKey, false, undefined, undefined, mintAcc.owner);
+    const held = Number(ata.amount) / 10 ** info.decimals;
+    if(held >= FLOAT_FLOOR){ floatNote = null; return; }
+    const units = BigInt(FLOAT_TOPUP) * 10n ** BigInt(info.decimals);
+    await mintTo(connection, starter, mint, ata.address, starter.publicKey, units,
+      [], undefined, mintAcc.owner);
+    floatNote = null;
+    console.log(`[float] book had ${held.toFixed(0)} BUZZ, minted ${FLOAT_TOPUP} to the relayer`);
+  }catch(e){
+    floatNote = String(e.message ?? e).slice(0, 90);
+    console.log(`[float] ${floatNote}`);
+  }
+}
+
 const arena = makeArena({ snapshot: () => snapshot, enqueue });
 
 // Easy mode: agents declare an intent, this walks it through commit and reveal
@@ -698,6 +782,69 @@ createServer(async (req,res)=>{
       const m = await book.read(gameId);
       const body = { on: true, game: gameId, market: m };
       marketCache.set(gameId, { at: Date.now(), body });
+      return send(res, 200, body);
+    }catch(e){ return send(res, 502, { error: String(e.message ?? e).slice(0, 140) }); }
+  }
+
+  // Build an unsigned place_bet for somebody with their own wallet. Nothing is
+  // signed here, and the transaction can only move tokens out of an account the
+  // signer already controls.
+  if(p === "/api/bet/prepare"){
+    if(!book) return send(res, 503, { error: "the book is not running" });
+    if(req.method !== "POST") return send(res, 405, { error: "POST" });
+    const b = await readBody(req);
+    if(!/^[0-9]{1,20}$/.test(String(b.game ?? "")))
+      return send(res, 400, { error: "game must be a numeric game id" });
+    if(!isPubkey(b.target) || !isPubkey(b.bettor))
+      return send(res, 400, { error: "target and bettor must be base58 addresses" });
+    const amount = Number(b.amount);
+    if(!Number.isFinite(amount) || amount <= 0 || amount > BET_MAX)
+      return send(res, 400, { error: `amount must be between 1 and ${BET_MAX}` });
+    try{
+      return send(res, 200, await book.buildBet({
+        gameId: String(b.game), target: b.target, bettor: b.bettor, amount }));
+    }catch(e){ return send(res, 400, { error: String(e.message ?? e).slice(0, 160) }); }
+  }
+
+  // Place or claim a bet for somebody with no wallet at all. The relayer signs
+  // and stakes; the identity it acts for owns the payout account, and the
+  // program will not let the payout go anywhere else.
+  if(p === "/api/bet/relay" || p === "/api/bet/claim"){
+    if(!relayer) return send(res, 503, { error: "no relayer configured" });
+    if(req.method !== "POST") return send(res, 405, { error: "POST" });
+    const b = await readBody(req);
+    if(!/^[0-9]{1,20}$/.test(String(b.game ?? "")))
+      return send(res, 400, { error: "game must be a numeric game id" });
+    if(!isPubkey(b.target) || !isPubkey(b.bettor))
+      return send(res, 400, { error: "target and bettor must be base58 addresses" });
+    try{
+      if(p === "/api/bet/claim")
+        return send(res, 200, await relayer.handlers.claimBet({
+          bettorWallet: b.bettor, gameId: String(b.game), targetWallet: b.target }));
+      const amount = Number(b.amount);
+      if(!Number.isFinite(amount) || amount <= 0 || amount > BET_MAX)
+        return send(res, 400, { error: `amount must be between 1 and ${BET_MAX}` });
+      const ip = String(req.headers["x-forwarded-for"] ?? "").split(",")[0].trim()
+        || req.socket.remoteAddress || "?";
+      if(tooMany(`ip:${ip}`, BET_PER_IP_HOUR) || tooMany(`id:${b.bettor}`, BET_PER_ID_HOUR))
+        return send(res, 429, { error: "that is a lot of bets in an hour. Try again later." });
+      return send(res, 200, await relayer.handlers.bet({
+        bettorWallet: b.bettor, gameId: String(b.game), targetWallet: b.target, amount }));
+    }catch(e){ return send(res, 400, { error: String(e.message ?? e).slice(0, 160) }); }
+  }
+
+  // Who is reading the agents best. Computed from chain rather than from a
+  // ledger we keep, so anyone can recompute it and check the answer: every Bet
+  // carries its bettor, target and amount, every TargetPool says whether that
+  // target survived, and the market carries the two pool totals the payout
+  // divides by. Cached because it walks every bet the program has ever taken.
+  if(p === "/api/bettors"){
+    if(!book) return send(res, 200, { on: false, bettors: [] });
+    if(bettorCache.at && Date.now() - bettorCache.at < BETTORS_TTL_MS)
+      return send(res, 200, bettorCache.body);
+    try{
+      const body = await book.bettors();
+      bettorCache = { at: Date.now(), body };
       return send(res, 200, body);
     }catch(e){ return send(res, 502, { error: String(e.message ?? e).slice(0, 140) }); }
   }

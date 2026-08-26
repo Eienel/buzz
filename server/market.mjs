@@ -11,6 +11,7 @@
 
 import anchorPkg from "@coral-xyz/anchor";
 import { PublicKey, SystemProgram } from "@solana/web3.js";
+import { getAssociatedTokenAddressSync } from "@solana/spl-token";
 
 const { BN } = anchorPkg;
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), "[book]", ...a);
@@ -33,6 +34,9 @@ export function makeMarket({ program, payer, connection }) {
   const mvaultPda = (m) => pda(Buffer.from("mvault"), m.toBuffer());
   const playerPda = (g, o) => pda(Buffer.from("player"), g.toBuffer(), o.toBuffer());
   const circlePda = (g, id) => pda(Buffer.from("circle"), g.toBuffer(), Buffer.from([id]));
+  const tpoolPda = (m, t) => pda(Buffer.from("tpool"), m.toBuffer(), t.toBuffer());
+  const betPda = (m, b, t) => pda(Buffer.from("bet"), m.toBuffer(), b.toBuffer(), t.toBuffer());
+  const backablePda = (t) => pda(Buffer.from("backable"), t.toBuffer());
 
   // Games whose book we have already opened or found, and what we need to know
   // to decide them later. The real guard against opening twice is the account
@@ -181,6 +185,107 @@ export function makeMarket({ program, payer, connection }) {
       };
     },
     marketPdaFor: (gameId) => marketPda(gamePda(gameId)).toBase58(),
+
+    /**
+     * Who is reading the agents best, computed from chain.
+     *
+     * Deliberately not from a ledger we keep. A prize decided by a number only
+     * we can produce is a number people have to trust; this one anybody can
+     * recompute from the same three account types and check against the payout
+     * transaction. Every Bet carries its bettor, target and amount, every
+     * TargetPool says whether that target survived, and the Market carries the
+     * two totals the parimutuel divides by.
+     *
+     * Only decided books count. An open bet is not a result yet, and counting
+     * it would rank people on positions rather than on outcomes.
+     */
+    async bettors() {
+      const load = async (name) => {
+        const raw = await connection.getProgramAccounts(PID, {
+          filters: [{ memcmp: { offset: 0, bytes: program.coder.accounts.memcmp(name).bytes } }],
+        });
+        const out = [];
+        for (const { pubkey, account } of raw) {
+          try { out.push({ pubkey, ...program.coder.accounts.decode(name, account.data) }); }
+          catch { /* an older layout is not ours to score */ }
+        }
+        return out;
+      };
+      const [bets, pools, markets] = await Promise.all(
+        [load("bet"), load("targetPool"), load("market")]);
+      const poolBy = new Map(pools.map((p) => [p.pubkey.toBase58(), p]));
+      const marketBy = new Map(markets.map((m) => [m.pubkey.toBase58(), m]));
+      const poolFor = (marketKey, target) =>
+        poolBy.get(tpoolPda(new PublicKey(marketKey), target).toBase58());
+
+      const by = new Map();
+      let graded = 0;
+      for (const b of bets) {
+        const m = marketBy.get(b.market.toBase58());
+        if (!m) continue;
+        const pool = poolFor(b.market.toBase58(), b.target);
+        if (!pool || !pool.resolved) continue;          // not a result yet
+        const stake = Number(b.amount);
+        const total = Number(m.totalPool), win = Number(m.winningPool);
+        // Mirrors claim_bet exactly, including the refund branch: a book where
+        // nobody backed a survivor hands everyone their stake back, which is a
+        // break-even, not a loss.
+        const payout = win === 0 ? stake : pool.won ? Math.floor(stake * total / win) : 0;
+        const k = b.bettor.toBase58();
+        const r = by.get(k) ?? { bettor: k, bets: 0, hits: 0, staked: 0, returned: 0 };
+        r.bets += 1; r.hits += pool.won ? 1 : 0;
+        r.staked += stake; r.returned += payout;
+        by.set(k, r);
+        graded += 1;
+      }
+      const bettors = [...by.values()].map((r) => ({
+        ...r,
+        pnl: r.returned - r.staked,
+        hitRate: r.bets ? r.hits / r.bets : null,
+      // Ranked on PnL, because hit rate alone rewards backing the favourite
+      // every time, which a parimutuel already pays badly for. Hit rate is
+      // shown next to it so a big number with two bets behind it is visible
+      // as exactly that.
+      })).sort((a, b) => b.pnl - a.pnl || b.hitRate - a.hitRate);
+      return { on: true, bettors, graded, books: markets.length };
+    },
+
+    /**
+     * An unsigned place_bet transaction for somebody with their own wallet.
+     *
+     * Built here rather than in the page so there is one definition of the
+     * accounts this instruction takes. The browser needs no Anchor, no borsh
+     * and no discriminators: it deserializes, hands it to the wallet, and the
+     * wallet sends it. Nothing is signed on this side, and the only key that
+     * can move the tokens is the one in the user's wallet.
+     */
+    async buildBet({ gameId, target, bettor, amount }) {
+      const game = gamePda(gameId);
+      const market = marketPda(game);
+      const t = new PublicKey(target), b = new PublicKey(bettor);
+      const g = await program.account.game.fetch(game);
+      const mint = g.stakeMint;
+      const tokenProgram = (await connection.getAccountInfo(mint)).owner;
+      const decimals = (await connection.getTokenSupply(mint)).value.decimals;
+      const units = new BN(String(BigInt(Math.round(Number(amount))) * 10n ** BigInt(decimals)));
+      const tx = await program.methods.placeBet(units).accountsPartial({
+        game, market, marketVault: mvaultPda(market),
+        targetPlayer: playerPda(game, t), backable: backablePda(t),
+        targetPool: tpoolPda(market, t), bet: betPda(market, b, t),
+        payerToken: getAssociatedTokenAddressSync(mint, b, false, tokenProgram),
+        bettor: b, payer: b, relayer: null,
+        stakeMint: mint, tokenProgram, systemProgram: SystemProgram.programId,
+      }).transaction();
+      tx.feePayer = b;
+      tx.recentBlockhash = (await connection.getLatestBlockhash("confirmed")).blockhash;
+      return {
+        tx: tx.serialize({ requireAllSignatures: false, verifySignatures: false }).toString("base64"),
+        mint: mint.toBase58(), decimals,
+        // The wallet needs this to exist before it can pay from it, and a
+        // missing token account is the most likely reason a first bet fails.
+        payerToken: getAssociatedTokenAddressSync(mint, b, false, tokenProgram).toBase58(),
+      };
+    },
     /** What the book is tracking, for /healthz-style visibility. */
     watching: () => watching.size,
     async once(snapshot) {

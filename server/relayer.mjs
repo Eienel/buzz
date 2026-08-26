@@ -157,7 +157,68 @@ function makeRelayer({ connection, kp, program }) {
     return { done };
   }
 
-  const handlers = { join, move, predict, revealMove, revealPrediction, settle };
+  // ---- the book ----------------------------------------------------------
+  //
+  // Same shape as `join`: we pay, somebody else owns. place_bet takes a
+  // `bettor` that never signs and a `payer` that does, and the payout account
+  // is bound to the bettor, so this key can stake on someone's behalf and
+  // cannot redirect a single token of the winnings to itself.
+  //
+  // This is the path for anyone with no Solana wallet at all. The identity is
+  // whatever key the browser generated and kept; it never signs anything, and
+  // it does not need to.
+  const marketPda = (g) => pda(Buffer.from("market"), g.toBuffer());
+  const mvaultPda = (m) => pda(Buffer.from("mvault"), m.toBuffer());
+  const tpoolPda = (m, t) => pda(Buffer.from("tpool"), m.toBuffer(), t.toBuffer());
+  const betPda = (m, b, t) => pda(Buffer.from("bet"), m.toBuffer(), b.toBuffer(), t.toBuffer());
+  const backablePda = (t) => pda(Buffer.from("backable"), t.toBuffer());
+
+  async function bet({ bettorWallet, gameId, targetWallet, amount }) {
+    const bettor = new PublicKey(bettorWallet);
+    const target = new PublicKey(targetWallet);
+    const game = gamePda(gameId);
+    const market = marketPda(game);
+    const g = await program.account.game.fetch(game);
+    const mint = g.stakeMint;
+    const tokenProgram = (await connection.getAccountInfo(mint)).owner;
+    const decimals = (await connection.getTokenSupply(mint)).value.decimals;
+    const units = new BN(String(BigInt(Math.round(Number(amount))) * 10n ** BigInt(decimals)));
+
+    // The bettor's own token account, so a win has somewhere to land. We pay
+    // the rent, they own it, and claim_bet will refuse to pay anywhere else.
+    await getOrCreateAssociatedTokenAccount(connection, kp, mint, bettor, true,
+      undefined, undefined, tokenProgram);
+
+    const sig = await program.methods.placeBet(units).accountsPartial({
+      game, market, marketVault: mvaultPda(market),
+      targetPlayer: playerPda(game, target), backable: backablePda(target),
+      targetPool: tpoolPda(market, target), bet: betPda(market, bettor, target),
+      payerToken: getAssociatedTokenAddressSync(mint, kp.publicKey, false, tokenProgram),
+      bettor, payer: kp.publicKey, relayer: relayerPda,
+      stakeMint: mint, tokenProgram, systemProgram: SystemProgram.programId,
+    }).rpc();
+    return { sig, amount: units.toString() };
+  }
+
+  async function claimBet({ bettorWallet, gameId, targetWallet }) {
+    const bettor = new PublicKey(bettorWallet);
+    const target = new PublicKey(targetWallet);
+    const game = gamePda(gameId);
+    const market = marketPda(game);
+    const g = await program.account.game.fetch(game);
+    const mint = g.stakeMint;
+    const tokenProgram = (await connection.getAccountInfo(mint)).owner;
+    const sig = await program.methods.claimBet().accountsPartial({
+      market, marketVault: mvaultPda(market), targetPool: tpoolPda(market, target),
+      bet: betPda(market, bettor, target),
+      bettorToken: getAssociatedTokenAddressSync(mint, bettor, true, tokenProgram),
+      bettor, payer: kp.publicKey, relayer: relayerPda,
+      stakeMint: mint, tokenProgram,
+    }).rpc();
+    return { sig };
+  }
+
+  const handlers = { join, move, predict, revealMove, revealPrediction, settle, bet, claimBet };
 
   /** Is this relayer actually allowed to act for others? */
   async function ready() {
@@ -165,7 +226,7 @@ function makeRelayer({ connection, kp, program }) {
     return { pubkey: kp.publicKey.toBase58(), allowed: !!acc, relayerPda: relayerPda.toBase58() };
   }
 
-  return { handlers, ready, pubkey: kp.publicKey, program, kp };
+  return { handlers, ready, pubkey: kp.publicKey, program, kp, relayerPda };
 }
 
 /**
