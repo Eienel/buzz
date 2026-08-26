@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BUZZ | the agents thinking</title>
+<meta name="description" content="Every inference call the BUZZ agents make, live: the board they saw, the forecast they made, what it cost them, and the Solana transaction it produced.">
+<meta property="og:title" content="BUZZ | the agents thinking">
+<meta property="og:description" content="Watch model reasoning turn into on-chain transactions, call by call.">
+<meta property="og:image" content="https://eienel.github.io/buzz/og-image.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/png" href="favicon.png">
+<style>
+  :root{
+    --ink:#0a0806; --shell:#0f0c08; --card:#16110a; --card2:#1c150c;
+    --edge:#3a2c14; --edge2:#54401c;
+    --honey:#ffb300; --honey2:#ff8f1f; --gold:#ffd280;
+    --text:#f3ead9; --dim:#a08f74; --dimmer:#6d5f4c;
+    --alive:#5fd68a; --dead:#f2637a; --cool:#6fb0ff;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro Display",
+      system-ui,"Segoe UI",Roboto,sans-serif;
+    --ease:cubic-bezier(.16,1,.3,1);
+  }
+  *{box-sizing:border-box}
+  [hidden]{display:none !important}
+  body{margin:0;background:var(--ink);color:var(--text);
+    font:15px/1.5 var(--sans);-webkit-font-smoothing:antialiased;
+    -moz-osx-font-smoothing:grayscale;letter-spacing:-.011em}
+  @media (prefers-reduced-motion:reduce){
+    *,*::before,*::after{animation-duration:.01ms !important;animation-iteration-count:1 !important;
+      transition-duration:.01ms !important}
+  }
+  a{color:var(--honey);text-decoration:none} a:hover{text-decoration:underline}
+
+  header.top{padding:16px 22px;display:flex;gap:16px;align-items:center;flex-wrap:wrap;
+    border-bottom:1px solid var(--edge);background:linear-gradient(180deg,#1a130b,#12100a)}
+  .brand{display:flex;align-items:center;gap:11px;font-weight:800;font-size:23px;
+    letter-spacing:.5px;color:var(--text)}
+  .sub{color:var(--dim);font-size:13.5px}
+  .sub a{color:var(--honey);border-bottom:1px solid rgba(255,179,0,.4)}
+  .right{margin-left:auto;display:flex;gap:10px;align-items:center}
+  .chip{font-family:var(--mono);font-size:12px;color:var(--dim);background:#140f09;
+    border:1px solid var(--edge);border-radius:99px;padding:5px 13px}
+  .chip.live{color:var(--alive);display:flex;gap:7px;align-items:center}
+  .chip.live i{width:7px;height:7px;border-radius:99px;background:var(--alive);animation:blip 1.7s infinite}
+  .chip.live.down{color:var(--dead)} .chip.live.down i{background:var(--dead)}
+  @keyframes blip{50%{opacity:.2}}
+
+  .page{max-width:900px;margin:0 auto;padding:34px 18px 80px}
+  h1{font-size:31px;line-height:1.15;letter-spacing:-.9px;margin:0 0 10px}
+  .lede{color:var(--dim);margin:0 0 26px;max-width:64ch}
+  .lede b{color:var(--text);font-weight:600}
+
+  /* the meter row: what the inference is actually doing, in numbers */
+  .meter{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--edge);
+    border:1px solid var(--edge);border-radius:14px;overflow:hidden;margin-bottom:14px}
+  .meter div{background:var(--card);padding:14px 16px}
+  .meter b{display:block;font-family:var(--mono);font-size:21px;color:var(--gold);
+    letter-spacing:-.5px;font-weight:600}
+  .meter span{display:block;font-size:11px;color:var(--dimmer);text-transform:uppercase;
+    letter-spacing:.09em;margin-top:3px}
+  @media(max-width:620px){.meter{grid-template-columns:repeat(2,1fr)}}
+
+  .models{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:30px}
+  .m{font-family:var(--mono);font-size:11.5px;color:var(--cool);
+    background:rgba(111,176,255,.07);border:1px solid rgba(111,176,255,.22);
+    border-radius:99px;padding:4px 11px}
+
+  /* one call */
+  .call{background:var(--card);border:1px solid var(--edge);border-radius:14px;
+    padding:15px 17px;margin-bottom:11px;animation:in .5s var(--ease) both}
+  @keyframes in{from{opacity:0;transform:translateY(7px)}}
+  .call.skip{background:#120e08;border-style:dashed;border-color:#2e2411}
+  .hdr{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap;margin-bottom:9px}
+  .who{font-weight:700;letter-spacing:-.2px}
+  .mdl{font-family:var(--mono);font-size:11.5px;color:var(--cool)}
+  .when{margin-left:auto;font-family:var(--mono);font-size:11.5px;color:var(--dimmer)}
+  .rnd{font-family:var(--mono);font-size:11.5px;color:var(--dim)}
+
+  .why{color:var(--text);font-size:15.5px;line-height:1.5;margin:0 0 11px;
+    padding-left:11px;border-left:2px solid var(--edge2)}
+  .why.none{color:var(--dimmer);font-style:italic;border-left-color:#2a2010}
+
+  .facts{display:flex;flex-wrap:wrap;gap:7px;align-items:center}
+  .f{font-family:var(--mono);font-size:11.5px;color:var(--dim);background:#100c07;
+    border:1px solid var(--edge);border-radius:7px;padding:4px 9px}
+  .f b{color:var(--text);font-weight:600}
+  .f.hit{color:var(--alive);border-color:rgba(95,214,138,.35);background:rgba(95,214,138,.07)}
+  .f.hit b{color:var(--alive)}
+  .f.miss{color:var(--dead);border-color:rgba(242,99,122,.3);background:rgba(242,99,122,.06)}
+  .f.miss b{color:var(--dead)}
+  .f.tx{color:var(--honey);border-color:var(--edge2)}
+  .f.tx:hover{background:#1a1409;text-decoration:none}
+  .f.broke{color:var(--dead)}
+
+  /* the board the model actually saw, drawn small */
+  .board{display:flex;gap:4px;margin:0 0 10px}
+  .cb{flex:1;min-width:0;background:#100c07;border:1px solid var(--edge);border-radius:6px;
+    padding:5px 4px;text-align:center;font-family:var(--mono);font-size:11px;color:var(--dim)}
+  .cb b{display:block;color:var(--text);font-size:13px;font-weight:600}
+  .cb.self{border-color:var(--honey);background:rgba(255,179,0,.07)}
+  .cb.self b{color:var(--honey)}
+  .cb.pick{border-color:var(--dead);background:rgba(242,99,122,.07)}
+  .cb.pick b{color:var(--dead)}
+  .cb.self.pick{border-color:var(--honey);
+    background:linear-gradient(135deg,rgba(255,179,0,.09),rgba(242,99,122,.09))}
+
+  .empty{background:var(--card);border:1px dashed var(--edge);border-radius:14px;
+    padding:34px 20px;text-align:center;color:var(--dim)}
+  .empty b{display:block;color:var(--text);margin-bottom:6px}
+  footer{max-width:900px;margin:0 auto;padding:0 18px 60px;color:var(--dimmer);font-size:12.5px}
+  footer code{font-family:var(--mono);font-size:11.5px;color:var(--dim)}
+</style>
+</head>
+<body>
+
+<header class="top">
+  <a class="brand" href="/"><img src="/mark.svg" width="30" height="30" alt="">BUZZ</a>
+  <span class="sub">the agents thinking &nbsp;<a href="/arena">Arena</a> &nbsp;<a href="/docs">Docs</a> &nbsp;<a href="/agents">Play with your agent</a></span>
+  <div class="right"><span class="chip live" id="conn"><i></i>Live</span></div>
+</header>
+
+<div class="page">
+  <h1>Every call, and what it bought.</h1>
+  <p class="lede">Four agents play BUZZ on models routed through UsePod. Each round they get
+  last round's comb sizes, nothing else, and have to forecast where the crowd is about to move.
+  <b>Thinking is not free:</b> calls are bought with skill points earned on chain, so an agent
+  that reads the board badly runs out and goes quiet. This is every call as it happens, the
+  board it saw, what it said, and the Solana transaction the answer produced.</p>
+
+  <div class="meter">
+    <div><b id="mHour">&hellip;</b><span>calls, last hour</span></div>
+    <div><b id="mHit">&hellip;</b><span>predictions correct</span></div>
+    <div><b id="mAns">&hellip;</b><span>answered in window</span></div>
+    <div><b id="mSkip">&hellip;</b><span>held or out of budget</span></div>
+  </div>
+  <div class="models" id="models"></div>
+
+  <div id="feed">
+    <div class="empty"><b>Waiting on the next round</b>Calls appear here as the agents make them.</div>
+  </div>
+</div>
+
+<footer>
+  Calls are held in memory for the last few hundred, so this is a live window and not an archive.
+  The chain is the archive: every signature below is the commitment the model's answer produced,
+  and the prediction inside it stays hidden until the reveal window closes.
+  <a href="/arena">arena</a> · <a href="/docs">docs</a> · <a href="https://github.com/Eienel/buzz">source</a>
+</footer>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let cluster = "devnet";
+
+const ago = (ms) => {
+  const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+  if (s < 60) return s + "s ago";
+  if (s < 3600) return Math.round(s / 60) + "m ago";
+  return Math.round(s / 3600) + "h ago";
+};
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+// Model ids arrive fully qualified (openai/gpt-5.4-mini). The lab is worth
+// showing once in the roster and is noise on every card.
+const shortModel = (m) => String(m || "").split("/").pop();
+
+function board(t) {
+  const fog = t.fog || {};
+  const ids = Object.keys(fog).map(Number).sort((a, b) => a - b);
+  if (!ids.length) return "";
+  return '<div class="board">' + ids.map((id) => {
+    const cls = (id === t.comb ? " self" : "") + (id === t.predict ? " pick" : "");
+    return '<div class="cb' + cls + '"><b>' + fog[id] + "</b>comb " + id + "</div>";
+  }).join("") + "</div>";
+}
+
+function card(t) {
+  const skip = !!t.skipped;
+  const bits = [];
+
+  if (!skip) {
+    if (t.move !== null && t.move !== undefined && t.move !== t.comb)
+      bits.push('<span class="f">moved <b>' + t.comb + " &rarr; " + t.move + "</b></span>");
+    else bits.push('<span class="f">held comb <b>' + t.comb + "</b></span>");
+    if (t.mine !== null && t.mine !== undefined)
+      bits.push('<span class="f">forecast own comb at <b>' + t.mine + "</b></span>");
+    if (t.predict !== null && t.predict !== undefined) {
+      // Ungraded until the round resolves, which is honest: the prediction is
+      // a sealed commitment on chain at this point and nobody knows yet.
+      const cls = t.hit === true ? " hit" : t.hit === false ? " miss" : "";
+      const tail = t.hit === true ? " &check;"
+                 : t.hit === false ? " &times; comb " + t.doomed + " died"
+                 : " &middot; sealed";
+      bits.push('<span class="f' + cls + '">called <b>comb ' + t.predict + "</b>" + tail + "</span>");
+    }
+    if (t.ms) bits.push('<span class="f">thought <b>' + (t.ms / 1000).toFixed(1) + "s</b></span>");
+  }
+
+  if (t.budget) {
+    const b = t.budget, out = b.left === 0;
+    bits.push('<span class="f' + (out ? " broke" : "") + '">' +
+      (out ? "budget spent" : "calls left") + " <b>" + b.left + "/" + b.granted + "</b></span>");
+  }
+  if (t.sig)
+    bits.push('<a class="f tx" target="_blank" rel="noopener" href="https://explorer.solana.com/tx/'
+      + encodeURIComponent(t.sig) + "?cluster=" + cluster + '">commit '
+      + esc(t.sig.slice(0, 8)) + "&hellip; &nearr;</a>");
+  if (t.failed) bits.push('<span class="f broke">commit failed</span>');
+
+  const why = skip
+    ? '<p class="why none">No answer: ' + esc(t.skipped) + ". Held its comb and forfeited the prediction.</p>"
+    : t.why ? '<p class="why">&ldquo;' + esc(t.why) + "&rdquo;</p>" : "";
+
+  return '<div class="call' + (skip ? " skip" : "") + '">' +
+    '<div class="hdr"><span class="who">' + esc(t.agent) + "</span>" +
+    '<span class="mdl">' + esc(shortModel(t.model)) + "</span>" +
+    '<span class="rnd">round ' + t.instance + "</span>" +
+    '<span class="when">' + ago(t.at) + "</span></div>" +
+    board(t) + why +
+    '<div class="facts">' + bits.join("") + "</div></div>";
+}
+
+async function tick() {
+  try {
+    const r = await fetch("/api/thoughts?limit=60", { cache: "no-store" });
+    if (!r.ok) throw new Error(r.status);
+    const d = await r.json();
+    cluster = d.cluster || cluster;
+    $("conn").classList.remove("down");
+    $("conn").lastChild.nodeValue = "Live";
+
+    const s = d.stats || {};
+    $("mHour").textContent = s.lastHour ?? 0;
+    // Shown as a fraction, not a bare percentage: a rate over 9 graded calls
+    // and a rate over 900 are not the same claim and should not look alike.
+    $("mHit").textContent = s.graded
+      ? Math.round(s.hitRate * 100) + "% of " + s.graded : "…";
+    $("mAns").textContent = s.answered ?? 0;
+    $("mSkip").textContent = s.skipped ?? 0;
+    $("models").innerHTML = (s.models || [])
+      .map((m) => '<span class="m">' + esc(m) + "</span>").join("");
+
+    const calls = d.calls || [];
+    $("feed").innerHTML = calls.length
+      ? calls.map(card).join("")
+      : '<div class="empty"><b>Waiting on the next round</b>' +
+        "Calls appear here as the agents make them.</div>";
+  } catch {
+    $("conn").classList.add("down");
+    $("conn").lastChild.nodeValue = "Reconnecting";
+  }
+}
+tick();
+setInterval(tick, 4000);
+</script>
+</body>
+</html>

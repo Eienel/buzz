@@ -346,6 +346,31 @@ const readBody = (req) => new Promise((resolve) => {
   let b = ""; req.on("data", (c) => { b += c; if (b.length > 1e5) req.destroy(); });
   req.on("end", () => { try { resolve(b ? JSON.parse(b) : {}); } catch { resolve({}); } });
 });
+// ---- the reasoning feed ------------------------------------------------------
+// A bounded in-memory window on what the agents are thinking right now. Not
+// persisted: the chain already holds the outcomes, and this is the working,
+// which is only interesting live.
+const THOUGHTS_MAX = Number(process.env.THOUGHTS_MAX ?? 400);
+const thoughts = [];
+const FEED_SECRET = process.env.FEED_SECRET ?? "";
+// Named for the explorer links, which need to know which cluster to open.
+const CLUSTER = /mainnet/.test(RPC) ? "mainnet-beta" : /testnet/.test(RPC) ? "testnet" : "devnet";
+
+/**
+ * Only the swarm may write to the feed.
+ *
+ * With FEED_SECRET set that is a shared secret, which is what to use in
+ * production. Without one it falls back to loopback only, which holds when the
+ * swarm runs in this process (RUN_SWARM=1) and is the reason a missing secret
+ * is not fatal. The buffer is display-only and capped, so the worst a forged
+ * write does is put a wrong line on a page, but set the secret anyway.
+ */
+const feedAuthed = (req) => {
+  if(FEED_SECRET) return req.headers["x-feed-secret"] === FEED_SECRET;
+  const ip = req.socket.remoteAddress ?? "";
+  return ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1";
+};
+
 const send = (res, status, body) => {
   res.writeHead(status, { "content-type": "application/json",
     "cache-control": "no-store", "access-control-allow-origin": "*" });
@@ -514,6 +539,52 @@ createServer(async (req,res)=>{
       note: "Accrued on chain. Conversion to SOL and buy-and-burn happen off chain and have not run on devnet." });
   }
 
+  // ---- the reasoning feed --------------------------------------------------
+  // Written by the swarm as it plays, read by /thinking. Deliberately in
+  // memory and bounded: this is a window on what the arena is doing right now,
+  // not a second history file, and the on-chain record is already the archive.
+  if(p === "/api/agent/thought"){
+    if(!feedAuthed(req)) return send(res, 401, { error: "not the swarm" });
+    const b = await readBody(req);
+    if(b.agent == null || b.game == null) return send(res, 400, { error: "agent and game are required" });
+    thoughts.push({ ...b, at: Date.now(), hit: null });
+    if(thoughts.length > THOUGHTS_MAX) thoughts.splice(0, thoughts.length - THOUGHTS_MAX);
+    return send(res, 202, { ok: true });
+  }
+  if(p === "/api/agent/resolved"){
+    if(!feedAuthed(req)) return send(res, 401, { error: "not the swarm" });
+    const { gameId, instance, doomed } = await readBody(req);
+    for(const t of thoughts){
+      if(t.game === String(gameId) && t.instance === instance && t.predict != null)
+        t.hit = t.predict === doomed;
+      if(t.game === String(gameId) && t.instance === instance) t.doomed = doomed;
+    }
+    return send(res, 202, { ok: true });
+  }
+  if(p === "/api/thoughts"){
+    const want = Number(url.searchParams.get("limit"));
+    const limit = Number.isFinite(want) && want > 0 ? Math.min(want, THOUGHTS_MAX) : 60;
+    const graded = thoughts.filter((t) => t.hit !== null);
+    const hits = graded.filter((t) => t.hit).length;
+    const hour = Date.now() - 3600_000;
+    return send(res, 200, {
+      calls: thoughts.slice(-limit).reverse(),
+      stats: {
+        // Only what this buffer has seen, so it is a rate over the visible
+        // window rather than an all-time figure the page cannot show its
+        // working for. The leaderboard is where all-time lives.
+        answered: thoughts.filter((t) => !t.skipped).length,
+        skipped: thoughts.filter((t) => t.skipped).length,
+        lastHour: thoughts.filter((t) => t.at >= hour && !t.skipped).length,
+        graded: graded.length,
+        hitRate: graded.length ? hits / graded.length : null,
+        models: [...new Set(thoughts.map((t) => t.model).filter(Boolean))],
+        window: thoughts.length,
+      },
+      cluster: CLUSTER,
+    });
+  }
+
   if(p === "/api/history"){
     // The board polls this every 15s, and a full page of records is ~120KB, so
     // the caller says how many it wants and gets `total` to know if asking for
@@ -544,6 +615,7 @@ createServer(async (req,res)=>{
   if(p === "/arena") p = "/arena.html";
   if(p === "/play")  p = "/play.html";
   if(p === "/agents")p = "/agents.html";
+  if(p === "/thinking")p = "/thinking.html";
   if(p === "/tcg")   p = "/tcg.html";
   // contain path traversal: resolve inside ROOT only
   const file = join(ROOT, normalize(p).replace(/^(\.\.[/\\])+/, ""));

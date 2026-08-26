@@ -116,7 +116,10 @@ function sanitise(raw, fog, self) {
   const why = typeof raw?.why === "string" ? raw.why.slice(0, 70) : "";
   // Default to thinking. A model that omits the field has not chosen to skip.
   const thinkNext = raw?.think_next === false ? false : true;
-  return { move: move === self ? null : move, predict: raw.predict, why, thinkNext };
+  // The forecast the prediction was drawn from. Not used to play, kept so the
+  // feed can show what the model expected rather than only what it chose.
+  const mine = Number.isInteger(raw?.mine) ? raw.mine : null;
+  return { move: move === self ? null : move, predict: raw.predict, why, thinkNext, mine };
 }
 
 /**
@@ -170,6 +173,7 @@ export async function decide(fog, self, opts = {}) {
 
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), budgetFor(opts.instanceSeconds));
+  const t0 = Date.now();
   try {
     const r = await fetch(BASE(TOKEN), {
       method: "POST",
@@ -201,7 +205,7 @@ export async function decide(fog, self, opts = {}) {
     // for silence and then abstained for the rest of the game. That is what
     // took the reasoning cohort from 0.171 skill per game to 0.067.
     if (plan && opts.budget) opts.budget.spend();
-    return plan && { ...plan, by: "model" };
+    return plan && { ...plan, by: "model", ms: Date.now() - t0, model: opts.model ?? MODEL };
   } catch (e) {
     if (opts.onSkip) opts.onSkip(String(e.message ?? e).slice(0, 90));
     return null;

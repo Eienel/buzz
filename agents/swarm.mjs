@@ -16,6 +16,7 @@ import jsSha3 from "js-sha3";
 const { keccak_256 } = jsSha3;
 import { readFileSync } from "node:fs";
 import { decide, reasoningEnabled, modelFor, personaFor } from "./reason.mjs";
+import * as feed from "./feed.mjs";
 import { makeBudget, totalPointsOf } from "./budget.mjs";
 import { loadKeypair } from "../server/keypair.mjs";
 
@@ -94,6 +95,10 @@ const PID = program.programId;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
+
+// What a budget looks like from outside. Flattened here because the budget
+// object exposes `left` as a getter, and a getter does not survive JSON.
+const budgetShape = (b) => b ? { granted: b.granted, left: b.left, spent: b.spent() } : null;
 
 const pda = (...seeds) => PublicKey.findProgramAddressSync(seeds, PID)[0];
 const configPda = pda(Buffer.from("config"));
@@ -292,6 +297,15 @@ async function playGame(gameNo) {
             model: modelFor(podIx), persona: personaFor(podIx), budget: budgets.get(name),
             // spread across the range so four pods on one board do not converge
             temperature: 0.5 + podIx * 0.15,
+            // A call that did not answer is still a call. Published for the
+            // same reason the answers are: an agent that ran out of budget or
+            // missed the window is the metering working, and a feed that shows
+            // only the good rounds is a highlight reel.
+            onSkip: (reason) => feed.thought({
+              game: String(gid), instance, agent: name, model: modelFor(podIx),
+              comb: self, fog, skipped: reason,
+              budget: budgetShape(budgets.get(name)),
+            }),
           })
         : strategies[stratNames[i % stratNames.length]],
       // one agent per comb for the first MIN_COMBS, so the comb floor is met by
@@ -411,13 +425,27 @@ async function playGame(gameNo) {
       const b = a.pod && budgets.get(a.name);
       if (b && plan.thinkNext === false && b.left > 0) b.saving = true;
       plans.set(a, { ...plan, mvNonce, pdNonce });
+      // The signature of the commit this reasoning produced. Held so the feed
+      // can put the model's sentence and the transaction it caused side by
+      // side, which is the only thing that makes the inference checkable by
+      // someone who does not trust us.
+      let sig = null, failed = null;
       try {
         if (plan.move !== null && fog[plan.move] !== undefined)
           await program.methods.commitMove([...moveHash(plan.move, mvNonce, a.kp.publicKey, gamePda, instance)])
             .accountsPartial({ game: gamePda, player: playerPda(a.kp.publicKey), owner: a.kp.publicKey, actor: a.kp.publicKey }).signers([a.kp]).rpc();
-        await program.methods.commitPrediction([...moveHash(plan.predict, pdNonce, a.kp.publicKey, gamePda, instance)])
+        sig = await program.methods.commitPrediction([...moveHash(plan.predict, pdNonce, a.kp.publicKey, gamePda, instance)])
           .accountsPartial({ game: gamePda, player: playerPda(a.kp.publicKey), owner: a.kp.publicKey, actor: a.kp.publicKey }).signers([a.kp]).rpc();
-      } catch (e) { log(`  ${a.name} commit failed: ${e.message?.slice(0, 80)}`); }
+      } catch (e) {
+        failed = e.message?.slice(0, 80);
+        log(`  ${a.name} commit failed: ${failed}`);
+      }
+      if (a.pod) feed.thought({
+        game: String(gid), instance, agent: a.name, model: plan.model ?? a.model,
+        comb: a.circle, fog, mine: plan.mine, move: plan.move, predict: plan.predict,
+        why: plan.why, thinkNext: plan.thinkNext, ms: plan.ms,
+        budget: budgetShape(budgets.get(a.name)), sig, failed,
+      });
     }
     await waitPhaseEnd(gamePda);
     await program.methods.advanceToReveal().accountsPartial({ game: gamePda, cranker: payer.publicKey }).rpc();
@@ -451,6 +479,10 @@ async function playGame(gameNo) {
     const doomed = g.doomedCircle;
     await program.methods.executeDeath(doomed).accountsPartial({ game: gamePda, circle: circlePda(doomed), cranker: payer.publicKey }).rpc();
     log(`game ${gid}: instance ${instance}, circle ${doomed} died`);
+    // Scores this round's published predictions. Without it the feed shows
+    // what the models said and never whether they were right, which is the
+    // half that costs something to admit.
+    feed.resolved(gid, instance, doomed);
 
     // scoring: reveal predictions; casualties land in the fullest surviving circle
     for (const [a, p] of plans) {
