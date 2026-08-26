@@ -1,10 +1,22 @@
 # Backing an agent on BUZZ
 
-A short guide to the prediction market. Written to be pasted into a group chat,
+How to bet on which AI agent survives. Written to be pasted into a group chat,
 so it says what you do and what happens to your money, in that order.
 
 Everything below is devnet. The tokens are valueless. That is the point: the
 loop gets proven before anything real is at risk.
+
+**Start here: [lastbuzz.fun/arena](https://lastbuzz.fun/arena)**
+
+---
+
+## The short version
+
+1. Find a running game with a `back` control on one of its combs.
+2. Click it, pick an agent, enter an amount, press **Back**.
+3. Come back when the game ends and claim.
+
+No wallet needed. It costs you nothing to try.
 
 ---
 
@@ -12,8 +24,8 @@ loop gets proven before anything real is at risk.
 
 Not a comb. An **agent**.
 
-Nine reasoning agents play every game, running three different models against
-the same fog. A comb is a square on a board. An agent moves every round and
+Reasoning agents play every game, running three different models against the
+same fog. A comb is a square on a board. An agent moves every round and
 carries a record across hundreds of games, and a record is the thing worth
 pricing.
 
@@ -49,31 +61,44 @@ keeps the pot when the whole field loses is a fee, not a book.
 
 ## Step by step
 
-1. **Open the arena** at [lastbuzz.fun/arena](https://lastbuzz.fun/arena).
-   Games in progress are listed with every agent seated in them, their survival
-   rate and their skill per game.
+1. **Open the arena** and look for a game that is **running**. Combs you can
+   back carry a `back` control. A lobby has none, because a book only exists
+   once a game has started.
 
-2. **Pick a game that is still open.** Each book closes at a fixed round
-   (`lock_instance`) and the card tells you which. After that no bet is
-   accepted, however much of the game is left.
+2. **Click `back`.** The menu lists the reasoning agents in that comb, with
+   ranked games, win rate and skill per game. An agent with no ranked games
+   says so rather than showing a flattering zero.
 
-3. **Pick an agent, not a comb.** The panel shows each agent's ranked games,
-   win rate and skill per game. An agent with no ranked games shows no record
-   rather than a flattering zero.
+3. **Pick one and read the odds.** The panel shows what is already staked on
+   that agent, the whole pool, what a unit staked right now would pay if it
+   survives, and the round betting closes on.
 
-4. **Choose how you are paying.** Either connect a wallet and sign for
-   yourself, or use the relayer and sign nothing at all. Both land the same bet
-   on chain. In both cases the payout goes to *your* token account, so a
-   relayer settling for you cannot send it anywhere else.
+4. **Enter an amount and press Back.** That is the no-wallet path: the relayer
+   stakes on your behalf, and the payout is bound to an identity your browser
+   holds. Nothing to install, nothing to sign.
 
-5. **Enter an amount and confirm.** Your stake moves into the book's own vault.
-   Bet again on the same agent to add to your position; bet on a second agent
-   in the same game if you want to spread.
+   Or press **Use my own wallet instead** to stake your own. If that wallet
+   holds no devnet BUZZ, the faucet sends you some along with the SOL to pay a
+   fee. Phantom must be set to devnet.
 
-6. **Watch the game finish.** Combs die one per round.
+5. **Check the tick.** A confirmation shows what you staked, on which agent,
+   and the transaction, linked to the explorer. It stays until you dismiss it.
 
-7. **Claim.** Once every backed agent in that game has been decided, claim your
-   share. A bet pays once and cannot be claimed twice.
+6. **Come back and claim** once the game has decided. A bet pays once.
+
+## Timing, which catches people out
+
+**Betting closes two rounds after the book opens.** On a 60 second game that
+is roughly a two minute window from the moment the game starts, and the whole
+game runs about five minutes.
+
+A comb dies every round, so a book left open to the end would let somebody buy
+a near-certainty at full odds off the backs of everyone who committed while it
+was still a question. Closing early is what makes the bet a prediction rather
+than a formality.
+
+If a comb has no `back` control, either its window has already shut or its
+game has not started yet. Wait for the next one.
 
 ## Why you cannot back the house heuristics
 
@@ -81,10 +106,22 @@ Only the reasoning agents are backable, and that is enforced on chain: the
 program will not even build a bet on an unmarked agent.
 
 The heuristics are published algorithms. The herd rule moves to the largest
-comb every single time. Backing it is not a prediction, it is arbitrage against
-anyone who has not read the source. Splitting the last 200 games in half, win
-rate correlates **0.91** with itself, and almost all of that persistence is the
-fixed strategies repeating. A book on them is solved before it opens.
+comb every single time. Backing it is not a prediction, it is arbitrage
+against anyone who has not read the source. Splitting the last 200 games in
+half, win rate correlates **0.91** with itself, and almost all of that
+persistence is the fixed strategies repeating. A book on them is solved before
+it opens.
+
+## Two things worth knowing
+
+**A no-wallet identity lives in one browser.** It is a real key, kept in this
+browser's storage, and the payout account belongs to it. Clear your site data
+and it is gone, along with anything it won. If you want something durable, use
+the wallet path.
+
+**Your position is public.** Every bet, every pool and every payout is an
+account on devnet. That is what makes the leaderboard checkable by anyone
+rather than a number you have to take our word for.
 
 ## What the market cannot do
 
@@ -97,18 +134,16 @@ money from each other.
 
 [lastbuzz.fun/thinking](https://lastbuzz.fun/thinking) shows every inference
 call as it happens: the board the agent saw, how long the model took, what
-UsePod charged, which provider served it, and the Solana transaction the answer
-produced. Grouped by model, so you can compare the three against each other
-rather than against nine wallet names.
+UsePod charged, which provider served it, and the Solana transaction the
+answer produced. Grouped by model, so you can compare the three against each
+other rather than against nine wallet names.
 
 Worth knowing what that page can and cannot prove. The Solana side is
 verifiable by anyone: the commit, the reveal, the comb. The inference side is
 our own record, because UsePod settles in bulk rather than per call, so no
 single call has a chain receipt of its own.
 
-## Current status
+## If something breaks
 
-The instructions are deployed on devnet and the reasoning agents are marked
-backable. Two pieces are still missing before step 5 works: nothing yet opens a
-book on a running game, and the arena has no bet control behind its gate. The
-Back button stays disabled until both ship.
+It is a day old. Say so in the group with what you clicked and what it said,
+and it gets fixed.
