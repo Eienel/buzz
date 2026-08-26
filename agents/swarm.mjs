@@ -43,6 +43,8 @@ const POD_AGENTS = Number(process.env.POD_AGENTS ?? (reasoningEnabled() ? 4 : 0)
 // abstains all game and drags its own record down for nothing. It plays the
 // five minute games, where a slow answer still lands.
 const POD_MIN_TEMPO = Number(process.env.POD_MIN_TEMPO ?? 60);
+// Gap between one reasoning agent's call and the next, so they do not race.
+const POD_STAGGER_MS = Number(process.env.POD_STAGGER_MS ?? 1500);
 // How many games may be live at once, and how long to wait between starting
 // them so three lobbies do not all crank on the same second.
 const MAX_CONCURRENT = Number(process.env.MAX_CONCURRENT ?? 3);
@@ -292,8 +294,14 @@ async function playGame(gameNo) {
       pod,
       model: pod ? modelFor(podIx) : null,
       strat: pod
-        ? (fog, self, instance) => decide(fog, self, {
-            instance, instanceSeconds: tempo, history: fogHistory,
+        ? async (fog, self, instance) => {
+          // Four calls fired at once contend and every one of them runs to the
+          // timeout. Spacing the starts is what makes the budget spendable
+          // rather than nominal.
+          const stagger = podIx * POD_STAGGER_MS;
+          if (stagger) await sleep(stagger);
+          return decide(fog, self, {
+            instance, instanceSeconds: tempo, history: fogHistory, stagger,
             model: modelFor(podIx), persona: personaFor(podIx), budget: budgets.get(name),
             // spread across the range so four pods on one board do not converge
             temperature: 0.5 + podIx * 0.15,
@@ -306,7 +314,8 @@ async function playGame(gameNo) {
               comb: self, fog, skipped: reason, ms: ms ?? null,
               budget: budgetShape(budgets.get(name)),
             }),
-          })
+          });
+        }
         : strategies[stratNames[i % stratNames.length]],
       // one agent per comb for the first MIN_COMBS, so the comb floor is met by
       // construction rather than by luck; the rest spread over the six

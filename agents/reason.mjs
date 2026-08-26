@@ -49,10 +49,15 @@ const TIMEOUT_CAP = Number(process.env.USEPOD_TIMEOUT_MS ?? 20000);
 // commits per agent. Thinking gets a slice of that window, never the whole
 // thing, so a model that runs long is cut off with time left to abstain
 // cleanly rather than stalling the round for everyone else.
-function budgetFor(instanceSeconds) {
+function budgetFor(instanceSeconds, stagger = 0) {
   if (!instanceSeconds) return TIMEOUT_CAP;
   const commitWindow = instanceSeconds * 0.6 * 1000;
-  return Math.max(2500, Math.min(TIMEOUT_CAP, commitWindow * 0.45));
+  // 0.45 was sized for four calls racing each other, which is the thing the
+  // stagger now removes. Measured: four concurrent calls all inflate to
+  // whatever the cap is (1 of 4 answered), the same four spaced out answer in
+  // 5.3s, 8.9s and 14.4s (3 of 4). Spacing them buys the room to wait longer,
+  // and a quarter of the window is still held back for the two commits.
+  return Math.max(2500, Math.min(TIMEOUT_CAP, commitWindow * 0.75 - stagger));
 }
 
 export const reasoningEnabled = () => TOKEN.length > 0;
@@ -179,7 +184,7 @@ export async function decide(fog, self, opts = {}) {
     `and decide whether your own comb is safe to sit in. JSON only.`;
 
   const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(), budgetFor(opts.instanceSeconds));
+  const timer = setTimeout(() => ctl.abort(), budgetFor(opts.instanceSeconds, opts.stagger ?? 0));
   const t0 = Date.now();
   try {
     const r = await fetch(BASE(TOKEN), {
