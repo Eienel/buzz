@@ -111,6 +111,20 @@ const HISTORY_FILE = join(DATA_DIR, "history.json");   // DATA_DIR is a volume i
 const HISTORY_MAX = Number(process.env.HISTORY_MAX ?? 200);
 let history = [];
 try { history = JSON.parse(readFileSync(HISTORY_FILE, "utf8")); } catch {}
+// Drop what the bug above already wrote. An aborted lobby recorded as a game
+// has a field too small to have ever started, and there is no way to repair
+// the row because the game it claims to describe never happened.
+{
+  const before = history.length;
+  history = history.filter((h) => (h.entrants?.length ?? h.players ?? 0) >= 4);
+  if(history.length !== before){
+    console.log(`[history] dropped ${before - history.length} aborted lobbies recorded as games`);
+    // Written back now rather than on the next record(). Otherwise a quiet
+    // arena keeps re-reading the wreckage from disk on every restart.
+    try { writeFileSync(HISTORY_FILE, JSON.stringify(history)); }
+    catch(e){ console.log("[history] could not rewrite:", e.message); }
+  }
+}
 const recorded = new Set(history.map((h) => h.gameId));
 let historyDirty = false;
 
@@ -120,19 +134,37 @@ let historyDirty = false;
  * phase_ends_at is the deadline of the last phase the game ran, which is the
  * closest thing on chain to an end time. It is sanity-bounded: a game cannot
  * have ended before it was created (game_id is its creation time in ms) and
- * cannot end in the future, so a nonsense value falls back to now.
+ * cannot end in the future, so a nonsense value falls back to when the game
+ * was created.
  */
 function endedAtOf(g){
   const now = Date.now();
   const created = Number(g.gameId);
   const ended = Number(g.phaseEndsAt) * 1000;
-  if(!Number.isFinite(ended) || ended <= 0) return now;
-  if(ended < created || ended > now + 60_000) return now;
+  // Fall back to when the game was created, not to this minute. A game we
+  // cannot date is old, and dating it "now" puts days-old wreckage at the top
+  // of the board with every row reading the same age.
+  const fallback = Number.isFinite(created) && created > 0 ? created : now;
+  if(!Number.isFinite(ended) || ended <= 0) return fallback;
+  if(ended < created || ended > now + 60_000) return fallback;
   return ended;
 }
 
+// GameStatus: Lobby 0, Running 1, Settling 2, Closed 3, Aborted 4.
+// Only the middle two are games that were played to a decision.
+const DECIDED = new Set([2, 3]);
+
 function record(g, players){
   if(recorded.has(g.gameId)) return;
+  // An aborted lobby is not a result. It reads like one from here (status is
+  // past Running, and its combs are all still "alive" because none of them
+  // ever died) so `status >= 2` swept every timed-out lobby into the history
+  // as a finished game won by comb 0 with one player in it. The board filled
+  // with days-old wreckage the moment a batch of them aged out.
+  if(!DECIDED.has(g.status)) return;
+  // A game cannot legally start below MIN_CIRCLES combs, so a smaller field is
+  // a lobby that never ran, whatever status it ended up in.
+  if((g.players ?? 0) < 4) return;
   const winning = (g.combs ?? []).find((c) => c.alive);
   if(!winning) return;                       // decided means exactly one comb left
   const mine = players.filter((p) => p.game === g.pubkey);
