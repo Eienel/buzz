@@ -484,8 +484,15 @@ const mmss=(s)=>s<=0?"cranking":s<60?s+"s":`${Math.floor(s/60)}:${String(s%60).p
 // combs left it is a coin flip dressed as a prediction, and the odds a
 // parimutuel would offer stop meaning anything.
 const MIN_COMBS_TO_BACK = 4;
+// The market instructions compile and pass their tests but are not on devnet
+// yet, so the action behind this control cannot run. Six dead affordances per
+// game, four games on screen, is a board advertising something it cannot do.
+// One flag, flipped as part of shipping the deploy rather than as a change of
+// its own, and the per-comb control returns exactly as it is written here.
+const MARKET_LIVE = false;
 const betsOpen = (g) =>
-  g.status === 0 || (g.status === 1 && (g.aliveCircles ?? 0) >= MIN_COMBS_TO_BACK);
+  MARKET_LIVE &&
+  (g.status === 0 || (g.status === 1 && (g.aliveCircles ?? 0) >= MIN_COMBS_TO_BACK));
 
 /** The agents sitting in one comb, best skill-per-game first. */
 const agentsIn = (g, combId) => (g.agents || []).filter((a) => a.comb === combId);
