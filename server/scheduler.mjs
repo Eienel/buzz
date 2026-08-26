@@ -40,6 +40,21 @@ const TEMPOS = (process.env.SCHED_TEMPOS ?? "24:120,60:240")
 /** A slot is the wall-clock instant a game was due to open. */
 const slotFor = (nowMs, everyS) => Math.floor(nowMs / (everyS * 1000)) * everyS * 1000;
 
+/**
+ * How many lobbies of one tempo may sit unfilled before the schedule pauses.
+ *
+ * The schedule alone is open-loop: it opened a game every slot whether or not
+ * anything joined the last one. The swarm adopts at most one lobby per game it
+ * plays, so when creation outruns adoption the surplus does not disappear, it
+ * accumulates. Twenty-one empty lobbies against two running games, each one
+ * costing the opener rent, and the board reading as busy when it was not.
+ *
+ * So the tick is closed-loop now: the clock decides WHEN a game may open, the
+ * backlog decides WHETHER. A slot skipped for backpressure is skipped for
+ * good, it is not queued, because a queue is how you get the pile-up back.
+ */
+const MAX_OPEN = Number(process.env.SCHED_MAX_OPEN ?? 1);
+
 export function makeScheduler({ program, payer, assets }) {
   const PID = program.programId;
   const pda = (...seeds) => PublicKey.findProgramAddressSync(seeds, PID)[0];
@@ -55,7 +70,13 @@ export function makeScheduler({ program, payer, assets }) {
   const tried = new Set();
   let busy = false;
 
-  async function openSlot(t, asset, nowMs) {
+  async function openSlot(t, asset, nowMs, waiting) {
+    if (waiting >= MAX_OPEN) {
+      // Mark the slot tried anyway: it is past, and a later tick finding the
+      // backlog drained should open the CURRENT slot, not backfill this one.
+      tried.add(`${asset.name}:${new BN(String(slotFor(nowMs, t.every) + t.tempo)).toString()}`);
+      return;
+    }
     const slot = slotFor(nowMs, t.every);
     // The id encodes the slot and the tempo, so it is the same number in every
     // process that computes it, and still a plausible millisecond timestamp.
@@ -79,11 +100,32 @@ export function makeScheduler({ program, payer, assets }) {
     }
   }
 
-  /** Start anything that has filled. Cheap, and it is what makes the schedule real. */
+  // Comb count per lobby at the previous tick, and when it last changed.
+  // Starting a lobby the instant it reaches MIN_CIRCLES races whoever is still
+  // filling it: the swarm joins nine agents one transaction at a time, the
+  // fourth one takes the lobby to four combs, and the scheduler started the
+  // game between that transaction and the fifth. create_circle then answered
+  // WrongPhase, which threw out of the swarm's whole join loop, and the game
+  // ran with three or four agents while the swarm abandoned it. Reproduced
+  // against devnet: "herd-03 staked into circle 3" then WrongPhase at
+  // lib.rs:138 on the next agent, every time.
+  const fill = new Map();
+  const QUIET_MS = Number(process.env.SCHED_FILL_QUIET_MS ?? 12_000);
+
+  /** Start anything that has filled AND stopped filling. */
   async function startFilled(snapshot) {
+    const now = Date.now();
+    const seen = new Set();
     for (const g of snapshot.live ?? []) {
       if (g.status !== 0) continue;
-      if ((g.aliveCircles ?? 0) < MIN_CIRCLES) continue;
+      seen.add(g.gameId);
+      const combs = g.aliveCircles ?? 0;
+      const prev = fill.get(g.gameId);
+      if (!prev || prev.combs !== combs) fill.set(g.gameId, { combs, since: now });
+      if (combs < MIN_CIRCLES) continue;
+      // A lobby that is full cannot grow, so there is nothing to wait for.
+      const full = combs >= (g.numCircles ?? MIN_CIRCLES);
+      if (!full && now - (fill.get(g.gameId).since) < QUIET_MS) continue;
       try {
         await program.methods.startGame()
           .accountsPartial({ game: gamePda(g.gameId), authority: payer.publicKey }).rpc();
@@ -94,6 +136,9 @@ export function makeScheduler({ program, payer, assets }) {
           log(`start ${g.gameId}: ${m.slice(0, 80)}`);
       }
     }
+    // Lobbies that left the board (started, aborted) stop being tracked, or the
+    // map grows for the life of the process.
+    for (const id of fill.keys()) if (!seen.has(id)) fill.delete(id);
   }
 
   return {
@@ -110,12 +155,20 @@ export function makeScheduler({ program, payer, assets }) {
       busy = true;
       try {
         const now = Date.now();
+        // Unfilled lobbies per tempo, from the snapshot the poller just took.
+        // A lobby with MIN_CIRCLES combs is not backlog: it is about to start.
+        const waiting = new Map();
+        for (const g of snapshot?.live ?? []) {
+          if (g.status !== 0) continue;
+          if ((g.aliveCircles ?? 0) >= MIN_CIRCLES) continue;
+          waiting.set(g.instanceSeconds, (waiting.get(g.instanceSeconds) ?? 0) + 1);
+        }
         for (const t of TEMPOS) {
           // Ranked play is the point, so the ranked asset gets the schedule and
           // the others ride along less often rather than half the arena being
           // unranked at the moment ranked play became the reason to show up.
           const asset = assets[0];
-          await openSlot(t, asset, now);
+          await openSlot(t, asset, now, waiting.get(t.tempo) ?? 0);
         }
         await startFilled(snapshot);
       } catch (e) {

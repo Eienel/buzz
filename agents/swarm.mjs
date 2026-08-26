@@ -88,10 +88,16 @@ const ASSETS = Object.entries(mints).map(([name, m]) => ({
   tokenProgram: new PublicKey(m.tokenProgram),
 }));
 const GAME_INTERVAL = Number(process.env.GAME_INTERVAL_SECONDS ?? 180) * 1000; // idle between games
-// Per-agent funding: stake + fixed headroom for Circle/Player PDA rent
-// (~0.0036), tx fees, and the agent wallet's own rent-exempt minimum (~0.0009).
-// A multiplier breaks at small stakes, the headroom cost is constant.
-const FUND = 8_000_000; // SOL for fees and PDA rent only; the stake is a token
+// Per-agent funding: fixed headroom for PDA rent and tx fees. The stake is a
+// token, not SOL, so this scales with account sizes rather than with the stake.
+//
+// Measured against devnet rather than derived: Player 0.00220, Circle 0.00151,
+// AgentStats 0.00136 (created with `payer = actor` on an agent's FIRST claim),
+// and the agent wallet's own minimum 0.00089. A circle creator making a first
+// claim therefore needs about 0.0060 plus fees, so the old 0.008 fitted, but
+// with roughly 0.002 of slack for every account this program might add later.
+// Sweeping returns whatever is unspent, so headroom is float, not cost.
+const FUND = 12_000_000; // 0.012 SOL: fees, PDA rent, and room for a first claim
 
 const payer = loadKeypair(process.env.PAYER, `${process.env.HOME}/.config/solana/id.json`);
 const connection = new Connection(RPC, "confirmed");
@@ -180,6 +186,13 @@ async function sweepBack(agents) {
 }
 
 const fetchGame = (g) => program.account.game.fetch(g);
+// Settlement reads nine player accounts in a burst, which is when a public RPC
+// starts answering 429. One retry turns a transient refusal into a delay
+// rather than a game that never pays out.
+const fetchPlayer = async (p) => {
+  try { return await program.account.player.fetch(p); }
+  catch { await sleep(1200); return program.account.player.fetch(p); }
+};
 const waitPhaseEnd = async (gamePda, margin = 1500) => {
   const g = await fetchGame(gamePda);
   const ms = g.phaseEndsAt.toNumber() * 1000 - Date.now() + margin;
@@ -365,22 +378,48 @@ async function playGame(gameNo) {
   } else {
     log(`game ${gid}: adopted a scheduled lobby, ${tempo}s instances`);
   }
+  // Filling is nine transactions, one per agent, and the lobby can be started
+  // out from under us between any two of them: the scheduler used to start a
+  // lobby the instant it reached four combs, which is the fourth agent, so the
+  // fifth got WrongPhase from create_circle. That threw out of this loop, past
+  // everything below, and the swarm walked away from a game it had just staked
+  // four agents into. The scheduler waits for the fill to go quiet now, and
+  // this loop no longer treats one agent's failure as the game's.
   const taken = new Set();
+  let started = false;
   for (const a of agents) {
+    if (started) { a.dead = true; continue; }
     const stake = new BN(String(BigInt(STAKE_UNITS) * BigInt(10) ** BigInt(asset.decimals)));
     const acc = { config: configPda, game: gamePda, vault: vaultPda, circle: circlePda(a.circle),
       player: playerPda(a.kp.publicKey), owner: a.kp.publicKey, payer: a.kp.publicKey, relayer: null,
       stakeMint: asset.mint, payerToken: a.ata, tokenProgram: asset.tokenProgram,
       systemProgram: SystemProgram.programId };
-    if (!taken.has(a.circle)) {
-      await program.methods.createCircle(a.circle, stake).accountsPartial(acc).signers([a.kp]).rpc();
-      taken.add(a.circle);
-      a.createdCircle = a.circle; // this agent is the circle's fixed creator (κ claimant)
-    } else {
-      await program.methods.joinCircle(stake).accountsPartial(acc).signers([a.kp]).rpc();
+    try {
+      if (!taken.has(a.circle)) {
+        await program.methods.createCircle(a.circle, stake).accountsPartial(acc).signers([a.kp]).rpc();
+        taken.add(a.circle);
+        a.createdCircle = a.circle; // this agent is the circle's fixed creator (κ claimant)
+      } else {
+        await program.methods.joinCircle(stake).accountsPartial(acc).signers([a.kp]).rpc();
+      }
+      log(`  ${a.name} staked into circle ${a.circle}`);
+    } catch (e) {
+      const m = String(e.message ?? e);
+      a.dead = true;                     // never played, so never plays or scores
+      // WrongPhase here means the lobby is already running. Nobody else can get
+      // in, so stop trying, and play with the agents that did.
+      if (/WrongPhase/.test(m)) {
+        started = true;
+        log(`  ${a.name}: lobby already started, playing with ${taken.size} combs`);
+      } else {
+        log(`  ${a.name} could not stake: ${m.slice(0, 70)}`);
+      }
     }
-    log(`  ${a.name} staked into circle ${a.circle}`);
   }
+  // Below the comb floor the game cannot legally start and never will, so the
+  // honest move is to stop here and let the finally sweep the wallets back,
+  // rather than block on a lobby that is not going anywhere.
+  if (taken.size < MIN_COMBS) throw new Error(`only ${taken.size} combs filled, below the floor of ${MIN_COMBS}`);
   // The scheduler starts what it opened. Racing it is harmless (the loser gets
   // WrongPhase) but pointless, so only start a game we opened ourselves.
   if (!adopted) {
@@ -575,8 +614,16 @@ async function playGame(gameNo) {
     }
     for (const a of agents) {
       const P = playerPda(a.kp.publicKey);
-      const st = await program.account.player.fetch(P);
       try {
+        // Inside the try, deliberately. This fetch used to sit above it, so a
+        // single RPC hiccup on one agent threw out of the whole loop and NOBODY
+        // settled that game: no claim_winnings, no claim_skill, no cash_out.
+        // Settlement is the burstiest moment in a game (nine agents, three
+        // calls each, back to back), which is exactly when a public RPC answers
+        // 429, so this was not rare. An agent that never got into the lobby has
+        // no Player account either, and that is the same shape of failure: one
+        // agent's, not the game's.
+        const st = await fetchPlayer(P);
         if (st.status.active && st.currentCircle === winner)
           await program.methods.claimWinnings().accountsPartial({ game: gamePda, vault: vaultPda, winningCircle: circlePda(winner), player: P, owner: a.kp.publicKey, actor: a.kp.publicKey,
             stats: statsPda(a.kp.publicKey), treasury: treasuryPda,

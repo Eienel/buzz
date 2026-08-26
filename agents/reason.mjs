@@ -51,7 +51,12 @@ export const personaFor = (i) => PERSONAS[i % PERSONAS.length];
 // while the models were still working. The commit window is the real bound and
 // budgetFor already applies it; this only stops a long tempo authorising a
 // minute-long call.
-const TIMEOUT_CAP = Number(process.env.USEPOD_TIMEOUT_MS ?? 30000);
+// Raised again on production numbers rather than sandbox ones. Over a 255-call
+// window the live arena answered 121 and skipped 134, and 111 of those 134 were
+// "This operation was aborted": the deadline, not the model. Answered latency
+// was p50 12.7s, p95 25.2s, so a 27s deadline was cutting off roughly half the
+// calls while the model was still working.
+const TIMEOUT_CAP = Number(process.env.USEPOD_TIMEOUT_MS ?? 34000);
 const MAX_TOKENS = Number(process.env.USEPOD_MAX_TOKENS ?? 700);
 
 // A fixed timeout does not survive short games. Commit is 60% of an instance,
@@ -67,7 +72,13 @@ function budgetFor(instanceSeconds, stagger = 0) {
   // whatever the cap is (1 of 4 answered), the same four spaced out answer in
   // 5.3s, 8.9s and 14.4s (3 of 4). Spacing them buys the room to wait longer,
   // and a quarter of the window is still held back for the two commits.
-  return Math.max(2500, Math.min(TIMEOUT_CAP, commitWindow * 0.75 - stagger));
+  // 0.75 of a 60s tempo's window is 27s, which sat right on the measured p95.
+  // Two commits take a couple of seconds, not the nine that 0.75 held back, so
+  // the reserve is 15% now. That is the most this lever can give: at 60s the
+  // budget only reaches 30.6s, and the tail runs past it. The window itself is
+  // the real bound, so pods want a slower tempo (at 120s the cap binds first,
+  // at 34s, which is clear of the p95 by nine seconds).
+  return Math.max(2500, Math.min(TIMEOUT_CAP, commitWindow * 0.85 - stagger));
 }
 
 export const reasoningEnabled = () => TOKEN.length > 0;

@@ -533,4 +533,105 @@ describe("buzz: backing an agent", () => {
     } catch { threw = true; }
     assert.isTrue(threw, "an unsettled book must not pay out");
   });
+
+  // The payout path had no test at all: everything above stops at the moment
+  // money would move. A book that takes stakes correctly and pays out wrongly
+  // is worse than one that refuses both, and which branch fires here is chosen
+  // by the program's own randomness, so all three are asserted at once rather
+  // than one being pinned by a fixture.
+  it("settles the book and pays the pool out to the last token", async () => {
+    const waitPhase = async () => {
+      const gg = await program.account.game.fetch(g);
+      const ms = gg.phaseEndsAt.toNumber() * 1000 - Date.now() + 1200;
+      if (ms > 0) await sleep(ms);
+    };
+    // phaseEndsAt is the validator's clock, not this process's, so a crank
+    // issued a moment early is rejected with PhaseNotOver. Let the program say
+    // when the window is really over.
+    const crank = async (call: () => Promise<string>) => {
+      for (let t = 0; t < 15; t++) {
+        try { return await call(); }
+        catch (e) {
+          if (!String(e).includes("PhaseNotOver")) throw e;
+          await sleep(1200);
+        }
+      }
+      throw new Error("phase never opened after 15 attempts");
+    };
+
+    let alive = players.map((_, i) => i);
+    for (let guard = 0; guard < 12; guard++) {
+      if (!(await program.account.game.fetch(g)).status.running) break;
+      await waitPhase();
+      await crank(() => program.methods.advanceToReveal()
+        .accountsPartial({ game: g, cranker: authority.publicKey }).rpc());
+      await waitPhase();
+      await crank(() => program.methods.selectDeath()
+        .accountsPartial({ game: g, recentSlotHashes: SYSVAR_SLOT_HASHES_PUBKEY,
+                           randomness: null, cranker: authority.publicKey })
+        .remainingAccounts(alive.map((i) => ({ pubkey: combPda(g, i), isSigner: false, isWritable: false })))
+        .rpc());
+      const doomed = (await program.account.game.fetch(g)).doomedCircle;
+      await program.methods.executeDeath(doomed)
+        .accountsPartial({ game: g, circle: combPda(g, doomed), cranker: authority.publicKey }).rpc();
+      alive = alive.filter((i) => i !== doomed);
+      await waitPhase();
+      await crank(() => program.methods.advanceInstance()
+        .accountsPartial({ game: g, cranker: authority.publicKey }).rpc());
+    }
+    assert.equal(alive.length, 1, "exactly one comb survives");
+    const winningComb = alive[0];
+
+    const backed = [players[0].kp.publicKey, players[1].kp.publicKey];
+    for (const t of backed) {
+      await program.methods.resolveTarget().accountsPartial({
+        game: g, market, targetPool: tpoolPda(market, t),
+        targetPlayer: playerPda(g, t), winningCircle: combPda(g, winningComb),
+        cranker: authority.publicKey,
+      }).rpc();
+    }
+    const m = await program.account.market.fetch(market);
+    assert.isTrue(m.settled, "every backed agent decided means the book is settled");
+    assert.equal(m.resolved, m.targets, "resolved count matches the number of targets");
+
+    // What each bettor is owed, computed from the market the way the program
+    // does: the whole pool split across the winning side, or a full refund when
+    // nobody backed a survivor. A book that keeps the pot in that case is not a
+    // book, so the refund branch is asserted, not excused.
+    const pool = m.totalPool.toNumber(), winPool = m.winningPool.toNumber();
+    const stakes = [{ b: bettors[0], t: backed[0], amount: 6 * UNIT },
+                    { b: bettors[1], t: backed[1], amount: 2 * UNIT }];
+    let paid = 0;
+    for (const { b, t, amount } of stakes) {
+      const tp = await program.account.targetPool.fetch(tpoolPda(market, t));
+      const owed = winPool === 0 ? amount
+                 : tp.won ? Math.floor(amount * pool / winPool)
+                 : 0;
+      const before = Number((await getAccount(conn, b.ata, undefined, asset.tokenProgram)).amount);
+      await program.methods.claimBet().accountsPartial({
+        market, marketVault: mvaultPda(market), targetPool: tpoolPda(market, t),
+        bet: betPda(market, b.kp.publicKey, t),
+        bettorToken: b.ata, bettor: b.kp.publicKey, payer: b.kp.publicKey, relayer: null,
+        stakeMint: asset.mint, tokenProgram: asset.tokenProgram,
+      }).signers([b.kp]).rpc();
+      const after = Number((await getAccount(conn, b.ata, undefined, asset.tokenProgram)).amount);
+      assert.equal(after - before, owed, "bettor is paid exactly the parimutuel share");
+      paid += owed;
+
+      let twice = false;
+      try {
+        await program.methods.claimBet().accountsPartial({
+          market, marketVault: mvaultPda(market), targetPool: tpoolPda(market, t),
+          bet: betPda(market, b.kp.publicKey, t),
+          bettorToken: b.ata, bettor: b.kp.publicKey, payer: b.kp.publicKey, relayer: null,
+          stakeMint: asset.mint, tokenProgram: asset.tokenProgram,
+        }).signers([b.kp]).rpc();
+      } catch { twice = true; }
+      assert.isTrue(twice, "a bet pays once");
+    }
+
+    assert.equal(paid, pool, "the whole pool is paid out, no more and no less");
+    const vault = await getAccount(conn, mvaultPda(market), undefined, asset.tokenProgram);
+    assert.equal(Number(vault.amount), 0, "the book's vault drains to zero");
+  });
 });
