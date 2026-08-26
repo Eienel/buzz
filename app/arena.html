@@ -263,27 +263,36 @@
   .bopt[disabled]{opacity:.55;cursor:default}
 
   /* the bet panel */
-  .betveil{position:fixed;inset:0;z-index:300;background:rgba(8,6,3,.72);
+  /* The hive behind this is bright and busy, so the veil has to actually
+     cover it and the box has to read as a surface sitting on top. At .72 with
+     no blur the combs showed straight through the panel and the whole thing
+     looked broken. */
+  .betveil{position:fixed;inset:0;z-index:300;background:rgba(6,4,2,.88);
+    backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);
     display:flex;align-items:center;justify-content:center;padding:16px}
   .betveil[hidden]{display:none}
-  .betbox{width:100%;max-width:380px;background:var(--panel);border:1px solid var(--line);
-    border-radius:16px;padding:20px;box-shadow:0 24px 60px -20px rgba(0,0,0,.7)}
+  .betbox{width:100%;max-width:380px;background:var(--card);border:1px solid var(--edge2);
+    border-radius:16px;padding:20px;
+    box-shadow:0 30px 70px -18px rgba(0,0,0,.85), inset 0 1px 0 rgba(255,210,128,.06)}
   .betbox h3{margin:0 0 2px;font-size:16px;color:var(--text)}
   .betbox .who{font-family:var(--mono);font-size:12px;color:var(--dim);margin-bottom:14px}
-  .odds{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--line);
-    border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-bottom:14px}
-  .odds div{background:var(--panel2);padding:9px 11px}
+  .odds{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--edge);
+    border:1px solid var(--edge);border-radius:10px;overflow:hidden;margin-bottom:14px}
+  .odds div{background:var(--card2);padding:9px 11px}
   .odds .k{font-size:11px;color:var(--dim);margin-bottom:3px}
   .odds .v{font-family:var(--mono);font-size:14px;color:var(--text)}
   .betrow{display:flex;gap:8px;align-items:stretch;margin-bottom:10px}
-  .betrow input{flex:1;min-width:0;background:var(--panel2);border:1px solid var(--line);
-    border-radius:9px;padding:10px 12px;color:var(--text);font-family:var(--mono);font-size:14px}
-  .betrow input:focus{outline:none;border-color:var(--accent)}
-  .betgo{background:var(--accent);color:#1a1204;border:0;border-radius:9px;padding:10px 16px;
-    font-weight:700;font-size:13px;cursor:pointer;white-space:nowrap}
+  .betrow input{flex:1;min-width:0;background:var(--card2);border:1px solid var(--edge2);
+    border-radius:9px;padding:12px;color:var(--text);font-family:var(--mono);font-size:16px}
+  /* 16px is not a taste call: iOS Safari zooms the whole page on focus for
+     anything smaller, and the board never zooms back out. */
+  .betrow input:focus{outline:none;border-color:var(--honey)}
+  .betgo{background:var(--honey);color:#1a1204;border:0;border-radius:9px;
+    padding:12px 20px;font-weight:700;font-size:14px;cursor:pointer;white-space:nowrap;
+    box-shadow:0 6px 18px -8px rgba(255,179,0,.8)}
   .betgo:disabled{opacity:.5;cursor:default}
   .betgo:active:not(:disabled){transform:translateY(1px)}
-  .betalt{width:100%;background:none;border:1px solid var(--line);border-radius:9px;
+  .betalt{width:100%;background:none;border:1px solid var(--edge);border-radius:9px;
     padding:9px;color:var(--dim);font-size:12px;cursor:pointer;margin-bottom:10px}
   .betalt:hover:not(:disabled){color:var(--text);border-color:var(--dim)}
   .betalt:disabled{opacity:.6;cursor:default}
@@ -292,21 +301,21 @@
   .lbhead{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin:0 0 12px}
   .lbhead h2{margin:0;font-size:15px;color:var(--text);font-weight:600}
   .lbhead .sub{font-size:12px;color:var(--dim)}
-  .lbwrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px}
+  .lbwrap{overflow-x:auto;border:1px solid var(--edge);border-radius:12px}
   table.lb{width:100%;border-collapse:collapse;min-width:440px}
   table.lb th{text-align:left;font-size:11px;color:var(--dim);font-weight:500;
-    padding:9px 12px;border-bottom:1px solid var(--line);white-space:nowrap}
-  table.lb td{padding:9px 12px;border-bottom:1px solid var(--panel2);
+    padding:9px 12px;border-bottom:1px solid var(--edge);white-space:nowrap}
+  table.lb td{padding:9px 12px;border-bottom:1px solid var(--card2);
     font-family:var(--mono);font-size:12.5px;color:var(--text);white-space:nowrap}
   table.lb tr:last-child td{border-bottom:0}
   table.lb .num{text-align:right}
-  table.lb .pos{color:var(--accent)}
+  table.lb .pos{color:var(--honey)}
   table.lb .neg{color:#ff8f6f}
   table.lb tr.me td{background:rgba(255,179,0,.07)}
-  table.lb tr.me .who::after{content:" you";color:var(--accent);font-size:10px}
+  table.lb tr.me .who::after{content:" you";color:var(--honey);font-size:10px}
   .lbnote{font-size:12px;color:var(--dim);margin-top:10px;line-height:1.55}
   .betnote{font-size:12px;color:var(--dim);line-height:1.5}
-  .betnote a{color:var(--accent)}
+  .betnote a{color:var(--honey)}
   .beterr{font-size:12px;color:#ff8f6f;line-height:1.5;word-break:break-word}
   .betclose{float:right;background:none;border:0;color:var(--dim);font-size:20px;
     line-height:1;cursor:pointer;padding:0 2px}
@@ -335,6 +344,25 @@
     .brand{font-size:20px}
     .sub{font-size:12.5px;width:100%}
     .body{padding:14px}
+  }
+  /* The panel is a dialog on a phone, not a card floating in the middle of
+     one. Full width, pinned to the bottom where a thumb is, and the two
+     actions stacked so neither is a small target. */
+  @media(max-width:560px){
+    .betveil{align-items:flex-end;padding:0}
+    .betbox{max-width:none;border-radius:18px 18px 0 0;padding:18px 16px calc(18px + env(safe-area-inset-bottom))}
+    .odds{grid-template-columns:1fr 1fr}
+    .betrow{flex-direction:column}
+    .betrow input{width:100%}
+    .betgo{width:100%;padding:14px}
+    .betalt{padding:12px}
+    .betclose{font-size:26px;padding:4px 8px;margin:-4px -4px 0 0}
+    /* A six-column table on a 360px screen is a table nobody reads. The two
+       columns that decide the ranking stay; volume goes, because the P&L
+       already carries it. */
+    table.lb{min-width:0}
+    table.lb th:nth-child(5),table.lb td:nth-child(5){display:none}
+    table.lb th,table.lb td{padding:8px 9px;font-size:12px}
   }
   @media(max-width:520px){
     .page{padding:12px 8px 40px}
