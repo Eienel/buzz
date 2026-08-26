@@ -34,8 +34,8 @@ the Dockerfile with a `/healthz` check already wired.
 | `RELAY_STAKE_UNITS` | no | Whole tokens a paid join stakes, default 10. |
 | `RUN_SWARM` | no | `1` also runs the reference agents in-process. |
 | `PAYER` | with `RUN_SWARM` | Funds the swarm's ephemeral agents. Path or key JSON, same as above. |
-| `FEED_SECRET` | if the swarm is separate | Shared secret the swarm sends as `x-feed-secret` when publishing its reasoning traces to `/thinking`. With `RUN_SWARM=1` the swarm posts over loopback and this can be left unset; set it the moment the swarm runs anywhere else, or the write endpoints are open to anything that reaches the server over the same host. |
-| `FEED_URL` | if the swarm is separate | Where the swarm posts traces. Defaults to `http://127.0.0.1:$PORT`. |
+| `FEED_SECRET` | no | Authenticates the swarm's trace posts to `/thinking`. Derived from `SWARM_SEED` when unset, so both sides agree with nothing configured. Set it on **both** services to override, or on neither. |
+| `FEED_URL` | no | Where the swarm posts traces. Tries `http://127.0.0.1:$PORT` first and falls back to `https://lastbuzz.fun` when nothing answers there, which is the separate-service case. Set it to skip the discovery. |
 | `FEED_OFF` | no | `1` stops a swarm publishing traces at all. |
 | `THOUGHTS_MAX` | no | Traces held in memory, default 400. Roughly 27 minutes of coverage at three concurrent games. |
 

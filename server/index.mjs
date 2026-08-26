@@ -14,6 +14,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
+import jsSha3 from "js-sha3";
 import { Connection, PublicKey } from "@solana/web3.js";
 import { makeArena, PRICE, challenge, registerAgent, authed, agentName } from "./arena-api.mjs";
 import { makeAutoplay } from "./autoplay.mjs";
@@ -25,6 +26,8 @@ import { nameFor, houseWallets } from "./names.mjs";
 import { verifyPayment } from "./x402.mjs";
 import { loadRelayer, startDrain } from "./relayer.mjs";
 import { DATA_DIR } from "./keypair.mjs";
+
+const { keccak_256 } = jsSha3;
 
 const ROOT = fileURLToPath(new URL("../app/", import.meta.url));
 const PORT = Number(process.env.PORT ?? 3000);
@@ -353,7 +356,12 @@ const readBody = (req) => new Promise((resolve) => {
 const THOUGHTS_MAX = Number(process.env.THOUGHTS_MAX ?? 400);
 const thoughts = [];
 const txCache = new Map();
-const FEED_SECRET = process.env.FEED_SECRET ?? "";
+// Derived from the seed both processes already share, so a swarm running as
+// its own Railway service authenticates with nothing configured. See the note
+// in agents/feed.mjs: this is worth exactly what SWARM_SEED is worth, which is
+// the same thing the agent keypairs are worth, so it adds no new exposure.
+const FEED_SECRET = process.env.FEED_SECRET
+  ?? keccak_256(`buzz-feed:${process.env.SWARM_SEED ?? "buzz-devnet-swarm-v1"}`);
 // Named for the explorer links, which need to know which cluster to open.
 const CLUSTER = /mainnet/.test(RPC) ? "mainnet-beta" : /testnet/.test(RPC) ? "testnet" : "devnet";
 
@@ -369,12 +377,16 @@ const CLUSTER = /mainnet/.test(RPC) ? "mainnet-beta" : /testnet/.test(RPC) ? "te
 const feedAuthed = (req) => {
   // A JSON content-type is not a CORS-simple request, so a browser must
   // preflight it. Nothing here answers a preflight, which is what keeps a page
-  // on another origin from posting to a loopback-gated dev server.
+  // on another origin from posting from a visitor's browser.
   if(req.method !== "POST") return false;
   if(!String(req.headers["content-type"] ?? "").startsWith("application/json")) return false;
-  if(FEED_SECRET) return req.headers["x-feed-secret"] === FEED_SECRET;
-  const ip = req.socket.remoteAddress ?? "";
-  return ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1";
+  const got = String(req.headers["x-feed-secret"] ?? "");
+  // Constant time, because this now runs against a value an attacker can
+  // submit repeatedly rather than only from loopback.
+  if(got.length !== FEED_SECRET.length) return false;
+  let diff = 0;
+  for(let i = 0; i < got.length; i++) diff |= got.charCodeAt(i) ^ FEED_SECRET.charCodeAt(i);
+  return diff === 0;
 };
 
 const send = (res, status, body) => {
