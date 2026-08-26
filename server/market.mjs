@@ -173,10 +173,16 @@ export function makeMarket({ program, payer, connection }) {
             total: p.total.toString(), resolved: p.resolved, won: p.won };
         } catch { /* not ours */ }
       }
+      // The page formats these, and it cannot know how without being told:
+      // BUZZ is six decimals, not the nine that is everyone's reflex, so a
+      // hardcoded divisor rendered a 45 token pool as "0.045".
+      let decimals = 6;
+      try { decimals = (await connection.getTokenSupply(m.stakeMint)).value.decimals; } catch {}
       return {
         market: market.toBase58(),
         vault: mvaultPda(market).toBase58(),
         stakeMint: m.stakeMint.toBase58(),
+        decimals,
         totalPool: m.totalPool.toString(),
         winningPool: m.winningPool.toString(),
         lockInstance: m.lockInstance,
@@ -247,7 +253,18 @@ export function makeMarket({ program, payer, connection }) {
       // shown next to it so a big number with two bets behind it is visible
       // as exactly that.
       })).sort((a, b) => b.pnl - a.pnl || b.hitRate - a.hitRate);
-      return { on: true, bettors, graded, books: markets.length };
+      // Bets can span mints, so the amounts are reported in the units they were
+      // staked in along with the decimals for each, rather than summed into a
+      // single number that would be adding ANSEM to BUZZ.
+      const decimalsBy = {};
+      for (const m of markets) {
+        const k = m.stakeMint.toBase58();
+        if (k in decimalsBy) continue;
+        try { decimalsBy[k] = (await connection.getTokenSupply(m.stakeMint)).value.decimals; }
+        catch { decimalsBy[k] = 6; }
+      }
+      return { on: true, bettors, graded, books: markets.length,
+               decimals: Math.min(...Object.values(decimalsBy), 6) };
     },
 
     /**
