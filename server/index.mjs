@@ -126,6 +126,15 @@ try { history = JSON.parse(readFileSync(HISTORY_FILE, "utf8")); } catch {}
   }
 }
 const recorded = new Set(history.map((h) => h.gameId));
+const HISTORY_AT_BOOT = history.length;
+// Proven by writing, not by checking a path. A mount that exists but is
+// read-only fails in exactly the same way as one that is not there.
+let HISTORY_WRITABLE = false;
+try { writeFileSync(HISTORY_FILE, JSON.stringify(history)); HISTORY_WRITABLE = true; }
+catch(e){ console.log(`[history] ${HISTORY_FILE} is not writable: ${e.message}`); }
+console.log(`[history] ${HISTORY_AT_BOOT} records from ${HISTORY_FILE}` +
+  `${HISTORY_WRITABLE ? "" : " (NOT WRITABLE)"}` +
+  `${DATA_DIR.includes("/server") ? " (DATA_DIR unset: this is the container filesystem and a deploy will wipe it)" : ""}`);
 let historyDirty = false;
 
 /**
@@ -1135,6 +1144,28 @@ createServer(async (req,res)=>{
   if(p === "/healthz"){
     res.writeHead(snapshot.ok?200:503,{ "content-type":"text/plain" });
     return res.end(snapshot.ok ? "ok" : "rpc: "+snapshot.error);
+  }
+
+  // Where this process is actually keeping state, and whether it found
+  // anything there at boot.
+  //
+  // Worth an endpoint because it cannot be answered from outside: past games
+  // resetting looks identical whether the volume is unmounted, mounted
+  // somewhere else, or mounted correctly and the records were never written.
+  // Guessing at that from the outside wasted an afternoon.
+  if(p === "/api/storage"){
+    return send(res, 200, {
+      dataDir: DATA_DIR,
+      historyFile: HISTORY_FILE,
+      // Set at boot, before anything could have been recorded this run.
+      recordsAtBoot: HISTORY_AT_BOOT,
+      recordsNow: history.length,
+      // A volume is a mount, so it is not inside the app directory. If these
+      // are the same, DATA_DIR is unset and this is the container filesystem,
+      // which a deploy replaces.
+      persisted: !DATA_DIR.includes("/server"),
+      writable: HISTORY_WRITABLE,
+    });
   }
 
   // home is the front door now; the long-form docs move to /docs
