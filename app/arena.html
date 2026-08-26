@@ -54,7 +54,7 @@
     letter-spacing:.5px;color:var(--text)}
   .sub{color:var(--dim);font-size:13.5px}
   .sub a{color:var(--honey);border-bottom:1px solid rgba(255,179,0,.4)}
-  .right{margin-left:auto;display:flex;gap:10px;align-items:center}
+  .right{margin-left:auto;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
   .chip{font-family:var(--mono);font-size:12px;color:var(--dim);background:#140f09;
     border:1px solid var(--edge);border-radius:99px;padding:5px 13px}
   .chip#tally b{color:var(--alive);font-weight:600}
@@ -123,11 +123,16 @@
 
   /* hex view: combs drawn as a real tessellation rather than a card row.
      Same data as the card view, arranged the way a hive actually is. */
-  .hive{padding:22px 18px 24px;display:flex;flex-direction:column;align-items:center}
-  .hrow{display:flex;gap:10px}
-  .hrow+.hrow{margin-top:-39px}      /* nest: pointy-top hexes overlap 25% */
-  .hrow.off{margin-left:74px}
-  .hex{width:138px;height:158px;position:relative;flex:0 0 auto;
+  /* One variable drives the whole tessellation. It was three hard-coded numbers
+     that only added up at desktop width: a row plus its offset needs 508px, and
+     a phone gives the card about 310px, so two of the six combs were cut off by
+     the shell's overflow and there was no way to scroll to them. */
+  .hive{--hw:138px;--hg:10px;padding:22px 18px 24px;
+    display:flex;flex-direction:column;align-items:center;overflow-x:auto}
+  .hrow{display:flex;gap:var(--hg)}
+  .hrow+.hrow{margin-top:calc(var(--hw) * -0.2826)}  /* nest: overlap 25% */
+  .hrow.off{margin-left:calc((var(--hw) + var(--hg)) / 2)}
+  .hex{width:var(--hw);height:calc(var(--hw) * 1.1449);position:relative;flex:0 0 auto;
     clip-path:polygon(50% 0%,100% 25%,100% 75%,50% 100%,0% 75%,0% 25%);
     background:var(--edge)}
   .hex .in{position:absolute;inset:2px;
@@ -223,6 +228,11 @@
      backed. The comb needs a positioning context; both views already clip
      their own overflow, so the menu escapes on a layer of its own. */
   .backwrap{position:absolute;top:8px;right:8px;z-index:3}
+  /* In a hex, the top-right corner is outside the clip-path, so the control was
+     sliced down to "ba". The hexagon is widest through its middle, so inside a
+     comb it sits in the flow under the amount instead of in a corner that is
+     not there. */
+  .hex .backwrap{position:static;margin-top:5px}
   .comb,.hex{position:relative}
   .backb{font:inherit;font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;
     padding:3px 9px;border-radius:99px;cursor:pointer;color:var(--dim);
@@ -254,7 +264,51 @@
   .hist h3{margin:0 0 4px;font-size:13px;letter-spacing:.9px;text-transform:uppercase;color:var(--dimmer)}
   .hist p.n{margin:0 0 14px;color:var(--dimmer);font-size:12.5px}
   .cols{display:grid;grid-template-columns:1.45fr 1fr;gap:20px}
+  /* A grid item is min-width:auto by default, so the standings table widened its
+     own column instead of scrolling inside it, and the overflow wrapper never
+     got the chance to do its job. */
+  .cols > *{min-width:0}
   @media(max-width:820px){.cols{grid-template-columns:1fr}}
+
+  /* Phones. The shell clips rather than scrolls, so anything that does not fit
+     is not merely awkward, it is unreachable: the hive lost two combs and the
+     header lost the tally, the ticker and the jackpot entirely. */
+  @media(max-width:760px){
+    .hive{--hw:112px;--hg:8px;padding:18px 10px 20px}
+    header.top{padding:13px 14px;gap:10px}
+    .right{margin-left:0;width:100%;gap:8px}
+    .brand{font-size:20px}
+    .sub{font-size:12.5px;width:100%}
+    .body{padding:14px}
+  }
+  @media(max-width:520px){
+    .page{padding:12px 8px 40px}
+    .shell{border-radius:16px}
+    .body{padding:11px}
+    .hive{--hw:92px;--hg:6px;padding:14px 4px 16px}
+    /* A hex nests into the one above by a quarter of its height, which only
+       works while that quarter is empty. Shrunk to 92px the contents fill the
+       cell and the next row's label lands on this row's amount, so the contents
+       come down and the nesting eases off with them. The amount goes: the hive
+       is the shape view, and the card view carries the numbers. */
+    .hrow+.hrow{margin-top:calc(var(--hw) * -0.18)}
+    .hex .in{gap:3px}
+    .hex .hid{font-size:9.5px}
+    .hex .hband{font-size:11px}
+    .hex .hamt{display:none}
+    .hex .dots{max-width:56px;gap:3px;min-height:12px}
+    .hex .dots i{width:8px;height:8px}
+    .hex .backwrap{margin-top:3px}
+    .backb{font-size:9px;padding:2px 5px}
+    /* The toggles are the controls the page is for; the read-outs beside them
+       can wrap under rather than push them off the edge. */
+    .view button{padding:5px 9px;font-size:10px}
+    .chip{font-size:11px;padding:4px 10px}
+  }
+  /* Wide content scrolls inside its own container rather than being clipped by
+     the shell. The standings ran 20px past a phone and those 20px held the
+     points column. */
+  .hscroll{overflow-x:auto}
   table.h{width:100%;border-collapse:collapse;font-size:13px}
   table.h th{text-align:left;font-weight:500;font-size:11px;letter-spacing:.8px;
     text-transform:uppercase;color:var(--dimmer);padding:0 10px 8px 0;border-bottom:1px solid var(--edge)}
@@ -707,8 +761,8 @@ function renderHistory(h){
       that is what the season pays on.</p>
     <div class="cols">
       <div>
-        <table class="h"><thead><tr><th>game</th><th>winner</th><th>survivors</th>
-          <th>best call</th><th>volume</th></tr></thead><tbody>${rows}</tbody></table>
+        <div class="hscroll"><table class="h"><thead><tr><th>game</th><th>winner</th><th>survivors</th>
+          <th>best call</th><th>volume</th></tr></thead><tbody>${rows}</tbody></table></div>
         ${(h.total ?? games.length) > games.length
           ? `<button id="more" class="loadmore">Load more<span class="rank"> ${games.length} of ${h.total}</span></button>`
           : games.length > 12 ? `<p class="n" style="text-align:center">That is every game on record.</p>` : ""}
