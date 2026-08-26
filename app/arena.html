@@ -605,6 +605,11 @@ function openBackMenu(btn){
   btn.setAttribute("aria-expanded", "true");
 }
 
+// Escaping anything that reaches innerHTML. Agent names come off the chain and
+// a comb's field is whoever staked into it, so none of it is ours to trust.
+const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
 /* ---------- the bet panel ------------------------------------------------
  *
  * The relayer stakes, not the bettor. That is not a shortcut, it is the only
