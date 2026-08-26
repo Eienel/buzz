@@ -36,8 +36,8 @@
      reflows as it ticks. */
   .n{font-family:var(--mono);font-variant-numeric:tabular-nums}
 
-  header.top{padding:14px 22px;display:flex;gap:16px;align-items:center;flex-wrap:wrap;
-    border-bottom:1px solid var(--edge);background:#100d09}
+  header.top{padding:13px 22px;display:flex;gap:16px;align-items:center;flex-wrap:wrap;
+    border-bottom:1px solid var(--edge);background:linear-gradient(180deg,#171109,#100d09)}
   .brand{display:flex;align-items:center;gap:10px;font-weight:800;font-size:21px;
     letter-spacing:.4px;color:var(--text)}
   .sub{color:var(--dim);font-size:13px}
@@ -51,18 +51,42 @@
   .chip.live.down{color:var(--dead)} .chip.live.down i{background:var(--dead)}
   @keyframes blip{50%{opacity:.2}}
 
-  .page{max-width:1020px;margin:0 auto;padding:30px 18px 70px}
-  h1{font-size:28px;line-height:1.15;letter-spacing:-.8px;margin:0 0 9px}
-  .lede{color:var(--dim);margin:0 0 24px;max-width:70ch;font-size:14.5px}
+  /* The honeycomb the rest of the site sits on. Fixed rather than scrolled:
+     a repeating pattern inside a scrolling container repaints on every frame. */
+  .page{position:relative;min-height:100vh;padding:24px 16px 54px;overflow:hidden}
+  .page::before{content:"";position:fixed;inset:0;pointer-events:none;opacity:.055;
+    background-image:url("data:image/svg+xml;utf8,\
+<svg xmlns='http://www.w3.org/2000/svg' width='56' height='97' viewBox='0 0 56 97'>\
+<g fill='none' stroke='%23ffb300' stroke-width='2'>\
+<path d='M28 0 L56 16 L56 48 L28 64 L0 48 L0 16 Z'/>\
+<path d='M28 64 L56 80 L56 112 L28 128 L0 112 L0 80 Z'/></g></svg>");
+    background-size:56px 97px}
+  .shell{position:relative;max-width:1060px;margin:0 auto;background:var(--shell);
+    border:1px solid var(--edge);border-radius:22px;overflow:hidden;
+    box-shadow:0 30px 90px rgba(0,0,0,.55)}
+  .inner{padding:26px 26px 34px}
+  @media(max-width:620px){.page{padding:12px 10px 40px}.inner{padding:20px 16px 28px}
+    .shell{border-radius:16px}}
+
+  /* Hierarchy by weight and colour, not by scale. An eyebrow does the work a
+     36px headline was doing, and the numbers below stay the loudest thing. */
+  .eyebrow{font-family:var(--mono);font-size:10.5px;color:var(--honey);
+    text-transform:uppercase;letter-spacing:.16em;margin:0 0 9px}
+  h1{font-size:21px;line-height:1.2;letter-spacing:-.5px;margin:0 0 7px;font-weight:650}
+  .lede{color:var(--dim);margin:0 0 22px;max-width:80ch;font-size:14px}
   .lede b{color:var(--text);font-weight:600}
 
   /* ---- stat strip: hairlines, no boxes ---- */
-  .stats{display:grid;grid-template-columns:repeat(6,1fr);
+  /* Six equal columns is the shape every dashboard defaults to. Spend is the
+     figure this page exists to show, so it gets the room and the others sit
+     beside it at a smaller weight. */
+  .stats{display:grid;grid-template-columns:1.5fr 1fr 1fr 1fr 1.15fr .9fr;
     border-top:1px solid var(--edge);border-bottom:1px solid var(--edge)}
-  .stats div{padding:12px 14px 11px;border-left:1px solid var(--edge)}
+  .stats div{padding:13px 16px 12px;border-left:1px solid var(--edge)}
   .stats div:first-child{border-left:0;padding-left:0}
+  .stats div:first-child b{font-size:26px;color:var(--honey)}
   .stats b{display:block;font-family:var(--mono);font-variant-numeric:tabular-nums;
-    font-size:19px;color:var(--gold);letter-spacing:-.5px;font-weight:600;line-height:1.2}
+    font-size:17px;color:var(--gold);letter-spacing:-.5px;font-weight:600;line-height:1.2}
   .stats b small{font-size:12px;color:var(--dim);font-weight:400}
   .stats span{display:block;font-size:10px;color:var(--dimmer);text-transform:uppercase;
     letter-spacing:.1em;margin-top:5px}
@@ -70,12 +94,18 @@
     .stats div{border-left:1px solid var(--edge)}
     .stats div:nth-child(3n+1){border-left:0;padding-left:0}
     .stats div:nth-child(n+4){border-top:1px solid var(--edge)}}
+  @media(max-width:560px){.stats{grid-template-columns:repeat(2,1fr)}
+    .stats div:nth-child(3n+1){border-left:1px solid var(--edge);padding-left:16px}
+    .stats div:nth-child(2n+1){border-left:0;padding-left:0}
+    .stats div:nth-child(n+3){border-top:1px solid var(--edge)}}
 
   /* ---- chart ---- */
-  .panel{margin:26px 0 0;border:1px solid var(--edge);border-radius:12px;
-    background:var(--card);overflow:hidden}
+  /* Sections are separated by a rule and their own ground, not by stacking
+     another rounded outline inside an already-rounded shell. */
+  .panel{margin:24px 0 0;border-top:1px solid var(--edge);background:transparent}
+  .stats + .panel{border-top:0;margin-top:4px}
   .ptitle{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;
-    padding:11px 15px;border-bottom:1px solid var(--edge)}
+    padding:13px 0 11px}
   .ptitle h2{margin:0;font-size:13px;font-weight:650;letter-spacing:-.2px}
   .ptitle p{margin:0;color:var(--dimmer);font-size:11.5px}
   .legend{margin-left:auto;display:flex;gap:11px;flex-wrap:wrap}
@@ -84,13 +114,18 @@
   .legend i{width:14px;height:2px;border-radius:2px}
   /* Scaled to fit, a 1000-unit viewBox collapses to ~80px tall on a phone and
      the axis labels stop being readable. Below that width it scrolls instead. */
-  .chartwrap{padding:12px 8px 8px;overflow-x:auto}
+  .chartwrap{padding:2px 0 8px;overflow-x:auto}
   svg.chart{display:block;width:100%;min-width:600px;height:auto}
 
   /* ---- on-chain history ---- */
   .chainlink{margin-left:auto;font-family:var(--mono);font-size:11.5px}
-  #chain{margin:0 0 18px}
-  .txs{max-height:290px;overflow-y:auto}
+  #chain{margin:22px 0 18px}
+  /* A hard clip mid-row reads as broken rather than as more to scroll, so the
+     last row fades out instead. */
+  .txs{max-height:282px;overflow-y:auto;border:1px solid var(--edge);
+    border-radius:10px;background:var(--card);
+    -webkit-mask-image:linear-gradient(180deg,#000 86%,transparent);
+    mask-image:linear-gradient(180deg,#000 86%,transparent)}
   .tx-row{display:flex;align-items:center;gap:10px;padding:7px 15px;
     border-bottom:1px solid var(--edge);font-family:var(--mono);font-size:12px}
   .tx-row:last-child{border-bottom:0}
@@ -111,14 +146,19 @@
     background:#161009;border:1px solid var(--edge);border-radius:99px;
     padding:5px 13px;cursor:pointer;transition:all .18s var(--ease)}
   .filter button:hover{color:var(--text);border-color:var(--edge2)}
+  .filter button:active{transform:scale(.97)}
+  .tx:active,.tx-row .sig:active{transform:scale(.98)}
   .filter button[aria-pressed="true"]{color:var(--ink);background:var(--honey);
     border-color:var(--honey);font-weight:600}
 
   /* ---- traces ---- */
-  .trace{border:1px solid var(--edge);border-radius:12px;background:var(--card);
-    margin-bottom:9px;animation:in .45s var(--ease) both}
+  /* The agent's colour carries down the left edge, so a column of traces reads
+     as four interleaved streams rather than a stack of identical cards. */
+  .trace{border:1px solid var(--edge);border-left-width:2px;border-radius:3px 12px 12px 3px;
+    background:var(--card);margin-bottom:8px;animation:in .45s var(--ease) both}
   @keyframes in{from{opacity:0;transform:translateY(6px)}}
-  .trace.skip{background:#100d08;border-style:dashed;border-color:#241c10}
+  .trace.skip{background:#100d08;opacity:.82}
+  .trace.skip .steps{padding-bottom:11px}
   .thead{display:flex;align-items:center;gap:9px;flex-wrap:wrap;
     padding:10px 14px;border-bottom:1px solid var(--edge)}
   .trace.skip .thead{border-bottom-color:#241c10}
@@ -180,23 +220,25 @@
   .empty{border:1px dashed var(--edge);border-radius:12px;padding:34px 20px;
     text-align:center;color:var(--dim);background:var(--card)}
   .empty b{display:block;color:var(--text);margin-bottom:6px}
-  footer{max-width:1020px;margin:0 auto;padding:0 18px 60px;color:var(--dimmer);
-    font-size:12.5px;line-height:1.6}
+  footer{position:relative;max-width:1060px;margin:0 auto;padding:16px 26px 0;
+    color:var(--dimmer);font-size:12px;line-height:1.6}
   footer b{color:var(--dim);font-weight:600}
 </style>
 </head>
 <body>
 
+<div class="page">
+<div class="shell">
 <header class="top">
   <a class="brand" href="/"><img src="/mark.svg" width="28" height="28" alt="">BUZZ</a>
   <span class="sub">agent traces &nbsp;<a href="/arena">Arena</a> &nbsp;<a href="/docs">Docs</a> &nbsp;<a href="/agents">Play with your agent</a></span>
   <div class="right"><span class="chip live" id="conn"><i></i>Live</span></div>
 </header>
 
-<div class="page">
+<div class="inner">
+  <p class="eyebrow">Live inference</p>
   <h1>Every call, and what it bought.</h1>
-  <p class="lede">Four models play the same hidden board. Every call is bought with skill points
-  earned on chain, so an agent that reads it badly runs out and goes quiet.</p>
+  <p class="lede">Four models, one hidden board. Calls are bought with skill points earned on chain.</p>
 
   <div class="stats">
     <div><b class="n" id="sHour">…</b><span>calls, last hour</span></div>
@@ -232,13 +274,15 @@
   <div id="feed">
     <div class="empty"><b>Waiting on the next round</b>Calls appear here as the agents make them.</div>
   </div>
-</div>
+</div><!-- .inner -->
+</div><!-- .shell -->
 
 <footer>
   Cost and provider come from the response that served each call. UsePod settles on Solana in
   bulk, not per request, so the signatures here are ours: the commitments the answers produced.
   <a href="/arena">arena</a> · <a href="/docs">docs</a> · <a href="https://github.com/Eienel/buzz">source</a>
 </footer>
+</div><!-- .page -->
 
 <script>
 const $ = (id) => document.getElementById(id);
@@ -402,7 +446,7 @@ function trace(t) {
     : t.hit === false ? `<span class="verdict miss">missed &middot; comb ${t.doomed} died</span>`
     : skip ? "" : '<span class="verdict open">sealed until reveal</span>';
 
-  return `<div class="trace${skip ? " skip" : ""}">
+  return `<div class="trace${skip ? " skip" : ""}" style="border-left-color:${c}">
     <div class="thead">
       <span class="dot" style="background:${c}"></span>
       <span class="who">${esc(t.agent)}</span>
