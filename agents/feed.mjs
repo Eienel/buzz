@@ -21,6 +21,12 @@ const SECRET = process.env.FEED_SECRET ?? "";
 /** On unless switched off. Set FEED_OFF=1 for a swarm that should not publish. */
 const ENABLED = process.env.FEED_OFF !== "1";
 
+// Swallowing every error keeps a broken feed from costing a game a round, and
+// it also made a feed that never worked look identical to one with nothing to
+// say. So the first outcome of each kind is logged, once, and after that it
+// goes quiet again.
+let said = { ok: false, fail: false };
+
 function post(path, body) {
   if (!ENABLED) return;
   const ctl = new AbortController();
@@ -30,7 +36,23 @@ function post(path, body) {
     signal: ctl.signal,
     headers: { "content-type": "application/json", ...(SECRET ? { "x-feed-secret": SECRET } : {}) },
     body: JSON.stringify(body),
-  }).catch(() => {}).finally(() => clearTimeout(timer));
+  }).then((r) => {
+    if (r.ok) {
+      if (!said.ok) { said.ok = true; console.log(`[feed] publishing to ${BASE}`); }
+    } else if (!said.fail) {
+      said.fail = true;
+      console.log(`[feed] ${BASE}${path} refused: ${r.status}` +
+        (r.status === 401
+          ? SECRET ? " (FEED_SECRET does not match the server's)"
+                   : " (server wants a secret, or this is not loopback: set FEED_SECRET on both)"
+          : ""));
+    }
+  }).catch((e) => {
+    if (said.fail) return;
+    said.fail = true;
+    console.log(`[feed] cannot reach ${BASE}: ${String(e.message ?? e).slice(0, 90)}` +
+      " (set FEED_URL if the swarm runs outside the arena's process)");
+  }).finally(() => clearTimeout(timer));
 }
 
 /**
