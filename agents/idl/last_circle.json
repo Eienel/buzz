@@ -579,6 +579,141 @@
       "args": []
     },
     {
+      "name": "claim_bet",
+      "docs": [
+        "Collect. Pays only once every backed agent has been decided, so the",
+        "denominator is final."
+      ],
+      "discriminator": [
+        60,
+        61,
+        185,
+        215,
+        180,
+        119,
+        174,
+        126
+      ],
+      "accounts": [
+        {
+          "name": "market",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market.game",
+                "account": "Market"
+              }
+            ]
+          }
+        },
+        {
+          "name": "market_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              }
+            ]
+          }
+        },
+        {
+          "name": "target_pool",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              },
+              {
+                "kind": "account",
+                "path": "bet.target",
+                "account": "Bet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "bet",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              },
+              {
+                "kind": "account",
+                "path": "bettor"
+              },
+              {
+                "kind": "account",
+                "path": "bet.target",
+                "account": "Bet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "bettor_token",
+          "writable": true
+        },
+        {
+          "name": "bettor",
+          "signer": true
+        },
+        {
+          "name": "stake_mint"
+        },
+        {
+          "name": "token_program"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "claim_creator_cut",
       "docs": [
         "The winning circle's creator claims their κ cut of the leftover pot."
@@ -1178,6 +1313,82 @@
         }
       ],
       "args": []
+    },
+    {
+      "name": "clear_backable",
+      "docs": [
+        "Withdraw an agent from the book. Refuses while a market still needs it",
+        "decided, since resolve_target counts against targets already taken."
+      ],
+      "discriminator": [
+        168,
+        161,
+        225,
+        56,
+        200,
+        31,
+        26,
+        224
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "backable",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  97,
+                  99,
+                  107,
+                  97,
+                  98,
+                  108,
+                  101
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "agent"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "_agent",
+          "type": "pubkey"
+        }
+      ]
     },
     {
       "name": "close_circle",
@@ -2718,6 +2929,113 @@
       "args": []
     },
     {
+      "name": "open_market",
+      "docs": [
+        "Open the book on a running game. Permissionless: anyone may open it, and",
+        "there is exactly one per game."
+      ],
+      "discriminator": [
+        116,
+        19,
+        123,
+        75,
+        217,
+        244,
+        69,
+        44
+      ],
+      "accounts": [
+        {
+          "name": "game",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  97,
+                  109,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game.game_id",
+                "account": "Game"
+              }
+            ]
+          }
+        },
+        {
+          "name": "market",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game"
+              }
+            ]
+          }
+        },
+        {
+          "name": "market_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              }
+            ]
+          }
+        },
+        {
+          "name": "stake_mint"
+        },
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "lock_instance",
+          "type": "u16"
+        }
+      ]
+    },
+    {
       "name": "open_season",
       "docs": [
         "Authority-only: start ranking this mint. Only a mint with an open season",
@@ -2765,6 +3083,361 @@
         },
         {
           "name": "authority",
+          "signer": true
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "place_bet",
+      "docs": [
+        "Back an agent. Bets close at `lock_instance` so nobody can buy in once",
+        "the board has already thinned to a near-certainty."
+      ],
+      "discriminator": [
+        222,
+        62,
+        67,
+        220,
+        63,
+        166,
+        126,
+        33
+      ],
+      "accounts": [
+        {
+          "name": "game",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  97,
+                  109,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game.game_id",
+                "account": "Game"
+              }
+            ]
+          }
+        },
+        {
+          "name": "market",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game"
+              }
+            ]
+          }
+        },
+        {
+          "name": "market_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              }
+            ]
+          }
+        },
+        {
+          "name": "target_player",
+          "docs": [
+            "The agent being backed, proven to be in this game by its own PDA."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  108,
+                  97,
+                  121,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game"
+              },
+              {
+                "kind": "account",
+                "path": "target_player.owner",
+                "account": "Player"
+              }
+            ]
+          }
+        },
+        {
+          "name": "backable",
+          "docs": [
+            "Proof the agent is on the book. Unmarked agents have no such account, so",
+            "the instruction cannot be built for them."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  97,
+                  99,
+                  107,
+                  97,
+                  98,
+                  108,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "target_player.owner",
+                "account": "Player"
+              }
+            ]
+          }
+        },
+        {
+          "name": "target_pool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              },
+              {
+                "kind": "account",
+                "path": "target_player.owner",
+                "account": "Player"
+              }
+            ]
+          }
+        },
+        {
+          "name": "bet",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              },
+              {
+                "kind": "account",
+                "path": "bettor"
+              },
+              {
+                "kind": "account",
+                "path": "target_player.owner",
+                "account": "Player"
+              }
+            ]
+          }
+        },
+        {
+          "name": "bettor_token",
+          "writable": true
+        },
+        {
+          "name": "bettor",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "stake_mint"
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "resolve_target",
+      "docs": [
+        "Decide one backed agent, once the game itself has decided. Winning is",
+        "read the same way claim_winnings reads it: the agent sits in a comb that",
+        "is still alive. Permissionless and idempotent."
+      ],
+      "discriminator": [
+        200,
+        253,
+        220,
+        179,
+        61,
+        61,
+        185,
+        232
+      ],
+      "accounts": [
+        {
+          "name": "game",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  97,
+                  109,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game.game_id",
+                "account": "Game"
+              }
+            ]
+          }
+        },
+        {
+          "name": "market",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game"
+              }
+            ]
+          }
+        },
+        {
+          "name": "target_pool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              },
+              {
+                "kind": "account",
+                "path": "target_pool.target",
+                "account": "TargetPool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "target_player",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  108,
+                  97,
+                  121,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game"
+              },
+              {
+                "kind": "account",
+                "path": "target_player.owner",
+                "account": "Player"
+              }
+            ]
+          }
+        },
+        {
+          "name": "winning_circle",
+          "docs": [
+            "The comb still standing, the same account claim_winnings is handed."
+          ]
+        },
+        {
+          "name": "cranker",
           "signer": true
         }
       ],
@@ -3181,6 +3854,96 @@
         }
       ],
       "args": []
+    },
+    {
+      "name": "set_backable",
+      "docs": [
+        "Allow bets on one agent. Authority only, idempotent.",
+        "",
+        "The house heuristics are published algorithms: herd always moves to the",
+        "largest comb, so backing one is not a prediction, it is arbitrage against",
+        "whoever has not read the source. Splitting the last 200 games in half,",
+        "win rate correlates 0.91 with itself, and almost all of that persistence",
+        "is the fixed strategies repeating. A book on them is solved before it",
+        "opens.",
+        "",
+        "So the market takes bets only on agents marked here. This is the",
+        "mechanism, not the policy: what gets marked is a decision made off",
+        "chain, and today that is the reasoning agents."
+      ],
+      "discriminator": [
+        44,
+        197,
+        124,
+        206,
+        196,
+        132,
+        187,
+        190
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "backable",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  97,
+                  99,
+                  107,
+                  97,
+                  98,
+                  108,
+                  101
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "agent"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "_agent",
+          "type": "pubkey"
+        }
+      ]
     },
     {
       "name": "set_delegate",
@@ -3611,6 +4374,32 @@
       ]
     },
     {
+      "name": "Backable",
+      "discriminator": [
+        245,
+        165,
+        227,
+        51,
+        70,
+        25,
+        202,
+        33
+      ]
+    },
+    {
+      "name": "Bet",
+      "discriminator": [
+        147,
+        23,
+        35,
+        59,
+        15,
+        75,
+        155,
+        32
+      ]
+    },
+    {
       "name": "Circle",
       "discriminator": [
         27,
@@ -3650,6 +4439,19 @@
       ]
     },
     {
+      "name": "Market",
+      "discriminator": [
+        219,
+        190,
+        213,
+        55,
+        0,
+        227,
+        198,
+        154
+      ]
+    },
+    {
       "name": "Player",
       "discriminator": [
         205,
@@ -3660,6 +4462,19 @@
         155,
         206,
         218
+      ]
+    },
+    {
+      "name": "TargetPool",
+      "discriminator": [
+        152,
+        234,
+        178,
+        194,
+        179,
+        10,
+        187,
+        188
       ]
     },
     {
@@ -3811,6 +4626,11 @@
       "code": 6026,
       "name": "RandomnessNotReady",
       "msg": "Randomness is not settled yet, or this game requires VRF"
+    },
+    {
+      "code": 6027,
+      "name": "BettingClosed",
+      "msg": "Betting on this game has closed"
     }
   ],
   "types": [
@@ -3900,6 +4720,67 @@
           },
           {
             "name": "enabled",
+            "type": "bool"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Backable",
+      "docs": [
+        "The book on one game. Its vault is its own; a bug here cannot reach the",
+        "game's pot, which is the point of keeping them separate.",
+        "An agent the market may take bets on.",
+        "",
+        "A marker and nothing else: its existence is the allowlist. place_bet asks",
+        "for one seeded on its target, so a bet on an unmarked agent cannot be",
+        "constructed at all rather than being refused by a check that a client could",
+        "be written around."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "agent",
+            "type": "pubkey"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Bet",
+      "docs": [
+        "One bettor's position on one agent."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "market",
+            "type": "pubkey"
+          },
+          {
+            "name": "bettor",
+            "type": "pubkey"
+          },
+          {
+            "name": "target",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "claimed",
             "type": "bool"
           },
           {
@@ -4206,6 +5087,64 @@
       }
     },
     {
+      "name": "Market",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "game",
+            "type": "pubkey"
+          },
+          {
+            "name": "stake_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "total_pool",
+            "type": "u64"
+          },
+          {
+            "name": "winning_pool",
+            "docs": [
+              "Sum of the pools on agents that survived. Final only once `resolved`",
+              "reaches `targets`, which is what `settled` records."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "targets",
+            "docs": [
+              "Distinct agents backed, and how many have been decided."
+            ],
+            "type": "u32"
+          },
+          {
+            "name": "resolved",
+            "type": "u32"
+          },
+          {
+            "name": "settled",
+            "type": "bool"
+          },
+          {
+            "name": "lock_instance",
+            "docs": [
+              "Last instance on which a bet may be placed."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "vault_bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
       "name": "Player",
       "type": {
         "kind": "struct",
@@ -4316,6 +5255,41 @@
           },
           {
             "name": "Settled"
+          }
+        ]
+      }
+    },
+    {
+      "name": "TargetPool",
+      "docs": [
+        "Everything staked on one agent in one market."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "market",
+            "type": "pubkey"
+          },
+          {
+            "name": "target",
+            "type": "pubkey"
+          },
+          {
+            "name": "total",
+            "type": "u64"
+          },
+          {
+            "name": "resolved",
+            "type": "bool"
+          },
+          {
+            "name": "won",
+            "type": "bool"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
           }
         ]
       }

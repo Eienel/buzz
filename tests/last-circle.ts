@@ -458,14 +458,35 @@ describe("buzz: backing an agent", () => {
     assert.equal(m.settled, false);
   });
 
+  const backablePda = (t: PublicKey) => pda(Buffer.from("backable"), t.toBuffer());
+
+  const mark = async (target: PublicKey) =>
+    program.methods.setBackable(target).accountsPartial({
+      authority: provider.wallet.publicKey, backable: backablePda(target),
+      systemProgram: SystemProgram.programId,
+    }).rpc();
+
   const place = async (b: typeof bettors[number], target: PublicKey, amount: number) =>
     program.methods.placeBet(new anchor.BN(amount)).accountsPartial({
       game: g, market, marketVault: mvaultPda(market),
-      targetPlayer: playerPda(g, target), targetPool: tpoolPda(market, target),
+      targetPlayer: playerPda(g, target), backable: backablePda(target),
+      targetPool: tpoolPda(market, target),
       bet: betPda(market, b.kp.publicKey, target), bettorToken: b.ata,
       bettor: b.kp.publicKey, stakeMint: asset.mint,
       tokenProgram: asset.tokenProgram, systemProgram: SystemProgram.programId,
     }).signers([b.kp]).rpc();
+
+  it("refuses a bet on an agent nobody put on the book", async () => {
+    // The whole point of the marker: an unmarked agent has no account to pass,
+    // so the instruction cannot be built rather than being turned away by a
+    // check a client could be written around.
+    let threw = false;
+    try { await place(bettors[0], players[0].kp.publicKey, 1 * UNIT); }
+    catch { threw = true; }
+    assert.ok(threw, "an unmarked agent cannot be backed");
+    await mark(players[0].kp.publicKey);
+    await mark(players[1].kp.publicKey);
+  });
 
   it("takes bets, and the vault holds exactly what was staked", async () => {
     await place(bettors[0], players[0].kp.publicKey, 6 * UNIT);
