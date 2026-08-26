@@ -317,6 +317,20 @@
   .betnote{font-size:12px;color:var(--dim);line-height:1.5}
   .betnote a{color:var(--honey)}
   .beterr{font-size:12px;color:#ff8f6f;line-height:1.5;word-break:break-word}
+  /* Confirmation, because "the label changed" is not proof to somebody who
+     just parted with a stake. A tick, the amount, who it went on, and the
+     signature they can check for themselves. */
+  .betok{display:flex;gap:11px;align-items:flex-start;background:rgba(95,214,138,.08);
+    border:1px solid rgba(95,214,138,.35);border-radius:11px;padding:13px 14px;margin-bottom:12px}
+  .betok .tick{flex:0 0 22px;width:22px;height:22px;border-radius:50%;background:var(--alive);
+    display:flex;align-items:center;justify-content:center;color:#0a1a0f;font-size:13px;
+    font-weight:900;line-height:1;animation:pop .32s var(--ease)}
+  @keyframes pop{from{transform:scale(.4);opacity:0}to{transform:scale(1);opacity:1}}
+  .betok .okb{min-width:0}
+  .betok .okt{color:var(--text);font-size:13.5px;font-weight:600;margin-bottom:3px}
+  .betok .oks{font-family:var(--mono);font-size:11.5px;color:var(--dim);
+    overflow:hidden;text-overflow:ellipsis}
+  .betok .oks a{color:var(--alive)}
   .betclose{float:right;background:none;border:0;color:var(--dim);font-size:20px;
     line-height:1;cursor:pointer;padding:0 2px}
   .loadmore{display:block;width:100%;margin-top:12px;padding:10px;border-radius:10px;
@@ -753,6 +767,36 @@ function setReady(ready){
   go.textContent = ready ? "Back" : "Waiting for the book";
 }
 
+/**
+ * The bet landed, said plainly and left on screen.
+ *
+ * The panel used to close itself after three seconds, which is not long enough
+ * to read a signature and is exactly the wrong behaviour for the one moment
+ * somebody wants to check that their stake actually went somewhere. It stays
+ * until it is dismissed.
+ */
+function showBacked(amount, sig){
+  const box = veil.querySelector(".betbox");
+  if(!box || !betCtx) return;
+  const row = box.querySelector(".betrow"), alt = box.querySelector(".betalt");
+  if(row) row.remove();
+  if(alt) alt.remove();
+  const note = box.querySelector(".betnote");
+  const ok = document.createElement("div");
+  ok.className = "betok";
+  ok.innerHTML = `<span class="tick">&#10003;</span><div class="okb">
+    <div class="okt">Backed ${esc(betCtx.name)} with ${esc(amount)} BUZZ</div>
+    <div class="oks"><a href="https://explorer.solana.com/tx/${encodeURIComponent(sig)}?cluster=devnet"
+      target="_blank" rel="noopener">${esc(String(sig).slice(0, 20))}&hellip; on the explorer &#8599;</a></div>
+  </div>`;
+  box.insertBefore(ok, note);
+  if(note) note.innerHTML =
+    "Your stake is in the pool. If this agent is the one still standing when the game ends, " +
+    "come back and claim your share. Nothing is lost if it is not: the book pays out in full " +
+    "either way, to whoever backed a survivor.";
+  betError("");
+}
+
 function shutBet(){ veil.hidden = true; betCtx = null; }
 
 function openBetPanel(target, name, game){
@@ -795,13 +839,8 @@ veil.addEventListener("click", async (e) => {
     });
     const d = await r.json();
     if(!r.ok) throw new Error(d.error || `server said ${r.status}`);
-    go.textContent = "Backed";
-    veil.querySelector(".betnote").innerHTML =
-      `Backed as <b>${esc(short(me.pk))}</b>. ` +
-      `<a href="https://explorer.solana.com/tx/${encodeURIComponent(d.sig)}?cluster=devnet"
-        target="_blank" rel="noopener">View on the explorer</a>`;
+    showBacked(amount, d.sig);
     paintOdds();
-    setTimeout(shutBet, 3200);
   }catch(err){
     betError(String(err?.message ?? err).slice(0, 180));
     go.dataset.busy = ""; go.disabled = false; go.textContent = "Back";
@@ -858,13 +897,8 @@ veil.addEventListener("click", async (e) => {
     }
     const bytes = Uint8Array.from(atob(prepared.tx), (c) => c.charCodeAt(0));
     const { signature } = await provider.signAndSendTransaction(web3.Transaction.from(bytes));
-    step("Backed");
-    veil.querySelector(".betnote").innerHTML =
-      `Backed from <b>${esc(short(bettor))}</b>. ` +
-      `<a href="https://explorer.solana.com/tx/${encodeURIComponent(signature)}?cluster=devnet"
-        target="_blank" rel="noopener">View on the explorer</a>`;
+    showBacked(amount, signature);
     paintOdds();
-    setTimeout(shutBet, 3200);
   }catch(err){
     const msg = String(err?.message ?? err);
     betError(/User rejected|declined/i.test(msg) ? "Cancelled in the wallet." : msg.slice(0, 180));
