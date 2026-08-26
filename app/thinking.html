@@ -222,6 +222,15 @@
   .empty b{display:block;color:var(--text);margin-bottom:6px}
   footer{position:relative;max-width:1060px;margin:0 auto;padding:16px 26px 0;
     color:var(--dimmer);font-size:12px;line-height:1.6}
+  /* What a stranger can check against the chain, and what they are taking our
+     word for. Two columns because it is one claim and its limit, not a list. */
+  .split{display:grid;grid-template-columns:1fr 1.45fr;gap:0 26px;margin-bottom:12px}
+  .split div{padding-left:14px;border-left:1px solid var(--edge)}
+  .split div:first-child{border-left-color:var(--alive)}
+  .split b{display:block;color:var(--dim);font-weight:600;font-size:11px;
+    text-transform:uppercase;letter-spacing:.09em;margin-bottom:4px}
+  .split div:first-child b{color:var(--alive)}
+  @media(max-width:720px){.split{grid-template-columns:1fr;gap:14px}}
   footer b{color:var(--dim);font-weight:600}
 </style>
 </head>
@@ -278,8 +287,14 @@
 </div><!-- .shell -->
 
 <footer>
-  Cost and provider come from the response that served each call. UsePod settles on Solana in
-  bulk, not per request, so the signatures here are ours: the commitments the answers produced.
+  <div class="split">
+    <div><b>Verifiable on devnet</b>The board, the commitment, the comb it called and whether it
+    hit. Every signature on this page opens in an explorer.</div>
+    <div><b>Our record, not the chain's</b>Cost, tokens and provider are UsePod's own numbers from
+    the response that served the call. Latency is our clock. Agents draw on a prepaid balance, so
+    no single call has a chain record of its own. Paying per call with x402 would give each one a
+    signed USDC payment anyone could check; that is where this is going.</div>
+  </div>
   <a href="/arena">arena</a> · <a href="/docs">docs</a> · <a href="https://github.com/Eienel/buzz">source</a>
 </footer>
 </div><!-- .page -->
