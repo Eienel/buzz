@@ -1185,15 +1185,20 @@ pub mod last_circle {
         // The target must actually be playing this game. Without this you could
         // back a wallet that never sat down and it could never lose.
         require!(ctx.accounts.target_player.game == ctx.accounts.game.key(), GameError::BadParam);
+        // Either the bettor signs for themselves, which is the wallet path, or
+        // an allow-listed relayer signs for them, which is the path for anyone
+        // who has no key at all. Same rule the game itself already uses to let
+        // people play without a wallet, so betting does not invent a second one.
+        resolve_delegate(&ctx.accounts.bettor, &ctx.accounts.payer, &ctx.accounts.relayer)?;
 
         token_interface::transfer_checked(
             CpiContext::new(
                 ctx.accounts.token_program.to_account_info(),
                 TransferChecked {
-                    from: ctx.accounts.bettor_token.to_account_info(),
+                    from: ctx.accounts.payer_token.to_account_info(),
                     mint: ctx.accounts.stake_mint.to_account_info(),
                     to: ctx.accounts.market_vault.to_account_info(),
-                    authority: ctx.accounts.bettor.to_account_info(),
+                    authority: ctx.accounts.payer.to_account_info(),
                 },
             ),
             amount,
@@ -1265,6 +1270,7 @@ pub mod last_circle {
         };
         require!(settled, GameError::WrongPhase);
 
+        resolve_delegate(&ctx.accounts.bettor, &ctx.accounts.payer, &ctx.accounts.relayer)?;
         let bet = &mut ctx.accounts.bet;
         require!(!bet.claimed, GameError::AlreadyClaimed);
         require!(ctx.accounts.target_pool.resolved, GameError::WrongPhase);
@@ -2752,20 +2758,29 @@ pub struct PlaceBet<'info> {
     #[account(seeds = [b"backable", target_player.owner.as_ref()], bump = backable.bump)]
     pub backable: Account<'info, Backable>,
     #[account(
-        init_if_needed, payer = bettor, space = TargetPool::SPACE,
+        init_if_needed, payer = payer, space = TargetPool::SPACE,
         seeds = [b"tpool", market.key().as_ref(), target_player.owner.as_ref()], bump
     )]
     pub target_pool: Account<'info, TargetPool>,
     #[account(
-        init_if_needed, payer = bettor, space = Bet::SPACE,
+        init_if_needed, payer = payer, space = Bet::SPACE,
         seeds = [b"bet", market.key().as_ref(), bettor.key().as_ref(),
                  target_player.owner.as_ref()], bump
     )]
     pub bet: Account<'info, Bet>,
-    #[account(mut, constraint = bettor_token.mint == market.stake_mint @ GameError::BadParam)]
-    pub bettor_token: InterfaceAccount<'info, TokenAccount>,
+    #[account(mut, constraint = payer_token.mint == market.stake_mint @ GameError::BadParam,
+              constraint = payer_token.owner == payer.key() @ GameError::Unauthorized)]
+    pub payer_token: InterfaceAccount<'info, TokenAccount>,
+    /// CHECK: the identity the bet belongs to, and the only key that can claim
+    /// it. Not a signer, so a relayer can place one for somebody who has no key.
+    pub bettor: UncheckedAccount<'info>,
+    /// Whoever signs and funds it: the bettor with a wallet, or a relayer.
     #[account(mut)]
-    pub bettor: Signer<'info>,
+    pub payer: Signer<'info>,
+    /// Required only when payer is not the bettor: proof it is allow-listed, so
+    /// nobody can open a bet under a stranger's identity.
+    #[account(seeds = [b"relayer", payer.key().as_ref()], bump = relayer.bump)]
+    pub relayer: Option<Account<'info, AllowedRelayer>>,
     #[account(constraint = stake_mint.key() == market.stake_mint @ GameError::BadParam)]
     pub stake_mint: InterfaceAccount<'info, Mint>,
     pub token_program: Interface<'info, TokenInterface>,
@@ -2811,7 +2826,16 @@ pub struct ClaimBet<'info> {
     pub bet: Account<'info, Bet>,
     #[account(mut, constraint = bettor_token.owner == bettor.key() @ GameError::Unauthorized)]
     pub bettor_token: InterfaceAccount<'info, TokenAccount>,
-    pub bettor: Signer<'info>,
+    /// CHECK: whose bet this is. The payout always goes to their own token
+    /// account, so a relayer claiming for them cannot redirect it.
+    pub bettor: UncheckedAccount<'info>,
+    /// The bettor with a wallet, or an allow-listed relayer acting for them. A
+    /// bet placed by the relayer would be unclaimable without this, since the
+    /// identity it belongs to has no key to sign with.
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    #[account(seeds = [b"relayer", payer.key().as_ref()], bump = relayer.bump)]
+    pub relayer: Option<Account<'info, AllowedRelayer>>,
     #[account(constraint = stake_mint.key() == market.stake_mint @ GameError::BadParam)]
     pub stake_mint: InterfaceAccount<'info, Mint>,
     pub token_program: Interface<'info, TokenInterface>,
