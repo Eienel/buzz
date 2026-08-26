@@ -34,6 +34,10 @@ the Dockerfile with a `/healthz` check already wired.
 | `RELAY_STAKE_UNITS` | no | Whole tokens a paid join stakes, default 10. |
 | `RUN_SWARM` | no | `1` also runs the reference agents in-process. |
 | `PAYER` | with `RUN_SWARM` | Funds the swarm's ephemeral agents. Path or key JSON, same as above. |
+| `FUEL_FLOOR` | no | SOL below which the payer counts as low, default 1.0. Published in `/api/state` and logged once on the way down. Deliberately not wired into `/healthz`: a failing healthcheck means restart, restarting adds no SOL, and a quiet arena would become a crash loop. |
+| `FUEL_TARGET` | no | SOL the relayer refills the payer up to, default 3.0. |
+| `FUEL_RESERVE` | no | SOL the relayer keeps for itself, default 1.0. It never funds the payer below this. |
+| `FUEL_AUTO` | no | `0` to watch and report without moving anything. |
 | `FEED_SECRET` | no | Authenticates the swarm's trace posts to `/thinking`. Derived from `SWARM_SEED` when unset, so both sides agree with nothing configured. Set it on **both** services to override, or on neither. |
 | `FEED_URL` | no | Where the swarm posts traces. Defaults to `https://lastbuzz.fun`, with no attempt to guess the deployment: a swarm on its own service runs its own copy of this server, so a loopback post succeeds into a buffer nobody can read, and that failure is indistinguishable from working. Point this at a local arena to develop against one. |
 | `FEED_OFF` | no | `1` stops a swarm publishing traces at all. |
