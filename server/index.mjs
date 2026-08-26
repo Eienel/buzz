@@ -346,6 +346,37 @@ const readBody = (req) => new Promise((resolve) => {
   let b = ""; req.on("data", (c) => { b += c; if (b.length > 1e5) req.destroy(); });
   req.on("end", () => { try { resolve(b ? JSON.parse(b) : {}); } catch { resolve({}); } });
 });
+// ---- the reasoning feed ------------------------------------------------------
+// A bounded in-memory window on what the agents are thinking right now. Not
+// persisted: the chain already holds the outcomes, and this is the working,
+// which is only interesting live.
+const THOUGHTS_MAX = Number(process.env.THOUGHTS_MAX ?? 400);
+const thoughts = [];
+const txCache = new Map();
+const FEED_SECRET = process.env.FEED_SECRET ?? "";
+// Named for the explorer links, which need to know which cluster to open.
+const CLUSTER = /mainnet/.test(RPC) ? "mainnet-beta" : /testnet/.test(RPC) ? "testnet" : "devnet";
+
+/**
+ * Only the swarm may write to the feed.
+ *
+ * With FEED_SECRET set that is a shared secret, which is what to use in
+ * production. Without one it falls back to loopback only, which holds when the
+ * swarm runs in this process (RUN_SWARM=1) and is the reason a missing secret
+ * is not fatal. The buffer is display-only and capped, so the worst a forged
+ * write does is put a wrong line on a page, but set the secret anyway.
+ */
+const feedAuthed = (req) => {
+  // A JSON content-type is not a CORS-simple request, so a browser must
+  // preflight it. Nothing here answers a preflight, which is what keeps a page
+  // on another origin from posting to a loopback-gated dev server.
+  if(req.method !== "POST") return false;
+  if(!String(req.headers["content-type"] ?? "").startsWith("application/json")) return false;
+  if(FEED_SECRET) return req.headers["x-feed-secret"] === FEED_SECRET;
+  const ip = req.socket.remoteAddress ?? "";
+  return ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1";
+};
+
 const send = (res, status, body) => {
   res.writeHead(status, { "content-type": "application/json",
     "cache-control": "no-store", "access-control-allow-origin": "*" });
@@ -514,6 +545,105 @@ createServer(async (req,res)=>{
       note: "Accrued on chain. Conversion to SOL and buy-and-burn happen off chain and have not run on devnet." });
   }
 
+  // ---- the reasoning feed --------------------------------------------------
+  // Written by the swarm as it plays, read by /thinking. Deliberately in
+  // memory and bounded: this is a window on what the arena is doing right now,
+  // not a second history file, and the on-chain record is already the archive.
+  if(p === "/api/agent/thought"){
+    if(!feedAuthed(req)) return send(res, 401, { error: "not the swarm" });
+    const b = await readBody(req);
+    if(b.agent == null || b.game == null) return send(res, 400, { error: "agent and game are required" });
+    thoughts.push({ ...b, at: Date.now(), hit: null });
+    if(thoughts.length > THOUGHTS_MAX) thoughts.splice(0, thoughts.length - THOUGHTS_MAX);
+    return send(res, 202, { ok: true });
+  }
+  if(p === "/api/agent/resolved"){
+    if(!feedAuthed(req)) return send(res, 401, { error: "not the swarm" });
+    const { gameId, instance, doomed } = await readBody(req);
+    for(const t of thoughts){
+      if(t.game === String(gameId) && t.instance === instance && t.predict != null)
+        t.hit = t.predict === doomed;
+      if(t.game === String(gameId) && t.instance === instance) t.doomed = doomed;
+    }
+    return send(res, 202, { ok: true });
+  }
+  // Every transaction an agent has ever sent, read straight off the chain.
+  // The feed's buffer only knows the calls this process has seen; the wallet
+  // outlives every restart, so this is the durable answer to what an agent has
+  // actually done. Cached because getSignaturesForAddress is not free and the
+  // page polls.
+  if(p === "/api/agent-txs"){
+    const name = url.searchParams.get("agent");
+    const known = houseWallets().find((h) => h.name === name);
+    if(!known) return send(res, 404, { error: "unknown agent" });
+    const c = txCache.get(name);
+    if(c && Date.now() - c.at < 20_000) return send(res, 200, c.body);
+    try{
+      const sigs = await connection.getSignaturesForAddress(new PublicKey(known.wallet), { limit: 25 });
+      // Naming an instruction would cost a getParsedTransaction per signature.
+      // The buffer already knows what it asked for, so anything it recognises
+      // gets a label for free and the rest stay honestly unlabelled.
+      const seen = new Map(thoughts.filter((t) => t.sig).map((t) => [t.sig, t]));
+      const body = { agent: name, wallet: known.wallet, cluster: CLUSTER,
+        txs: sigs.map((x) => {
+          const t = seen.get(x.signature);
+          return { sig: x.signature, slot: x.slot, err: !!x.err,
+            at: x.blockTime ? x.blockTime * 1000 : null,
+            kind: t ? "commit" : null, game: t?.game ?? null, instance: t?.instance ?? null };
+        }) };
+      txCache.set(name, { at: Date.now(), body });
+      return send(res, 200, body);
+    }catch(e){ return send(res, 502, { error: String(e.message ?? e).slice(0, 140) }); }
+  }
+  if(p === "/api/thoughts"){
+    const want = Number(url.searchParams.get("limit"));
+    const limit = Number.isFinite(want) && want > 0 ? Math.min(want, THOUGHTS_MAX) : 60;
+    // Filtering happens here rather than in the page so a narrowed view gets a
+    // full window of that agent's calls instead of whatever survived a slice
+    // taken across all four.
+    const who = url.searchParams.get("agent");
+    const all = who ? thoughts.filter((t) => t.agent === who) : thoughts;
+    const graded = all.filter((t) => t.hit !== null);
+    const hits = graded.filter((t) => t.hit).length;
+    const hour = Date.now() - 3600_000;
+    const answered = all.filter((t) => !t.skipped);
+    const latencies = answered.map((t) => t.ms).filter((v) => v > 0).sort((a, b) => a - b);
+    const spend = answered.reduce((a, t) => a + (t.cost ?? 0), 0);
+    return send(res, 200, {
+      calls: all.slice(-limit).reverse(),
+      // The chart reads this: oldest first, one point per call, trimmed to what
+      // a sparkline can actually resolve.
+      series: all.slice(-160).map((t) => ({
+        at: t.at, agent: t.agent, instance: t.instance, game: t.game,
+        left: t.budget?.left ?? null, granted: t.budget?.granted ?? null,
+        cost: t.cost ?? 0, ms: t.ms ?? null, hit: t.hit, skipped: !!t.skipped,
+      })),
+      stats: {
+        // Only what this buffer has seen, so it is a rate over the visible
+        // window rather than an all-time figure the page cannot show its
+        // working for. The leaderboard is where all-time lives.
+        answered: answered.length,
+        skipped: all.filter((t) => t.skipped).length,
+        lastHour: all.filter((t) => t.at >= hour && !t.skipped).length,
+        graded: graded.length,
+        hitRate: graded.length ? hits / graded.length : null,
+        spend,
+        // Median, not mean: one 30s outlier drags a mean somewhere no call
+        // actually went, and the tail is shown separately anyway.
+        p50: latencies.length ? latencies[Math.floor(latencies.length / 2)] : null,
+        p95: latencies.length ? latencies[Math.floor(latencies.length * 0.95)] : null,
+        tokens: answered.reduce((a, t) => a + (t.tokensIn ?? 0) + (t.tokensOut ?? 0), 0),
+        models: [...new Set(all.map((t) => t.model).filter(Boolean))],
+        providers: [...new Set(all.map((t) => t.provider).filter(Boolean))].length,
+        window: all.length,
+      },
+      // Always the unfiltered roster, so filtering to one agent cannot hide
+      // the buttons that get you back to the others.
+      agents: [...new Set(thoughts.map((t) => t.agent))].sort(),
+      cluster: CLUSTER,
+    });
+  }
+
   if(p === "/api/history"){
     // The board polls this every 15s, and a full page of records is ~120KB, so
     // the caller says how many it wants and gets `total` to know if asking for
@@ -544,6 +674,7 @@ createServer(async (req,res)=>{
   if(p === "/arena") p = "/arena.html";
   if(p === "/play")  p = "/play.html";
   if(p === "/agents")p = "/agents.html";
+  if(p === "/thinking")p = "/thinking.html";
   if(p === "/tcg")   p = "/tcg.html";
   // contain path traversal: resolve inside ROOT only
   const file = join(ROOT, normalize(p).replace(/^(\.\.[/\\])+/, ""));
