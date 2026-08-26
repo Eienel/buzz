@@ -577,7 +577,7 @@ async function fundNewcomer(wallet){
   const mint = new PublicKey(TREASURY_MINTS.BUZZ);
   const mintAcc = await connection.getAccountInfo(mint);
   if(!mintAcc) throw new Error("stake mint not found");
-  const { getOrCreateAssociatedTokenAccount, mintTo, getMint } = await import("@solana/spl-token");
+  const { createAssociatedTokenAccountIdempotent, mintTo, getMint } = await import("@solana/spl-token");
   const info = await getMint(connection, mint, undefined, mintAcc.owner);
   if(!info.mintAuthority || !info.mintAuthority.equals(starter.publicKey))
     throw new Error("not the mint authority on this cluster");
@@ -601,14 +601,17 @@ async function fundNewcomer(wallet){
       solSig = await sendAndConfirmTransaction(connection, tx, [starter], { commitment: "confirmed" });
     }
   }
-  const ata = await getOrCreateAssociatedTokenAccount(connection, starter, mint, who, false,
-    undefined, undefined, mintAcc.owner);
+  // Idempotent for the same reason the book uses it: getOrCreate reads back the
+  // account it just created and can miss it at `confirmed`, which turns a
+  // successful top-up into an error.
+  const ata = await createAssociatedTokenAccountIdempotent(connection, starter, mint, who,
+    { commitment: "confirmed" }, mintAcc.owner);
   const units = BigInt(FAUCET_BUZZ) * 10n ** BigInt(info.decimals);
-  const sig = await mintTo(connection, starter, mint, ata.address, starter.publicKey, units,
+  const sig = await mintTo(connection, starter, mint, ata, starter.publicKey, units,
     [], undefined, mintAcc.owner);
   console.log(`[faucet] ${FAUCET_BUZZ} BUZZ + ${solSig ? FAUCET_SOL : 0} SOL to ${wallet.slice(0,8)}`);
   return { wallet, buzz: FAUCET_BUZZ, sol: solSig ? FAUCET_SOL : 0,
-           token: ata.address.toBase58(), sig, solSig };
+           token: ata.toBase58(), sig, solSig };
 }
 
 const arena = makeArena({ snapshot: () => snapshot, enqueue });

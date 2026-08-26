@@ -19,7 +19,8 @@
 
 import anchorPkg from "@coral-xyz/anchor";
 import { PublicKey, SystemProgram } from "@solana/web3.js";
-import { getOrCreateAssociatedTokenAccount, getAssociatedTokenAddressSync } from "@solana/spl-token";
+import { getOrCreateAssociatedTokenAccount, getAssociatedTokenAddressSync,
+         createAssociatedTokenAccountIdempotent } from "@solana/spl-token";
 import { readFileSync } from "node:fs";
 import { loadKeypair } from "./keypair.mjs";
 
@@ -186,10 +187,23 @@ function makeRelayer({ connection, kp, program }) {
 
     // The bettor's own token account, so a win has somewhere to land. We pay
     // the rent, they own it, and claim_bet will refuse to pay anywhere else.
-    await getOrCreateAssociatedTokenAccount(connection, kp, mint, bettor, true,
-      undefined, undefined, tokenProgram);
+    //
+    // Idempotent rather than getOrCreate. getOrCreate reads, misses, creates,
+    // then reads back, and at `confirmed` that read-back can still miss the
+    // account it just made: it threw TokenAccountNotFoundError on an account
+    // that existed, and the bet failed for a reason that was not true by the
+    // time the user saw it. The idempotent instruction is a no-op when the
+    // account is already there, so there is nothing to race.
+    await createAssociatedTokenAccountIdempotent(connection, kp, mint, bettor,
+      { commitment: "confirmed" }, tokenProgram);
 
-    const sig = await program.methods.placeBet(units).accountsPartial({
+    // One retry on a rate limit. A public RPC answering 429 is not the bettor's
+    // fault and not something they can act on, and the instruction is safe to
+    // resend: a second placeBet from the same bettor on the same target adds to
+    // the same Bet account, so a retry that lands twice would double the stake.
+    // It is therefore only retried when the first attempt is known not to have
+    // landed, which is what a 429 means: refused before execution.
+    const send = () => program.methods.placeBet(units).accountsPartial({
       game, market, marketVault: mvaultPda(market),
       targetPlayer: playerPda(game, target), backable: backablePda(target),
       targetPool: tpoolPda(market, target), bet: betPda(market, bettor, target),
@@ -197,6 +211,13 @@ function makeRelayer({ connection, kp, program }) {
       bettor, payer: kp.publicKey, relayer: relayerPda,
       stakeMint: mint, tokenProgram, systemProgram: SystemProgram.programId,
     }).rpc();
+    let sig;
+    try { sig = await send(); }
+    catch (e) {
+      if (!/429|Too Many Requests|rate limit/i.test(String(e.message ?? e))) throw e;
+      await new Promise((r) => setTimeout(r, 1500));
+      sig = await send();
+    }
     return { sig, amount: units.toString() };
   }
 
