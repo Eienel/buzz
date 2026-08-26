@@ -3,20 +3,20 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>BUZZ | the agents thinking</title>
-<meta name="description" content="Every inference call the BUZZ agents make, live: the board they saw, the forecast they made, what it cost them, and the Solana transaction it produced.">
-<meta property="og:title" content="BUZZ | the agents thinking">
-<meta property="og:description" content="Watch model reasoning turn into on-chain transactions, call by call.">
+<title>BUZZ | agent traces</title>
+<meta name="description" content="Every inference call the BUZZ agents make, traced: the board they saw, latency, what UsePod charged, which provider served it, and the Solana transaction the answer produced.">
+<meta property="og:title" content="BUZZ | agent traces">
+<meta property="og:description" content="Model reasoning turned into on-chain transactions, call by call, with cost and latency.">
 <meta property="og:image" content="https://eienel.github.io/buzz/og-image.png">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="icon" type="image/png" href="favicon.png">
 <style>
   :root{
-    --ink:#0a0806; --shell:#0f0c08; --card:#16110a; --card2:#1c150c;
-    --edge:#3a2c14; --edge2:#54401c;
-    --honey:#ffb300; --honey2:#ff8f1f; --gold:#ffd280;
-    --text:#f3ead9; --dim:#a08f74; --dimmer:#6d5f4c;
-    --alive:#5fd68a; --dead:#f2637a; --cool:#6fb0ff;
+    --ink:#0a0806; --card:#13100b; --card2:#181309;
+    --edge:#2b2214; --edge2:#3d2f18;
+    --honey:#ffb300; --gold:#ffd280;
+    --text:#f3ead9; --dim:#9a8b73; --dimmer:#6a5d4b;
+    --alive:#5fd68a; --dead:#f2637a; --cool:#6fb0ff; --violet:#c98bff;
     --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
     --sans:-apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro Display",
       system-ui,"Segoe UI",Roboto,sans-serif;
@@ -25,117 +25,188 @@
   *{box-sizing:border-box}
   [hidden]{display:none !important}
   body{margin:0;background:var(--ink);color:var(--text);
-    font:15px/1.5 var(--sans);-webkit-font-smoothing:antialiased;
+    font:14.5px/1.5 var(--sans);-webkit-font-smoothing:antialiased;
     -moz-osx-font-smoothing:grayscale;letter-spacing:-.011em}
   @media (prefers-reduced-motion:reduce){
-    *,*::before,*::after{animation-duration:.01ms !important;animation-iteration-count:1 !important;
-      transition-duration:.01ms !important}
+    *,*::before,*::after{animation-duration:.01ms !important;
+      animation-iteration-count:1 !important;transition-duration:.01ms !important}
   }
   a{color:var(--honey);text-decoration:none} a:hover{text-decoration:underline}
+  /* Every number is monospace, so columns of them line up and a figure never
+     reflows as it ticks. */
+  .n{font-family:var(--mono);font-variant-numeric:tabular-nums}
 
-  header.top{padding:16px 22px;display:flex;gap:16px;align-items:center;flex-wrap:wrap;
-    border-bottom:1px solid var(--edge);background:linear-gradient(180deg,#1a130b,#12100a)}
-  .brand{display:flex;align-items:center;gap:11px;font-weight:800;font-size:23px;
-    letter-spacing:.5px;color:var(--text)}
-  .sub{color:var(--dim);font-size:13.5px}
-  .sub a{color:var(--honey);border-bottom:1px solid rgba(255,179,0,.4)}
-  .right{margin-left:auto;display:flex;gap:10px;align-items:center}
-  .chip{font-family:var(--mono);font-size:12px;color:var(--dim);background:#140f09;
-    border:1px solid var(--edge);border-radius:99px;padding:5px 13px}
-  .chip.live{color:var(--alive);display:flex;gap:7px;align-items:center}
-  .chip.live i{width:7px;height:7px;border-radius:99px;background:var(--alive);animation:blip 1.7s infinite}
+  header.top{padding:14px 22px;display:flex;gap:16px;align-items:center;flex-wrap:wrap;
+    border-bottom:1px solid var(--edge);background:#100d09}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:800;font-size:21px;
+    letter-spacing:.4px;color:var(--text)}
+  .sub{color:var(--dim);font-size:13px}
+  .sub a{color:var(--honey)}
+  .right{margin-left:auto;display:flex;gap:9px;align-items:center}
+  .chip{font-family:var(--mono);font-size:11.5px;color:var(--dim);background:#161009;
+    border:1px solid var(--edge);border-radius:99px;padding:4px 12px}
+  .chip.live{color:var(--alive);display:flex;gap:6px;align-items:center}
+  .chip.live i{width:6px;height:6px;border-radius:99px;background:var(--alive);
+    animation:blip 1.7s infinite}
   .chip.live.down{color:var(--dead)} .chip.live.down i{background:var(--dead)}
   @keyframes blip{50%{opacity:.2}}
 
-  .page{max-width:900px;margin:0 auto;padding:34px 18px 80px}
-  h1{font-size:31px;line-height:1.15;letter-spacing:-.9px;margin:0 0 10px}
-  .lede{color:var(--dim);margin:0 0 26px;max-width:64ch}
+  .page{max-width:1020px;margin:0 auto;padding:30px 18px 70px}
+  h1{font-size:28px;line-height:1.15;letter-spacing:-.8px;margin:0 0 9px}
+  .lede{color:var(--dim);margin:0 0 24px;max-width:70ch;font-size:14.5px}
   .lede b{color:var(--text);font-weight:600}
 
-  /* the meter row: what the inference is actually doing, in numbers */
-  .meter{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--edge);
-    border:1px solid var(--edge);border-radius:14px;overflow:hidden;margin-bottom:14px}
-  .meter div{background:var(--card);padding:14px 16px}
-  .meter b{display:block;font-family:var(--mono);font-size:21px;color:var(--gold);
-    letter-spacing:-.5px;font-weight:600}
-  .meter span{display:block;font-size:11px;color:var(--dimmer);text-transform:uppercase;
-    letter-spacing:.09em;margin-top:3px}
-  @media(max-width:620px){.meter{grid-template-columns:repeat(2,1fr)}}
+  /* ---- stat strip: hairlines, no boxes ---- */
+  .stats{display:grid;grid-template-columns:repeat(6,1fr);
+    border-top:1px solid var(--edge);border-bottom:1px solid var(--edge)}
+  .stats div{padding:12px 14px 11px;border-left:1px solid var(--edge)}
+  .stats div:first-child{border-left:0;padding-left:0}
+  .stats b{display:block;font-family:var(--mono);font-variant-numeric:tabular-nums;
+    font-size:19px;color:var(--gold);letter-spacing:-.5px;font-weight:600;line-height:1.2}
+  .stats b small{font-size:12px;color:var(--dim);font-weight:400}
+  .stats span{display:block;font-size:10px;color:var(--dimmer);text-transform:uppercase;
+    letter-spacing:.1em;margin-top:5px}
+  @media(max-width:860px){.stats{grid-template-columns:repeat(3,1fr)}
+    .stats div{border-left:1px solid var(--edge)}
+    .stats div:nth-child(3n+1){border-left:0;padding-left:0}
+    .stats div:nth-child(n+4){border-top:1px solid var(--edge)}}
 
-  .models{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:30px}
-  .m{font-family:var(--mono);font-size:11.5px;color:var(--cool);
-    background:rgba(111,176,255,.07);border:1px solid rgba(111,176,255,.22);
-    border-radius:99px;padding:4px 11px}
+  /* ---- chart ---- */
+  .panel{margin:26px 0 0;border:1px solid var(--edge);border-radius:12px;
+    background:var(--card);overflow:hidden}
+  .ptitle{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;
+    padding:11px 15px;border-bottom:1px solid var(--edge)}
+  .ptitle h2{margin:0;font-size:13px;font-weight:650;letter-spacing:-.2px}
+  .ptitle p{margin:0;color:var(--dimmer);font-size:11.5px}
+  .legend{margin-left:auto;display:flex;gap:11px;flex-wrap:wrap}
+  .legend span{font-family:var(--mono);font-size:11px;color:var(--dim);
+    display:flex;align-items:center;gap:5px}
+  .legend i{width:14px;height:2px;border-radius:2px}
+  /* Scaled to fit, a 1000-unit viewBox collapses to ~80px tall on a phone and
+     the axis labels stop being readable. Below that width it scrolls instead. */
+  .chartwrap{padding:12px 8px 8px;overflow-x:auto}
+  svg.chart{display:block;width:100%;min-width:600px;height:auto}
 
-  /* one call */
-  .call{background:var(--card);border:1px solid var(--edge);border-radius:14px;
-    padding:15px 17px;margin-bottom:11px;animation:in .5s var(--ease) both}
-  @keyframes in{from{opacity:0;transform:translateY(7px)}}
-  .call.skip{background:#120e08;border-style:dashed;border-color:#2e2411}
-  .hdr{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap;margin-bottom:9px}
-  .who{font-weight:700;letter-spacing:-.2px}
+  /* ---- filter ---- */
+  .filter{display:flex;gap:7px;flex-wrap:wrap;margin:24px 0 14px;align-items:center}
+  .filter .lab{font-size:11px;color:var(--dimmer);text-transform:uppercase;
+    letter-spacing:.1em;margin-right:3px}
+  .filter button{font-family:var(--mono);font-size:12px;color:var(--dim);
+    background:#161009;border:1px solid var(--edge);border-radius:99px;
+    padding:5px 13px;cursor:pointer;transition:all .18s var(--ease)}
+  .filter button:hover{color:var(--text);border-color:var(--edge2)}
+  .filter button[aria-pressed="true"]{color:var(--ink);background:var(--honey);
+    border-color:var(--honey);font-weight:600}
+
+  /* ---- traces ---- */
+  .trace{border:1px solid var(--edge);border-radius:12px;background:var(--card);
+    margin-bottom:9px;animation:in .45s var(--ease) both}
+  @keyframes in{from{opacity:0;transform:translateY(6px)}}
+  .trace.skip{background:#100d08;border-style:dashed;border-color:#241c10}
+  .thead{display:flex;align-items:center;gap:9px;flex-wrap:wrap;
+    padding:10px 14px;border-bottom:1px solid var(--edge)}
+  .trace.skip .thead{border-bottom-color:#241c10}
+  .dot{width:8px;height:8px;border-radius:99px;flex:none}
+  .who{font-weight:700;letter-spacing:-.2px;font-size:14.5px}
   .mdl{font-family:var(--mono);font-size:11.5px;color:var(--cool)}
-  .when{margin-left:auto;font-family:var(--mono);font-size:11.5px;color:var(--dimmer)}
-  .rnd{font-family:var(--mono);font-size:11.5px;color:var(--dim)}
+  .meta{font-family:var(--mono);font-size:11.5px;color:var(--dimmer)}
+  .meta.push{margin-left:auto}
+  .verdict{font-family:var(--mono);font-size:11px;border-radius:99px;padding:3px 9px;
+    border:1px solid transparent}
+  .verdict.hit{color:var(--alive);border-color:rgba(95,214,138,.35);background:rgba(95,214,138,.08)}
+  .verdict.miss{color:var(--dead);border-color:rgba(242,99,122,.3);background:rgba(242,99,122,.07)}
+  .verdict.open{color:var(--dimmer);border-color:var(--edge)}
 
-  .why{color:var(--text);font-size:15.5px;line-height:1.5;margin:0 0 11px;
-    padding-left:11px;border-left:2px solid var(--edge2)}
-  .why.none{color:var(--dimmer);font-style:italic;border-left-color:#2a2010}
+  /* the workflow rail: one vertical line, a marker per step */
+  .steps{padding:12px 14px 13px;position:relative}
+  .step{position:relative;padding-left:22px;padding-bottom:13px}
+  .step:last-child{padding-bottom:0}
+  /* the connector, drawn between markers rather than through the last one */
+  .step:not(:last-child)::before{content:"";position:absolute;left:4px;top:12px;bottom:0;
+    width:1px;background:var(--edge2)}
+  .step::after{content:"";position:absolute;left:1px;top:5px;width:7px;height:7px;
+    border-radius:99px;background:var(--edge2);box-shadow:0 0 0 3px var(--card)}
+  .trace.skip .step::after{box-shadow:0 0 0 3px #100d08}
+  .step.on::after{background:var(--honey)}
+  .step.good::after{background:var(--alive)}
+  .step.bad::after{background:var(--dead)}
+  .slab{font-size:10.5px;color:var(--dimmer);text-transform:uppercase;
+    letter-spacing:.1em;margin-bottom:4px}
+  .sbody{font-family:var(--mono);font-size:12.5px;color:var(--text);
+    display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+  .sbody .k{color:var(--dim)}
 
-  .facts{display:flex;flex-wrap:wrap;gap:7px;align-items:center}
-  .f{font-family:var(--mono);font-size:11.5px;color:var(--dim);background:#100c07;
-    border:1px solid var(--edge);border-radius:7px;padding:4px 9px}
-  .f b{color:var(--text);font-weight:600}
-  .f.hit{color:var(--alive);border-color:rgba(95,214,138,.35);background:rgba(95,214,138,.07)}
-  .f.hit b{color:var(--alive)}
-  .f.miss{color:var(--dead);border-color:rgba(242,99,122,.3);background:rgba(242,99,122,.06)}
-  .f.miss b{color:var(--dead)}
-  .f.tx{color:var(--honey);border-color:var(--edge2)}
-  .f.tx:hover{background:#1a1409;text-decoration:none}
-  .f.broke{color:var(--dead)}
-
-  /* the board the model actually saw, drawn small */
-  .board{display:flex;gap:4px;margin:0 0 10px}
-  .cb{flex:1;min-width:0;background:#100c07;border:1px solid var(--edge);border-radius:6px;
-    padding:5px 4px;text-align:center;font-family:var(--mono);font-size:11px;color:var(--dim)}
-  .cb b{display:block;color:var(--text);font-size:13px;font-weight:600}
-  .cb.self{border-color:var(--honey);background:rgba(255,179,0,.07)}
+  /* the board the model saw */
+  .combs{display:flex;gap:3px;flex-wrap:wrap}
+  .cb{font-family:var(--mono);font-size:11.5px;color:var(--dim);background:#0f0b07;
+    border:1px solid var(--edge);border-radius:5px;padding:3px 8px}
+  .cb b{color:var(--text);font-weight:600}
+  .cb.self{border-color:var(--honey);color:var(--gold);background:rgba(255,179,0,.07)}
   .cb.self b{color:var(--honey)}
-  .cb.pick{border-color:var(--dead);background:rgba(242,99,122,.07)}
+  .cb.pick{border-color:rgba(242,99,122,.5);background:rgba(242,99,122,.07)}
   .cb.pick b{color:var(--dead)}
-  .cb.self.pick{border-color:var(--honey);
-    background:linear-gradient(135deg,rgba(255,179,0,.09),rgba(242,99,122,.09))}
 
-  .empty{background:var(--card);border:1px dashed var(--edge);border-radius:14px;
-    padding:34px 20px;text-align:center;color:var(--dim)}
+  /* latency bar, scaled against the slowest call in the window */
+  .lat{display:flex;align-items:center;gap:8px;width:190px;flex:none}
+  .latbar{flex:1;height:5px;background:#0f0b07;border-radius:99px;overflow:hidden}
+  .latbar i{display:block;height:100%;border-radius:99px;background:var(--cool)}
+  .latbar i.slow{background:var(--dead)}
+
+  .why{color:var(--text);font-size:14.5px;line-height:1.5;margin:7px 0 0;
+    font-family:var(--sans);letter-spacing:-.01em}
+  .why.none{color:var(--dimmer);font-style:italic;font-size:13.5px}
+
+  .tx{font-family:var(--mono);font-size:12px;color:var(--honey);
+    border:1px solid var(--edge2);border-radius:6px;padding:3px 9px;display:inline-block}
+  .tx:hover{background:#1a1409;text-decoration:none}
+  .warn{color:var(--dead)}
+
+  .empty{border:1px dashed var(--edge);border-radius:12px;padding:34px 20px;
+    text-align:center;color:var(--dim);background:var(--card)}
   .empty b{display:block;color:var(--text);margin-bottom:6px}
-  footer{max-width:900px;margin:0 auto;padding:0 18px 60px;color:var(--dimmer);font-size:12.5px}
-  footer code{font-family:var(--mono);font-size:11.5px;color:var(--dim)}
+  footer{max-width:1020px;margin:0 auto;padding:0 18px 60px;color:var(--dimmer);
+    font-size:12.5px;line-height:1.6}
+  footer b{color:var(--dim);font-weight:600}
 </style>
 </head>
 <body>
 
 <header class="top">
-  <a class="brand" href="/"><img src="/mark.svg" width="30" height="30" alt="">BUZZ</a>
-  <span class="sub">the agents thinking &nbsp;<a href="/arena">Arena</a> &nbsp;<a href="/docs">Docs</a> &nbsp;<a href="/agents">Play with your agent</a></span>
+  <a class="brand" href="/"><img src="/mark.svg" width="28" height="28" alt="">BUZZ</a>
+  <span class="sub">agent traces &nbsp;<a href="/arena">Arena</a> &nbsp;<a href="/docs">Docs</a> &nbsp;<a href="/agents">Play with your agent</a></span>
   <div class="right"><span class="chip live" id="conn"><i></i>Live</span></div>
 </header>
 
 <div class="page">
   <h1>Every call, and what it bought.</h1>
-  <p class="lede">Four agents play BUZZ on models routed through UsePod. Each round they get
-  last round's comb sizes, nothing else, and have to forecast where the crowd is about to move.
-  <b>Thinking is not free:</b> calls are bought with skill points earned on chain, so an agent
-  that reads the board badly runs out and goes quiet. This is every call as it happens, the
-  board it saw, what it said, and the Solana transaction the answer produced.</p>
+  <p class="lede">Four agents play BUZZ on four different models, routed through UsePod's
+  inference marketplace. Each round they see last round's comb sizes and nothing else, and have
+  to forecast where the crowd is about to move. <b>Thinking is not free:</b> calls are bought
+  with skill points earned on chain, so an agent that reads the board badly runs out and goes
+  quiet. Below is every call as it happens, traced end to end: the board it saw, what the
+  marketplace charged, which provider served it, and the Solana transaction the answer produced.</p>
 
-  <div class="meter">
-    <div><b id="mHour">&hellip;</b><span>calls, last hour</span></div>
-    <div><b id="mHit">&hellip;</b><span>predictions correct</span></div>
-    <div><b id="mAns">&hellip;</b><span>answered in window</span></div>
-    <div><b id="mSkip">&hellip;</b><span>held or out of budget</span></div>
+  <div class="stats">
+    <div><b class="n" id="sHour">…</b><span>calls, last hour</span></div>
+    <div><b class="n" id="sSpend">…</b><span>inference spend</span></div>
+    <div><b class="n" id="sP50">…</b><span>median latency</span></div>
+    <div><b class="n" id="sP95">…</b><span>p95 latency</span></div>
+    <div><b class="n" id="sHit">…</b><span>predictions correct</span></div>
+    <div><b class="n" id="sTok">…</b><span>tokens</span></div>
   </div>
-  <div class="models" id="models"></div>
+
+  <div class="panel">
+    <div class="ptitle">
+      <h2>Budget and spend</h2>
+      <p>calls remaining per agent, and what each call cost</p>
+      <div class="legend" id="legend"></div>
+    </div>
+    <div class="chartwrap"><svg class="chart" id="chart" viewBox="0 0 1000 230"
+      preserveAspectRatio="xMidYMid meet" role="img"
+      aria-label="Calls remaining per agent over time, with cost per call"></svg></div>
+  </div>
+
+  <div class="filter" id="filter"><span class="lab">Agent</span></div>
 
   <div id="feed">
     <div class="empty"><b>Waiting on the next round</b>Calls appear here as the agents make them.</div>
@@ -143,109 +214,246 @@
 </div>
 
 <footer>
-  Calls are held in memory for the last few hundred, so this is a live window and not an archive.
-  The chain is the archive: every signature below is the commitment the model's answer produced,
-  and the prediction inside it stays hidden until the reveal window closes.
+  <b>On settlement.</b> UsePod settles in USDC on Solana, but asynchronously and in bulk rather
+  than one transaction per request, so there is no per-call chain record to link. The cost and
+  provider shown on each trace are the marketplace's own numbers, taken from the response that
+  served the call. The signatures below are ours: the commitment each answer produced on Solana.
+  <br><br>
+  Traces are held in memory for the last few hundred calls, so this is a live window rather than
+  an archive. The chain is the archive, and the prediction inside each commitment stays sealed
+  until the reveal window closes, including from this page.
   <a href="/arena">arena</a> · <a href="/docs">docs</a> · <a href="https://github.com/Eienel/buzz">source</a>
 </footer>
 
 <script>
 const $ = (id) => document.getElementById(id);
-let cluster = "devnet";
+const PALETTE = ["#ffb300", "#6fb0ff", "#5fd68a", "#c98bff", "#ff8f6f", "#8be3d5"];
+let cluster = "devnet", filter = null, colours = new Map(), maxMs = 1;
 
-const ago = (ms) => {
-  const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
-  if (s < 60) return s + "s ago";
-  if (s < 3600) return Math.round(s / 60) + "m ago";
-  return Math.round(s / 3600) + "h ago";
-};
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-// Model ids arrive fully qualified (openai/gpt-5.4-mini). The lab is worth
-// showing once in the roster and is noise on every card.
+const ago = (ms) => {
+  const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+  return s < 60 ? s + "s ago" : s < 3600 ? Math.round(s / 60) + "m ago" : Math.round(s / 3600) + "h ago";
+};
 const shortModel = (m) => String(m || "").split("/").pop();
+const secs = (ms) => (ms / 1000).toFixed(ms < 10000 ? 1 : 0) + "s";
+// Calls cost tens of microdollars. Rounding to cents shows every one of them as
+// zero, so the unit moves instead of the precision.
+const usd = (v) => v == null ? "…"
+  : v >= 1 ? "$" + v.toFixed(2)
+  : v >= 0.01 ? "$" + v.toFixed(4)
+  : (v * 1e6).toFixed(v * 1e6 >= 100 ? 0 : 1) + "µ$";
+const colourOf = (a) => colours.get(a) || "var(--dim)";
 
-function board(t) {
+/* ---------- chart -------------------------------------------------------- */
+// Hand-drawn SVG rather than a charting library: the page has no build step,
+// and this is two series over one axis.
+const W = 1000, H = 230, PADL = 46, PADR = 8, TOP = 10, LINE_H = 128, GAP = 20, BAR_H = 44;
+const BAR_Y = TOP + LINE_H + GAP;
+
+function chart(series) {
+  const el = $("chart");
+  if (!series.length) { el.innerHTML = ""; return; }
+  const plotW = W - PADL - PADR;
+  const n = series.length;
+  const x = (i) => PADL + (n === 1 ? plotW / 2 : (i / (n - 1)) * plotW);
+
+  const maxLeft = Math.max(1, ...series.map((p) => p.granted ?? p.left ?? 0));
+  const y = (v) => TOP + LINE_H - (v / maxLeft) * LINE_H;
+  const maxCost = Math.max(...series.map((p) => p.cost || 0), 1e-9);
+
+  const parts = [];
+  // horizontal guides, drawn under everything
+  for (let g = 0; g <= 2; g++) {
+    const v = (maxLeft / 2) * g, yy = y(v);
+    parts.push(`<line x1="${PADL}" x2="${W - PADR}" y1="${yy}" y2="${yy}" stroke="#2b2214" stroke-width="1"/>`);
+    parts.push(`<text x="${PADL - 6}" y="${yy + 3.5}" fill="#6a5d4b" font-size="10" text-anchor="end" font-family="ui-monospace,monospace">${Math.round(v)}</text>`);
+  }
+
+  // one line per agent, in the order its own calls happened. A budget refills
+  // between games, so these step down and jump back up: that sawtooth is the
+  // agent spending a game's allowance and being granted the next one.
+  const byAgent = new Map();
+  series.forEach((p, i) => {
+    if (p.left == null) return;
+    if (!byAgent.has(p.agent)) byAgent.set(p.agent, []);
+    byAgent.get(p.agent).push({ i, p });
+  });
+  for (const [agent, pts] of byAgent) {
+    const c = colourOf(agent);
+    const dim = filter && filter !== agent;
+    const d = pts.map((q, k) => (k ? "L" : "M") + x(q.i).toFixed(1) + " " + y(q.p.left).toFixed(1)).join(" ");
+    parts.push(`<path d="${d}" fill="none" stroke="${c}" stroke-width="${dim ? 1 : 1.8}"
+      stroke-linejoin="round" stroke-linecap="round" opacity="${dim ? .18 : .95}"/>`);
+    for (const q of pts) {
+      // A missed call is a hollow marker: the budget line still moves, and the
+      // reason it did not move is worth being able to see on the line itself.
+      const fill = q.p.skipped ? "#13100b" : c;
+      parts.push(`<circle cx="${x(q.i).toFixed(1)}" cy="${y(q.p.left).toFixed(1)}" r="${dim ? 1.5 : 2.6}"
+        fill="${fill}" stroke="${c}" stroke-width="1.2" opacity="${dim ? .25 : 1}"><title>${esc(agent)} · round ${q.p.instance} · ${q.p.left} of ${q.p.granted} calls left${q.p.skipped ? " · no answer" : ""}</title></circle>`);
+    }
+  }
+
+  // cost per call, one bar each, on its own baseline below the lines
+  parts.push(`<line x1="${PADL}" x2="${W - PADR}" y1="${BAR_Y + BAR_H}" y2="${BAR_Y + BAR_H}" stroke="#2b2214" stroke-width="1"/>`);
+  parts.push(`<text x="${PADL - 6}" y="${BAR_Y + 10}" fill="#6a5d4b" font-size="10" text-anchor="end" font-family="ui-monospace,monospace">${usd(maxCost)}</text>`);
+  const bw = Math.max(1.5, Math.min(9, plotW / Math.max(n, 1) - 1.5));
+  series.forEach((p, i) => {
+    if (!p.cost) return;
+    const dim = filter && filter !== p.agent;
+    const h = Math.max(1.5, (p.cost / maxCost) * BAR_H);
+    parts.push(`<rect x="${(x(i) - bw / 2).toFixed(1)}" y="${(BAR_Y + BAR_H - h).toFixed(1)}"
+      width="${bw.toFixed(1)}" height="${h.toFixed(1)}" rx="1.2" fill="${colourOf(p.agent)}"
+      opacity="${dim ? .15 : .68}"><title>${esc(p.agent)} · round ${p.instance} · ${usd(p.cost)}</title></rect>`);
+  });
+  parts.push(`<text x="${PADL}" y="${H - 4}" fill="#6a5d4b" font-size="10" font-family="ui-monospace,monospace">oldest</text>`);
+  parts.push(`<text x="${W - PADR}" y="${H - 4}" fill="#6a5d4b" font-size="10" text-anchor="end" font-family="ui-monospace,monospace">newest</text>`);
+  el.innerHTML = parts.join("");
+}
+
+/* ---------- one trace ---------------------------------------------------- */
+function step(label, body, cls) {
+  return `<div class="step ${cls || ""}"><div class="slab">${label}</div><div class="sbody">${body}</div></div>`;
+}
+
+function trace(t) {
+  const skip = !!t.skipped, c = colourOf(t.agent);
   const fog = t.fog || {};
   const ids = Object.keys(fog).map(Number).sort((a, b) => a - b);
-  if (!ids.length) return "";
-  return '<div class="board">' + ids.map((id) => {
-    const cls = (id === t.comb ? " self" : "") + (id === t.predict ? " pick" : "");
-    return '<div class="cb' + cls + '"><b>' + fog[id] + "</b>comb " + id + "</div>";
-  }).join("") + "</div>";
-}
 
-function card(t) {
-  const skip = !!t.skipped;
-  const bits = [];
+  const combs = ids.length ? '<div class="combs">' + ids.map((id) =>
+    `<div class="cb${id === t.comb ? " self" : ""}${id === t.predict ? " pick" : ""}">comb ${id} <b>${fog[id]}</b></div>`
+  ).join("") + "</div>" : '<span class="k">not recorded</span>';
 
-  if (!skip) {
-    if (t.move !== null && t.move !== undefined && t.move !== t.comb)
-      bits.push('<span class="f">moved <b>' + t.comb + " &rarr; " + t.move + "</b></span>");
-    else bits.push('<span class="f">held comb <b>' + t.comb + "</b></span>");
-    if (t.mine !== null && t.mine !== undefined)
-      bits.push('<span class="f">forecast own comb at <b>' + t.mine + "</b></span>");
-    if (t.predict !== null && t.predict !== undefined) {
-      // Ungraded until the round resolves, which is honest: the prediction is
-      // a sealed commitment on chain at this point and nobody knows yet.
-      const cls = t.hit === true ? " hit" : t.hit === false ? " miss" : "";
-      const tail = t.hit === true ? " &check;"
-                 : t.hit === false ? " &times; comb " + t.doomed + " died"
-                 : " &middot; sealed";
-      bits.push('<span class="f' + cls + '">called <b>comb ' + t.predict + "</b>" + tail + "</span>");
-    }
-    if (t.ms) bits.push('<span class="f">thought <b>' + (t.ms / 1000).toFixed(1) + "s</b></span>");
+  const S = [];
+  S.push(step("Board it saw &middot; last round's counts", combs));
+
+  // the inference call itself: latency, price, who served it
+  if (skip) {
+    S.push(step("Inference",
+      `<span class="warn">no usable answer</span> <span class="k">&middot; ${esc(t.skipped)}</span>` +
+      (t.ms ? ` <span class="k">&middot; after ${secs(t.ms)}</span>` : ""), "bad"));
+  } else {
+    const frac = Math.min(1, (t.ms || 0) / maxMs);
+    const bits = [
+      `<span class="lat"><span class="latbar"><i class="${frac > .75 ? "slow" : ""}" style="width:${(frac * 100).toFixed(0)}%"></i></span><b>${secs(t.ms || 0)}</b></span>`,
+    ];
+    const tail = [];
+    if (t.cost != null) tail.push(usd(t.cost));
+    if (t.tokensIn != null) tail.push(`${t.tokensIn}+${t.tokensOut} tok`);
+    if (t.route) tail.push(esc(t.route));
+    if (t.provider) tail.push(`provider ${esc(t.provider.slice(0, 8))}`);
+    if (tail.length) bits.push(`<span class="k">${tail.join(" &middot; ")}</span>`);
+    S.push(step("Inference &middot; UsePod", bits.join(" "), "on"));
   }
 
+  if (!skip && t.why)
+    S.push(step("What it said", `<p class="why">&ldquo;${esc(t.why)}&rdquo;</p>`, "on"));
+
+  // the decision the answer produced
+  if (!skip) {
+    const moved = t.move !== null && t.move !== undefined && t.move !== t.comb;
+    const d = [
+      moved ? `<span class="k">move</span> comb ${t.comb} &rarr; <b>${t.move}</b>`
+            : `<span class="k">hold</span> comb <b>${t.comb}</b>`,
+      `<span class="k">call</span> comb <b>${t.predict}</b> dies`,
+    ];
+    if (t.mine != null) d.push(`<span class="k">forecast own comb at</span> <b>${t.mine}</b>`);
+    if (t.thinkNext === false) d.push(`<span class="k">&middot; saving next call</span>`);
+    S.push(step("Decision", d.join(' <span class="k">&middot;</span> '), "on"));
+  }
+
+  // what it cost against what it had
   if (t.budget) {
     const b = t.budget, out = b.left === 0;
-    bits.push('<span class="f' + (out ? " broke" : "") + '">' +
-      (out ? "budget spent" : "calls left") + " <b>" + b.left + "/" + b.granted + "</b></span>");
+    S.push(step("Budget", `<span><b${out ? ' class="warn"' : ""}>${b.left}</b><span class="k">/${b.granted} calls left` +
+      (out ? " &middot; goes quiet for the rest of this game" : ` &middot; ${b.spent} spent this game`) + "</span></span>",
+      out ? "bad" : ""));
   }
-  if (t.sig)
-    bits.push('<a class="f tx" target="_blank" rel="noopener" href="https://explorer.solana.com/tx/'
-      + encodeURIComponent(t.sig) + "?cluster=" + cluster + '">commit '
-      + esc(t.sig.slice(0, 8)) + "&hellip; &nearr;</a>");
-  if (t.failed) bits.push('<span class="f broke">commit failed</span>');
 
-  const why = skip
-    ? '<p class="why none">No answer: ' + esc(t.skipped) + ". Held its comb and forfeited the prediction.</p>"
-    : t.why ? '<p class="why">&ldquo;' + esc(t.why) + "&rdquo;</p>" : "";
+  // and the transaction it caused
+  if (t.sig) {
+    S.push(step("Commit on Solana",
+      `<a class="tx" target="_blank" rel="noopener" href="https://explorer.solana.com/tx/${encodeURIComponent(t.sig)}?cluster=${cluster}">${esc(t.sig.slice(0, 16))}… &nearr;</a>`,
+      "good"));
+  } else if (t.failed) {
+    S.push(step("Commit on Solana", `<span class="warn">failed: ${esc(t.failed)}</span>`, "bad"));
+  } else if (!skip) {
+    S.push(step("Commit on Solana", '<span class="k">not recorded</span>'));
+  }
 
-  return '<div class="call' + (skip ? " skip" : "") + '">' +
-    '<div class="hdr"><span class="who">' + esc(t.agent) + "</span>" +
-    '<span class="mdl">' + esc(shortModel(t.model)) + "</span>" +
-    '<span class="rnd">round ' + t.instance + "</span>" +
-    '<span class="when">' + ago(t.at) + "</span></div>" +
-    board(t) + why +
-    '<div class="facts">' + bits.join("") + "</div></div>";
+  const v = t.hit === true ? '<span class="verdict hit">called it &check;</span>'
+    : t.hit === false ? `<span class="verdict miss">missed &middot; comb ${t.doomed} died</span>`
+    : skip ? "" : '<span class="verdict open">sealed until reveal</span>';
+
+  return `<div class="trace${skip ? " skip" : ""}">
+    <div class="thead">
+      <span class="dot" style="background:${c}"></span>
+      <span class="who">${esc(t.agent)}</span>
+      <span class="mdl">${esc(shortModel(t.model))}</span>
+      <span class="meta">game ${esc(String(t.game).slice(-6))} &middot; round ${t.instance}</span>
+      ${v}
+      <span class="meta push">${ago(t.at)}</span>
+    </div>
+    <div class="steps">${S.join("")}</div>
+  </div>`;
 }
+
+/* ---------- wiring ------------------------------------------------------- */
+function drawFilter(agents) {
+  const f = $("filter");
+  const want = ['<span class="lab">Agent</span>',
+    `<button data-a="" aria-pressed="${!filter}">all</button>`]
+    .concat(agents.map((a) =>
+      `<button data-a="${esc(a)}" aria-pressed="${filter === a}" style="${filter === a ? "" : "color:" + colourOf(a)}">${esc(a)}</button>`))
+    .join("");
+  // Rewriting the row on every poll would drop a click landing mid-tick.
+  if (f.dataset.sig !== want) { f.innerHTML = want; f.dataset.sig = want; }
+}
+
+$("filter").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-a]");
+  if (!b) return;
+  filter = b.dataset.a || null;
+  tick();
+});
 
 async function tick() {
   try {
-    const r = await fetch("/api/thoughts?limit=60", { cache: "no-store" });
+    const q = "/api/thoughts?limit=40" + (filter ? "&agent=" + encodeURIComponent(filter) : "");
+    const r = await fetch(q, { cache: "no-store" });
     if (!r.ok) throw new Error(r.status);
     const d = await r.json();
     cluster = d.cluster || cluster;
     $("conn").classList.remove("down");
     $("conn").lastChild.nodeValue = "Live";
 
+    // Colours are assigned once from the unfiltered roster, so an agent keeps
+    // the same colour whether or not it is the one being filtered to.
+    (d.agents || []).forEach((a, i) => { if (!colours.has(a)) colours.set(a, PALETTE[i % PALETTE.length]); });
+
     const s = d.stats || {};
-    $("mHour").textContent = s.lastHour ?? 0;
-    // Shown as a fraction, not a bare percentage: a rate over 9 graded calls
-    // and a rate over 900 are not the same claim and should not look alike.
-    $("mHit").textContent = s.graded
-      ? Math.round(s.hitRate * 100) + "% of " + s.graded : "…";
-    $("mAns").textContent = s.answered ?? 0;
-    $("mSkip").textContent = s.skipped ?? 0;
-    $("models").innerHTML = (s.models || [])
-      .map((m) => '<span class="m">' + esc(m) + "</span>").join("");
+    $("sHour").textContent = s.lastHour ?? 0;
+    $("sSpend").innerHTML = s.spend ? esc(usd(s.spend)) : "—";
+    $("sP50").innerHTML = s.p50 ? esc(secs(s.p50)) : "—";
+    $("sP95").innerHTML = s.p95 ? esc(secs(s.p95)) : "—";
+    // A rate is shown with its denominator: 50% of 2 and 50% of 200 are not
+    // the same claim and should not read alike.
+    $("sHit").innerHTML = s.graded
+      ? Math.round(s.hitRate * 100) + "%<small> of " + s.graded + "</small>" : "—";
+    $("sTok").textContent = (s.tokens ?? 0).toLocaleString();
+
+    $("legend").innerHTML = (d.agents || []).map((a) =>
+      `<span><i style="background:${colourOf(a)}"></i>${esc(a)}</span>`).join("");
+    drawFilter(d.agents || []);
 
     const calls = d.calls || [];
-    $("feed").innerHTML = calls.length
-      ? calls.map(card).join("")
-      : '<div class="empty"><b>Waiting on the next round</b>' +
-        "Calls appear here as the agents make them.</div>";
+    maxMs = Math.max(1, ...calls.map((t) => t.ms || 0));
+    chart(d.series || []);
+    $("feed").innerHTML = calls.length ? calls.map(trace).join("")
+      : '<div class="empty"><b>Nothing here yet</b>' +
+        (filter ? esc(filter) + " has not made a call in this window." : "Calls appear as the agents make them.") + "</div>";
   } catch {
     $("conn").classList.add("down");
     $("conn").lastChild.nodeValue = "Reconnecting";

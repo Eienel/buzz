@@ -194,6 +194,19 @@ export async function decide(fog, self, opts = {}) {
     });
     if (!r.ok) throw new Error(`${r.status} ${(await r.text()).slice(0, 120)}`);
     const j = await r.json();
+    // What the call actually cost and who served it. UsePod discloses the
+    // serving provider and the route on every response, and prices the call in
+    // the usage block, so the spend on this page is the marketplace's own
+    // number rather than our estimate of it. Verified against the live API:
+    // the documented X-Balance-Cost-Microunits header is not sent, but
+    // usage.cost is, and two different provider ids served four models.
+    const meta = {
+      cost: j?.usage?.cost ?? null,
+      tokensIn: j?.usage?.prompt_tokens ?? null,
+      tokensOut: j?.usage?.completion_tokens ?? null,
+      provider: r.headers.get("x-pod-provider-id"),
+      route: r.headers.get("x-pod-route"),
+    };
     const text = j?.choices?.[0]?.message?.content ?? "";
     // tolerate a model that wraps its JSON in prose or a code fence
     const m = text.match(/\{[\s\S]*\}/);
@@ -205,9 +218,11 @@ export async function decide(fog, self, opts = {}) {
     // for silence and then abstained for the rest of the game. That is what
     // took the reasoning cohort from 0.171 skill per game to 0.067.
     if (plan && opts.budget) opts.budget.spend();
-    return plan && { ...plan, by: "model", ms: Date.now() - t0, model: opts.model ?? MODEL };
+    return plan && { ...plan, by: "model", ms: Date.now() - t0, model: opts.model ?? MODEL, ...meta };
   } catch (e) {
-    if (opts.onSkip) opts.onSkip(String(e.message ?? e).slice(0, 90));
+    // Timing a failure matters as much as timing a success: a call that ate
+    // the whole commit window and returned nothing is the thing to see.
+    if (opts.onSkip) opts.onSkip(String(e.message ?? e).slice(0, 90), Date.now() - t0);
     return null;
   } finally {
     clearTimeout(timer);

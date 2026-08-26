@@ -301,9 +301,9 @@ async function playGame(gameNo) {
             // same reason the answers are: an agent that ran out of budget or
             // missed the window is the metering working, and a feed that shows
             // only the good rounds is a highlight reel.
-            onSkip: (reason) => feed.thought({
+            onSkip: (reason, ms) => feed.thought({
               game: String(gid), instance, agent: name, model: modelFor(podIx),
-              comb: self, fog, skipped: reason,
+              comb: self, fog, skipped: reason, ms: ms ?? null,
               budget: budgetShape(budgets.get(name)),
             }),
           })
@@ -444,6 +444,8 @@ async function playGame(gameNo) {
         game: String(gid), instance, agent: a.name, model: plan.model ?? a.model,
         comb: a.circle, fog, mine: plan.mine, move: plan.move, predict: plan.predict,
         why: plan.why, thinkNext: plan.thinkNext, ms: plan.ms,
+        cost: plan.cost, tokensIn: plan.tokensIn, tokensOut: plan.tokensOut,
+        provider: plan.provider, route: plan.route,
         budget: budgetShape(budgets.get(a.name)), sig, failed,
       });
     }

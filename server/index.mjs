@@ -564,23 +564,48 @@ createServer(async (req,res)=>{
   if(p === "/api/thoughts"){
     const want = Number(url.searchParams.get("limit"));
     const limit = Number.isFinite(want) && want > 0 ? Math.min(want, THOUGHTS_MAX) : 60;
-    const graded = thoughts.filter((t) => t.hit !== null);
+    // Filtering happens here rather than in the page so a narrowed view gets a
+    // full window of that agent's calls instead of whatever survived a slice
+    // taken across all four.
+    const who = url.searchParams.get("agent");
+    const all = who ? thoughts.filter((t) => t.agent === who) : thoughts;
+    const graded = all.filter((t) => t.hit !== null);
     const hits = graded.filter((t) => t.hit).length;
     const hour = Date.now() - 3600_000;
+    const answered = all.filter((t) => !t.skipped);
+    const latencies = answered.map((t) => t.ms).filter((v) => v > 0).sort((a, b) => a - b);
+    const spend = answered.reduce((a, t) => a + (t.cost ?? 0), 0);
     return send(res, 200, {
-      calls: thoughts.slice(-limit).reverse(),
+      calls: all.slice(-limit).reverse(),
+      // The chart reads this: oldest first, one point per call, trimmed to what
+      // a sparkline can actually resolve.
+      series: all.slice(-160).map((t) => ({
+        at: t.at, agent: t.agent, instance: t.instance, game: t.game,
+        left: t.budget?.left ?? null, granted: t.budget?.granted ?? null,
+        cost: t.cost ?? 0, ms: t.ms ?? null, hit: t.hit, skipped: !!t.skipped,
+      })),
       stats: {
         // Only what this buffer has seen, so it is a rate over the visible
         // window rather than an all-time figure the page cannot show its
         // working for. The leaderboard is where all-time lives.
-        answered: thoughts.filter((t) => !t.skipped).length,
-        skipped: thoughts.filter((t) => t.skipped).length,
-        lastHour: thoughts.filter((t) => t.at >= hour && !t.skipped).length,
+        answered: answered.length,
+        skipped: all.filter((t) => t.skipped).length,
+        lastHour: all.filter((t) => t.at >= hour && !t.skipped).length,
         graded: graded.length,
         hitRate: graded.length ? hits / graded.length : null,
-        models: [...new Set(thoughts.map((t) => t.model).filter(Boolean))],
-        window: thoughts.length,
+        spend,
+        // Median, not mean: one 30s outlier drags a mean somewhere no call
+        // actually went, and the tail is shown separately anyway.
+        p50: latencies.length ? latencies[Math.floor(latencies.length / 2)] : null,
+        p95: latencies.length ? latencies[Math.floor(latencies.length * 0.95)] : null,
+        tokens: answered.reduce((a, t) => a + (t.tokensIn ?? 0) + (t.tokensOut ?? 0), 0),
+        models: [...new Set(all.map((t) => t.model).filter(Boolean))],
+        providers: [...new Set(all.map((t) => t.provider).filter(Boolean))].length,
+        window: all.length,
       },
+      // Always the unfiltered roster, so filtering to one agent cannot hide
+      // the buttons that get you back to the others.
+      agents: [...new Set(thoughts.map((t) => t.agent))].sort(),
       cluster: CLUSTER,
     });
   }
