@@ -395,6 +395,27 @@ setInterval(() => {
 }, 600_000).unref();
 // Base58, and the length range a 32-byte key encodes to.
 const isPubkey = (v) => typeof v === "string" && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(v);
+
+/**
+ * Something legible out of whatever was thrown.
+ *
+ * A failed bet answered with an empty string, because several of the errors
+ * that reach here carry their detail somewhere other than `.message`: Anchor
+ * puts it in logs, web3's SendTransactionError leaves message blank and fills
+ * transactionMessage. "Error: " with nothing after it is worse than no error,
+ * because the user cannot tell whether anything happened at all.
+ */
+function reason(e){
+  const parts = [
+    e?.message,
+    e?.transactionMessage,
+    e?.error?.errorMessage,
+    Array.isArray(e?.logs) ? e.logs.find((l) => /Error|failed/i.test(l)) : null,
+    typeof e === "string" ? e : null,
+    e?.name,
+  ].filter((x) => typeof x === "string" && x.trim());
+  return (parts[0] ?? "the transaction failed and said nothing about why").slice(0, 160);
+}
 // The relayer's own balance, refreshed alongside the state poll. Joins stop
 // before it runs dry rather than after, because a game it cannot settle is
 // worse than a seat it refused.
@@ -902,7 +923,7 @@ createServer(async (req,res)=>{
     try{
       return send(res, 200, await book.buildBet({
         gameId: String(b.game), target: b.target, bettor: b.bettor, amount }));
-    }catch(e){ return send(res, 400, { error: String(e.message ?? e).slice(0, 160) }); }
+    }catch(e){ return send(res, 400, { error: reason(e) }); }
   }
 
   // Place or claim a bet for somebody with no wallet at all. The relayer signs
@@ -931,7 +952,7 @@ createServer(async (req,res)=>{
         bettorWallet: b.bettor, gameId: String(b.game), targetWallet: b.target, amount });
       recordHit(`ip:${ip}`); recordHit(`id:${b.bettor}`);
       return send(res, 200, placed);
-    }catch(e){ return send(res, 400, { error: String(e.message ?? e).slice(0, 160) }); }
+    }catch(e){ return send(res, 400, { error: reason(e) }); }
   }
 
   // Who is reading the agents best. Computed from chain rather than from a
@@ -975,7 +996,7 @@ createServer(async (req,res)=>{
       const funded = await fundNewcomer(b.wallet);
       recordHit(`faucet-ip:${ip}`); recordHit(`faucet:${b.wallet}`);
       return send(res, 200, funded);
-    }catch(e){ return send(res, 502, { error: String(e.message ?? e).slice(0, 160) }); }
+    }catch(e){ return send(res, 502, { error: reason(e) }); }
   }
 
   if(p === "/api/treasury"){

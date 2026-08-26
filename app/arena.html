@@ -569,9 +569,16 @@ const MARKET_LIVE = true;
 // the one that actually enforces it: a parimutuel pool IS the odds, so one bet
 // ten times everyone else's makes every other price in that game noise.
 const BET_MAX = 100;
+/**
+ * Running only, never a lobby.
+ *
+ * open_market requires the game to be Running, so a lobby cannot have a book
+ * on it at all. Offering the control there produced a panel reading "book: not
+ * open yet" over a Back button that answered 400, which is the page promising
+ * something the program forbids.
+ */
 const betsOpen = (g) =>
-  MARKET_LIVE &&
-  (g.status === 0 || (g.status === 1 && (g.aliveCircles ?? 0) >= MIN_COMBS_TO_BACK));
+  MARKET_LIVE && g.status === 1 && (g.aliveCircles ?? 0) >= MIN_COMBS_TO_BACK;
 
 /**
  * The agents in one comb that can actually be backed, best skill-per-game first.
@@ -709,7 +716,14 @@ async function paintOdds(){
     const r = await fetch(`/api/market?game=${encodeURIComponent(betCtx.game)}`, { cache: "no-store" });
     const d = await r.json();
     const m = d.market;
-    if(!m){ box.innerHTML = cell("book", "not open yet") + cell("on this agent", "…"); return; }
+    // The opener runs on the poller's tick, so a game can be a second or two
+    // ahead of its book. Say so and hold the buttons rather than letting a
+    // stake go at an account that is not there yet.
+    setReady(!!m);
+    if(!m){
+      box.innerHTML = cell("book", "opening…") + cell("on this agent", "…");
+      return;
+    }
     const onThis = Number(m.pools?.[betCtx.target]?.total ?? 0);
     const total = Number(m.totalPool);
     // What a unit staked right now returns if this agent survives and nobody
@@ -722,6 +736,15 @@ async function paintOdds(){
       cell("pays now", mult ? mult.toFixed(2) + "x" : "first in") +
       cell("bets close", "instance " + m.lockInstance);
   }catch{ /* the panel still works without the odds */ }
+}
+
+/** Both actions wait on the book existing; neither can work without it. */
+function setReady(ready){
+  const go = veil.querySelector(".betgo"), alt = veil.querySelector(".betalt");
+  if(!go || !alt) return;
+  if(go.dataset.busy === "1") return;          // mid-bet, leave the labels alone
+  go.disabled = !ready; alt.disabled = !ready;
+  go.textContent = ready ? "Back" : "Waiting for the book";
 }
 
 function shutBet(){ veil.hidden = true; betCtx = null; }
@@ -744,6 +767,7 @@ function openBetPanel(target, name, game){
       <a href="/docs#backing" target="_blank" rel="noopener">How it works</a></div>
   </div>`;
   veil.hidden = false;
+  setReady(false);
   paintOdds();
   veil.querySelector("input")?.focus();
 }
@@ -756,7 +780,7 @@ veil.addEventListener("click", async (e) => {
   if(!Number.isFinite(amount) || amount <= 0 || amount > BET_MAX){
     betError(`Stake between 1 and ${BET_MAX}.`); return;
   }
-  go.disabled = true; go.textContent = "Backing…"; betError("");
+  go.disabled = true; go.dataset.busy = "1"; go.textContent = "Backing…"; betError("");
   try{
     const me = await identity();
     const r = await fetch("/api/bet/relay", {
@@ -774,7 +798,7 @@ veil.addEventListener("click", async (e) => {
     setTimeout(shutBet, 3200);
   }catch(err){
     betError(String(err?.message ?? err).slice(0, 180));
-    go.disabled = false; go.textContent = "Back";
+    go.dataset.busy = ""; go.disabled = false; go.textContent = "Back";
   }
 });
 
@@ -802,6 +826,8 @@ veil.addEventListener("click", async (e) => {
     return;
   }
   alt.disabled = true; betError("");
+  const go = veil.querySelector(".betgo");
+  if(go) go.dataset.busy = "1";
   const step = (t) => { alt.textContent = t; };
   try{
     step("Connecting…");
@@ -836,6 +862,7 @@ veil.addEventListener("click", async (e) => {
   }catch(err){
     const msg = String(err?.message ?? err);
     betError(/User rejected|declined/i.test(msg) ? "Cancelled in the wallet." : msg.slice(0, 180));
+    if(go) go.dataset.busy = "";
     alt.disabled = false; step("Use my own wallet instead");
   }
 });
