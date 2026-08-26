@@ -131,7 +131,14 @@ function sanitise(raw, fog, self) {
  * game and holding its comb; it forfeits only the prediction for that round.
  */
 export async function decide(fog, self, opts = {}) {
-  if (!TOKEN) return null;
+  // Reasoning switched off is a state worth publishing, not a silent return.
+  // This was the one path that produced no record of any kind, which made an
+  // arena with no token look exactly like an arena whose feed was broken, and
+  // cost an evening telling the two apart.
+  if (!TOKEN) {
+    if (opts.onSkip) opts.onSkip("USEPOD_TOKEN is not set: reasoning is off", 0);
+    return null;
+  }
   // Thinking is not free. An agent out of budget does not fall back to a rule,
   // it stops reasoning: it holds its comb and forfeits the prediction, exactly
   // as it does when the model misses the window. Being broke and being slow
