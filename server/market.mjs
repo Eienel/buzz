@@ -268,11 +268,29 @@ export function makeMarket({ program, payer, connection }) {
       const tokenProgram = (await connection.getAccountInfo(mint)).owner;
       const decimals = (await connection.getTokenSupply(mint)).value.decimals;
       const units = new BN(String(BigInt(Math.round(Number(amount))) * 10n ** BigInt(decimals)));
+
+      // Whether this wallet can actually pay, checked here rather than
+      // discovered by the wallet at signing time.
+      //
+      // getAssociatedTokenAddressSync only derives an address, it does not ask
+      // whether the account exists, so this happily built a transaction for a
+      // wallet holding none of the stake token and handed it to the user to
+      // sign. Phantom would then fail on a simulated transfer from an account
+      // that is not there, which is both the most likely first-bet outcome and
+      // the least actionable error. The stake is a token we mint on devnet, so
+      // an empty wallet is the normal case, not the edge one.
+      const payerToken = getAssociatedTokenAddressSync(mint, b, false, tokenProgram);
+      const acc = await connection.getAccountInfo(payerToken);
+      const held = acc ? BigInt((await connection.getTokenAccountBalance(payerToken)).value.amount) : 0n;
+      if (held < BigInt(units.toString())) {
+        return { needsFunding: true, held: held.toString(), required: units.toString(), decimals };
+      }
+
       const tx = await program.methods.placeBet(units).accountsPartial({
         game, market, marketVault: mvaultPda(market),
         targetPlayer: playerPda(game, t), backable: backablePda(t),
         targetPool: tpoolPda(market, t), bet: betPda(market, b, t),
-        payerToken: getAssociatedTokenAddressSync(mint, b, false, tokenProgram),
+        payerToken,
         bettor: b, payer: b, relayer: null,
         stakeMint: mint, tokenProgram, systemProgram: SystemProgram.programId,
       }).transaction();
@@ -281,9 +299,7 @@ export function makeMarket({ program, payer, connection }) {
       return {
         tx: tx.serialize({ requireAllSignatures: false, verifySignatures: false }).toString("base64"),
         mint: mint.toBase58(), decimals,
-        // The wallet needs this to exist before it can pay from it, and a
-        // missing token account is the most likely reason a first bet fails.
-        payerToken: getAssociatedTokenAddressSync(mint, b, false, tokenProgram).toBase58(),
+        payerToken: payerToken.toBase58(),
       };
     },
     /** What the book is tracking, for /healthz-style visibility. */

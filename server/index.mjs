@@ -325,12 +325,24 @@ const BET_MAX = Number(process.env.BET_MAX ?? 100);
 const BET_PER_IP_HOUR = Number(process.env.BET_PER_IP_HOUR ?? 40);
 const BET_PER_ID_HOUR = Number(process.env.BET_PER_ID_HOUR ?? 20);
 const betHits = new Map();                     // key -> array of timestamps
-function tooMany(key, limit){
-  const now = Date.now(), cut = now - 3600_000;
+/**
+ * Peek and record are separate on purpose.
+ *
+ * They used to be one call that counted the attempt. A faucet request that
+ * died on an RPC 429 therefore spent the caller's one-per-wallet allowance and
+ * locked them out of the only way to get a stake, permanently, over a failure
+ * that was ours. An attempt is not a grant: only what actually landed counts.
+ */
+function overLimit(key, limit){
+  const cut = Date.now() - 3600_000;
   const hits = (betHits.get(key) ?? []).filter((t) => t > cut);
-  if(hits.length >= limit){ betHits.set(key, hits); return true; }
-  hits.push(now); betHits.set(key, hits);
-  return false;
+  betHits.set(key, hits);
+  return hits.length >= limit;
+}
+function recordHit(key){
+  const hits = betHits.get(key) ?? [];
+  hits.push(Date.now());
+  betHits.set(key, hits);
 }
 // Bounded: without this the map grows one entry per identity, forever.
 setInterval(() => {
@@ -489,6 +501,52 @@ async function pollFloat(){
     floatNote = String(e.message ?? e).slice(0, 90);
     console.log(`[float] ${floatNote}`);
   }
+}
+
+// What a newcomer is handed, once.
+const FAUCET_BUZZ = Number(process.env.FAUCET_BUZZ ?? 200);
+// Enough for a token account's rent (~0.002) and a long run of transactions,
+// and small enough that the payer's balance is a few hundred newcomers deep.
+const FAUCET_SOL = Number(process.env.FAUCET_SOL ?? 0.02);
+const FAUCET_PER_IP_DAY = Number(process.env.FAUCET_PER_IP_DAY ?? 5);
+
+async function fundNewcomer(wallet){
+  const who = new PublicKey(wallet);
+  const mint = new PublicKey(TREASURY_MINTS.BUZZ);
+  const mintAcc = await connection.getAccountInfo(mint);
+  if(!mintAcc) throw new Error("stake mint not found");
+  const { getOrCreateAssociatedTokenAccount, mintTo, getMint } = await import("@solana/spl-token");
+  const info = await getMint(connection, mint, undefined, mintAcc.owner);
+  if(!info.mintAuthority || !info.mintAuthority.equals(starter.publicKey))
+    throw new Error("not the mint authority on this cluster");
+
+  // SOL first: the token account below needs rent, and we pay it either way,
+  // but a wallet that cannot then send a transaction has been given nothing.
+  const have = await connection.getBalance(who);
+  let solSig = null;
+  if(have < FAUCET_SOL * 1e9){
+    const tx = new Transaction().add(SystemProgram.transfer({
+      fromPubkey: starter.publicKey, toPubkey: who,
+      lamports: Math.floor(FAUCET_SOL * 1e9),
+    }));
+    // One retry. A devnet blockhash going stale between fetch and send is
+    // common enough that it took out this call on its first real test, and a
+    // newcomer's only route to a stake should not turn on that.
+    try { solSig = await sendAndConfirmTransaction(connection, tx, [starter], { commitment: "confirmed" }); }
+    catch (e) {
+      if (!/Blockhash not found|block height exceeded/i.test(String(e.message ?? e))) throw e;
+      tx.recentBlockhash = undefined; tx.lastValidBlockHeight = undefined;
+      solSig = await sendAndConfirmTransaction(connection, tx, [starter], { commitment: "confirmed" });
+    }
+  }
+  const ata = await getOrCreateAssociatedTokenAccount(connection, starter, mint, who, false,
+    undefined, undefined, mintAcc.owner);
+  const units = BigInt(FAUCET_BUZZ) * 10n ** BigInt(info.decimals);
+  const sig = await mintTo(connection, starter, mint, ata.address, starter.publicKey, units,
+    [], undefined, mintAcc.owner);
+  console.log(`[faucet] ${FAUCET_BUZZ} BUZZ + ${solSig ? FAUCET_SOL : 0} SOL to ${wallet.slice(0,8)}`);
+  return { wallet, buzz: FAUCET_BUZZ, sol: solSig ? FAUCET_SOL : 0,
+           token: ata.address.toBase58(), sig, solSig };
 }
 
 const arena = makeArena({ snapshot: () => snapshot, enqueue });
@@ -826,10 +884,12 @@ createServer(async (req,res)=>{
         return send(res, 400, { error: `amount must be between 1 and ${BET_MAX}` });
       const ip = String(req.headers["x-forwarded-for"] ?? "").split(",")[0].trim()
         || req.socket.remoteAddress || "?";
-      if(tooMany(`ip:${ip}`, BET_PER_IP_HOUR) || tooMany(`id:${b.bettor}`, BET_PER_ID_HOUR))
+      if(overLimit(`ip:${ip}`, BET_PER_IP_HOUR) || overLimit(`id:${b.bettor}`, BET_PER_ID_HOUR))
         return send(res, 429, { error: "that is a lot of bets in an hour. Try again later." });
-      return send(res, 200, await relayer.handlers.bet({
-        bettorWallet: b.bettor, gameId: String(b.game), targetWallet: b.target, amount }));
+      const placed = await relayer.handlers.bet({
+        bettorWallet: b.bettor, gameId: String(b.game), targetWallet: b.target, amount });
+      recordHit(`ip:${ip}`); recordHit(`id:${b.bettor}`);
+      return send(res, 200, placed);
     }catch(e){ return send(res, 400, { error: String(e.message ?? e).slice(0, 160) }); }
   }
 
@@ -847,6 +907,34 @@ createServer(async (req,res)=>{
       bettorCache = { at: Date.now(), body };
       return send(res, 200, body);
     }catch(e){ return send(res, 502, { error: String(e.message ?? e).slice(0, 140) }); }
+  }
+
+  // Give a wallet something to stake with.
+  //
+  // The stake is BUZZ on devnet, a token we mint, so a stranger's wallet holds
+  // none of it and cannot bet at all. Without this the wallet path is only
+  // usable by us, which is why the relayer was carrying every bet.
+  //
+  // It also hands over a little SOL, because a wallet with tokens and no SOL
+  // still cannot send a transaction or pay the rent on its own token account,
+  // and "insufficient funds" would be the first thing a new player saw.
+  if(p === "/api/faucet"){
+    if(req.method !== "POST") return send(res, 405, { error: "POST" });
+    if(!starter) return send(res, 503, { error: "no faucet key configured" });
+    if(CLUSTER !== "devnet") return send(res, 403, { error: "devnet only" });
+    const b = await readBody(req);
+    if(!isPubkey(b.wallet)) return send(res, 400, { error: "wallet must be a base58 address" });
+    const ip = String(req.headers["x-forwarded-for"] ?? "").split(",")[0].trim()
+      || req.socket.remoteAddress || "?";
+    // Once per wallet, and a handful per address behind one IP. The SOL is the
+    // scarce half: the payer cannot mint that, only the tokens.
+    if(overLimit(`faucet-ip:${ip}`, FAUCET_PER_IP_DAY) || overLimit(`faucet:${b.wallet}`, 1))
+      return send(res, 429, { error: "this wallet has already been topped up. One per wallet." });
+    try{
+      const funded = await fundNewcomer(b.wallet);
+      recordHit(`faucet-ip:${ip}`); recordHit(`faucet:${b.wallet}`);
+      return send(res, 200, funded);
+    }catch(e){ return send(res, 502, { error: String(e.message ?? e).slice(0, 160) }); }
   }
 
   if(p === "/api/treasury"){

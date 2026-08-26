@@ -283,6 +283,28 @@
     font-weight:700;font-size:13px;cursor:pointer;white-space:nowrap}
   .betgo:disabled{opacity:.5;cursor:default}
   .betgo:active:not(:disabled){transform:translateY(1px)}
+  .betalt{width:100%;background:none;border:1px solid var(--line);border-radius:9px;
+    padding:9px;color:var(--dim);font-size:12px;cursor:pointer;margin-bottom:10px}
+  .betalt:hover:not(:disabled){color:var(--text);border-color:var(--dim)}
+  .betalt:disabled{opacity:.6;cursor:default}
+
+  /* who is reading the agents best */
+  .lbhead{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin:0 0 12px}
+  .lbhead h2{margin:0;font-size:15px;color:var(--text);font-weight:600}
+  .lbhead .sub{font-size:12px;color:var(--dim)}
+  .lbwrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px}
+  table.lb{width:100%;border-collapse:collapse;min-width:440px}
+  table.lb th{text-align:left;font-size:11px;color:var(--dim);font-weight:500;
+    padding:9px 12px;border-bottom:1px solid var(--line);white-space:nowrap}
+  table.lb td{padding:9px 12px;border-bottom:1px solid var(--panel2);
+    font-family:var(--mono);font-size:12.5px;color:var(--text);white-space:nowrap}
+  table.lb tr:last-child td{border-bottom:0}
+  table.lb .num{text-align:right}
+  table.lb .pos{color:var(--accent)}
+  table.lb .neg{color:#ff8f6f}
+  table.lb tr.me td{background:rgba(255,179,0,.07)}
+  table.lb tr.me .who::after{content:" you";color:var(--accent);font-size:10px}
+  .lbnote{font-size:12px;color:var(--dim);margin-top:10px;line-height:1.55}
   .betnote{font-size:12px;color:var(--dim);line-height:1.5}
   .betnote a{color:var(--accent)}
   .beterr{font-size:12px;color:#ff8f6f;line-height:1.5;word-break:break-word}
@@ -386,6 +408,7 @@
 <div class="body" id="root">
   <div class="empty"><b>Loading the hive</b>Reading Solana devnet.</div>
 </div>
+<div class="body" id="bettors" style="padding-top:0" hidden></div>
 <div class="body" id="hist" style="padding-top:0"></div>
 
 </div>
@@ -681,6 +704,7 @@ function openBetPanel(target, name, game){
       <input type="number" min="1" max="${BET_MAX}" step="1" value="10" aria-label="Amount to stake">
       <button class="betgo">Back</button>
     </div>
+    <button class="betalt">Use my own wallet instead</button>
     <div class="beterr"></div>
     <div class="betnote">Parimutuel: the whole pool is split across whoever backed a
       survivor, so the price moves as people bet. Devnet tokens, max ${BET_MAX} a bet.
@@ -720,6 +744,83 @@ veil.addEventListener("click", async (e) => {
     go.disabled = false; go.textContent = "Back";
   }
 });
+
+/* ---------- the wallet path ----------------------------------------------
+ *
+ * Slower to start and better afterwards. The relayer path is one click and
+ * costs the bettor nothing, but the identity behind it lives in this browser's
+ * storage: clear the site data and the winnings go with it. A wallet is
+ * durable, and it is what a prize paid on chain should land in.
+ *
+ * The faucet is what makes it possible at all. The stake is a token we mint on
+ * devnet, so a wallet arriving from outside holds none of it, and would fail at
+ * the transfer with an error nobody could act on.
+ */
+veil.addEventListener("click", async (e) => {
+  const alt = e.target.closest(".betalt");
+  if(!alt || !betCtx) return;
+  const amount = Number(veil.querySelector("input").value);
+  if(!Number.isFinite(amount) || amount <= 0 || amount > BET_MAX){
+    betError(`Stake between 1 and ${BET_MAX}.`); return;
+  }
+  const provider = window.solana;
+  if(!provider?.isPhantom){
+    betError("No Solana wallet found. Phantom is the one this is tested against.");
+    return;
+  }
+  alt.disabled = true; betError("");
+  const step = (t) => { alt.textContent = t; };
+  try{
+    step("Connecting…");
+    const web3 = await loadWeb3();
+    const { publicKey } = await provider.connect();
+    const bettor = publicKey.toBase58();
+
+    step("Signing…");
+    let prepared = await prepareBet(bettor, amount);
+    if(prepared.needsFunding){
+      // First visit: no devnet BUZZ, and probably no devnet SOL either.
+      step("Topping you up…");
+      const f = await fetch("/api/faucet", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ wallet: bettor }),
+      });
+      const fd = await f.json();
+      if(!f.ok) throw new Error(fd.error || "could not top up that wallet");
+      step("Signing…");
+      prepared = await prepareBet(bettor, amount);
+      if(prepared.needsFunding) throw new Error(prepared.error || "still no stake token in that wallet");
+    }
+    const bytes = Uint8Array.from(atob(prepared.tx), (c) => c.charCodeAt(0));
+    const { signature } = await provider.signAndSendTransaction(web3.Transaction.from(bytes));
+    step("Backed");
+    veil.querySelector(".betnote").innerHTML =
+      `Backed from <b>${esc(short(bettor))}</b>. ` +
+      `<a href="https://explorer.solana.com/tx/${encodeURIComponent(signature)}?cluster=devnet"
+        target="_blank" rel="noopener">View on the explorer</a>`;
+    paintOdds();
+    setTimeout(shutBet, 3200);
+  }catch(err){
+    const msg = String(err?.message ?? err);
+    betError(/User rejected|declined/i.test(msg) ? "Cancelled in the wallet." : msg.slice(0, 180));
+    alt.disabled = false; step("Use my own wallet instead");
+  }
+});
+
+async function prepareBet(bettor, amount){
+  const r = await fetch("/api/bet/prepare", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ game: betCtx.game, target: betCtx.target, bettor, amount }),
+  });
+  const d = await r.json();
+  if(!r.ok) throw new Error(String(d.error ?? "") || `server said ${r.status}`);
+  // needsFunding is the server saying this wallet cannot cover the stake, which
+  // it decides by reading the balance rather than by us matching an error
+  // string. That distinction matters: an unfunded wallet used to get a
+  // perfectly valid transaction it could not pay for, and found out inside
+  // Phantom.
+  return d;
+}
 document.addEventListener("keydown", (e) => { if(e.key === "Escape" && !veil.hidden) shutBet(); });
 setInterval(() => { if(!veil.hidden) paintOdds(); }, 5000);
 
@@ -908,6 +1009,72 @@ document.getElementById("view").addEventListener("click",e=>{
 for(const b of document.querySelectorAll("#view button")) b.classList.toggle("on",b.dataset.v===VIEW);
 for(const b of document.querySelectorAll("#mkt button")) b.classList.toggle("on",b.dataset.m===MKT);
 tick(); setInterval(tick,2500);
+
+// ---- who is reading the agents best -----------------------------------------
+//
+// Ranked on PnL rather than hit rate. Hit rate alone rewards backing the
+// favourite every time, and a parimutuel already pays badly for that, so a
+// board topped by it would be measuring caution. Hit rate sits next to it so a
+// big number with two bets behind it reads as exactly that.
+//
+// Identity is an address, because the prize is paid to an address. A display
+// name would need a signature scheme to stop somebody claiming to be somebody
+// else, and it would still be the address that got paid.
+const fmtTok = (raw, dec = 9) => {
+  const n = Number(raw) / Math.pow(10, dec);
+  const a = Math.abs(n);
+  return (n < 0 ? "-" : "") + (a >= 1000 ? Math.round(a).toLocaleString() : a.toFixed(a < 1 ? 3 : 1));
+};
+
+function myBettor(){
+  try { return JSON.parse(localStorage.getItem("buzz.bettor.v1") || "null")?.pk ?? null; }
+  catch { return null; }
+}
+
+async function tickBettors(){
+  const el = document.getElementById("bettors");
+  if(!el) return;
+  try{
+    const r = await fetch("/api/bettors", { cache: "no-store" });
+    if(!r.ok) return;
+    const d = await r.json();
+    const rows = d.bettors || [];
+    // Nothing decided yet is not an empty state worth a panel. The board
+    // appears when there is a result to show.
+    if(!rows.length){ el.hidden = true; return; }
+    const me = myBettor();
+    el.hidden = false;
+    el.innerHTML = `
+      <div class="lbhead">
+        <h2>Who is reading the agents</h2>
+        <span class="sub">${d.graded} settled bet${d.graded === 1 ? "" : "s"} across ${d.books} book${d.books === 1 ? "" : "s"}</span>
+      </div>
+      <div class="lbwrap"><table class="lb">
+        <thead><tr>
+          <th>#</th><th>bettor</th><th class="num">bets</th>
+          <th class="num">hit rate</th><th class="num">staked</th><th class="num">P&amp;L</th>
+        </tr></thead>
+        <tbody>${rows.slice(0, 25).map((b, i) => {
+          const mine = me && b.bettor === me;
+          const cls = b.pnl > 0 ? "pos" : b.pnl < 0 ? "neg" : "";
+          return `<tr class="${mine ? "me" : ""}">
+            <td>${i + 1}</td>
+            <td class="who"><a href="https://explorer.solana.com/address/${encodeURIComponent(b.bettor)}?cluster=devnet"
+              target="_blank" rel="noopener">${esc(short(b.bettor))}</a></td>
+            <td class="num">${b.bets}</td>
+            <td class="num">${b.hitRate == null ? "&hellip;" : Math.round(b.hitRate * 100) + "%"}</td>
+            <td class="num">${fmtTok(b.staked)}</td>
+            <td class="num ${cls}">${b.pnl > 0 ? "+" : ""}${fmtTok(b.pnl)}</td>
+          </tr>`;
+        }).join("")}</tbody>
+      </table></div>
+      <div class="lbnote">Computed from chain, not from a ledger we keep: every bet, every
+        decided pool and both pool totals are on devnet, so anyone can recompute this and
+        check the answer. Only settled books count, because an open bet is a position
+        rather than a result.</div>`;
+  }catch{ /* the board is not load-bearing */ }
+}
+tickBettors(); setInterval(tickBettors, 20000);
 
 // ---- history: what already happened -----------------------------------------
 // The chain forgets: finished games are closed to reclaim their rent. The
