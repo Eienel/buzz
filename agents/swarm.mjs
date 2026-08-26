@@ -44,7 +44,12 @@ const POD_AGENTS = Number(process.env.POD_AGENTS ?? (reasoningEnabled() ? 4 : 0)
 // five minute games, where a slow answer still lands.
 const POD_MIN_TEMPO = Number(process.env.POD_MIN_TEMPO ?? 60);
 // Gap between one reasoning agent's call and the next, so they do not race.
-const POD_STAGGER_MS = Number(process.env.POD_STAGGER_MS ?? 1500);
+//
+// Off by default. It was added on the theory that concurrency was why nobody
+// answered; the real cause was a ReferenceError, and every later pod pays for
+// the gap out of its own commit window. Set it if contention is ever shown to
+// be the problem.
+const POD_STAGGER_MS = Number(process.env.POD_STAGGER_MS ?? 0);
 // How many games may be live at once, and how long to wait between starting
 // them so three lobbies do not all crank on the same second.
 const MAX_CONCURRENT = Number(process.env.MAX_CONCURRENT ?? 3);

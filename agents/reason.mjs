@@ -22,13 +22,16 @@ const MODEL = process.env.USEPOD_MODEL ?? "llama-4-maverick";
 // agent with four wallets. Each pod gets its own model and its own disposition
 // so the reasoning cohort is four independent opinions, which is the only way
 // the comparison against five heuristics means anything.
-// Four labs, one per pod. Chosen by measurement, not by reputation: models that
-// stream hidden reasoning tokens (glm-4.7-flash, gemini-3.5-flash, deepseek-v4-flash)
-// spend the whole budget thinking and return empty content with finish_reason
-// "length", so they never answer inside a commit window and are unusable here.
+// One lab per pod. Chosen by measurement, not by reputation: models that stream
+// hidden reasoning tokens spend the whole budget thinking and return empty
+// content with finish_reason "length", so they never answer inside a commit
+// window and are unusable here. That list was glm-4.7-flash, gemini-3.5-flash
+// and deepseek-v4-flash; openai/gpt-5.4-mini has joined it and was in play
+// while it did. Measured against the real prompt: nothing at 700 tokens,
+// aborted at 1200, nothing again at 1800. It answers a short prompt fine,
+// which is exactly why a short probe did not catch it.
 const DEFAULT_MODELS = [
   "meta-llama/llama-4-maverick",
-  "openai/gpt-5.4-mini",
   "mistralai/mistral-medium-3.1",
   "anthropic/claude-haiku-4.5",
 ];
@@ -42,7 +45,14 @@ const PERSONAS = [
 ];
 export const modelFor = (i) => MODELS[i % MODELS.length];
 export const personaFor = (i) => PERSONAS[i % PERSONAS.length];
-const TIMEOUT_CAP = Number(process.env.USEPOD_TIMEOUT_MS ?? 20000);
+// Measured on the live proxy, not guessed: llama answered in 2.8s and 18.5s on
+// consecutive calls, mistral in 2.1s and 9.6s, gpt-5.4-mini in 10.5s. The old
+// 20s cap sat inside that spread, so the arena logged aborts at exactly 20000ms
+// while the models were still working. The commit window is the real bound and
+// budgetFor already applies it; this only stops a long tempo authorising a
+// minute-long call.
+const TIMEOUT_CAP = Number(process.env.USEPOD_TIMEOUT_MS ?? 30000);
+const MAX_TOKENS = Number(process.env.USEPOD_MAX_TOKENS ?? 700);
 
 // A fixed timeout does not survive short games. Commit is 60% of an instance,
 // so a 24s round leaves a 14s window that also has to carry two on-chain
@@ -197,7 +207,13 @@ export async function decide(fog, self, opts = {}) {
           { role: "system", content: opts.persona ? `${SYSTEM}\n\nYOUR DISPOSITION: ${opts.persona}` : SYSTEM },
           { role: "user", content: user },
         ],
-        max_tokens: 260,   // a forecast needs room to be worked out, not just asserted
+        // 260 was enough for a forecast and not enough for a model that thinks
+        // before it answers. gpt-5.4-mini spends the whole allowance on hidden
+        // reasoning tokens and returns finish_reason "length" with empty
+        // content: measured, 0 characters at 260 and valid JSON at 700. That is
+        // the same failure this file already documents for glm and gemini, and
+        // it had quietly reached one of the models actually in play.
+        max_tokens: MAX_TOKENS,
         // Identical agents on an identical board would herd, so each pod is
         // spread across the range rather than all sitting at one value.
         temperature: opts.temperature ?? 0.7,
