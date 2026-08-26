@@ -35,7 +35,20 @@ const trim = (u) => u ? u.trim().replace(/\/+$/, "") : null;
 const EXPLICIT = trim(process.env.FEED_URL) ?? trim(process.env.BUZZ_URL) ?? null;
 const LOOPBACK = `http://127.0.0.1:${process.env.PORT ?? 3000}`;
 const PUBLIC = "https://lastbuzz.fun";
-let base = EXPLICIT ?? LOOPBACK;
+// Hosted, the arena is the public one, full stop.
+//
+// Loopback was the default because RUN_SWARM=1 makes the swarm a child of the
+// arena and a local hop is free. But a swarm on its own service boots its own
+// copy of the server, so loopback answers, succeeds, and swallows every record
+// into a buffer nobody can read. That is not a failure the client can detect:
+// it looks exactly like working. Discovery cannot fix it, so it does not try.
+// A local hop was never worth a page that silently shows nothing.
+//
+// Off Railway this still defaults to loopback, so running the swarm on a
+// laptop cannot post test traces into production by accident.
+const HOSTED = !!(process.env.RAILWAY_ENVIRONMENT ?? process.env.RAILWAY_ENVIRONMENT_NAME
+  ?? process.env.RAILWAY_PROJECT_ID ?? process.env.RAILWAY_SERVICE_ID);
+let base = EXPLICIT ?? (HOSTED ? PUBLIC : LOOPBACK);
 let fellBack = false;
 
 // Derived, not configured. Both processes already share SWARM_SEED, because
