@@ -23,6 +23,7 @@ import { makeLimiter, LIMITS } from "./limits.mjs";
 import { loadKeypair } from "./keypair.mjs";
 import { makeCranker } from "./cranker.mjs";
 import { makeScheduler } from "./scheduler.mjs";
+import { makeMarket } from "./market.mjs";
 import { nameFor, houseWallets } from "./names.mjs";
 import { verifyPayment } from "./x402.mjs";
 import { loadRelayer, startDrain } from "./relayer.mjs";
@@ -258,6 +259,7 @@ async function poll(){
     limiter.reconcile(games.filter(g=>g.status===0||g.status===1).map(g=>g.gameId));
     cranker?.once(snapshot);
     scheduler?.once(snapshot);
+    book?.once(snapshot);
     pollRelayer().then(pollFuel);
   }catch(e){
     snapshot = { ...snapshot, ok:false, error:String(e.message).slice(0,120), updatedAt:Date.now() };
@@ -300,6 +302,10 @@ const limiter = makeLimiter();
 // uses that.
 let cranker = null;
 let scheduler = null;
+let book = null;
+// Small and unbounded is fine: one entry per game id the arena has asked about,
+// and the arena only asks about games that are on the board.
+const marketCache = new Map();
 // The relayer's own balance, refreshed alongside the state poll. Joins stop
 // before it runs dry rather than after, because a game it cannot settle is
 // worse than a seat it refused.
@@ -434,6 +440,14 @@ if (relayer && process.env.RUN_SCHEDULER === "1") {
                  ?? "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb") }],
   });
   console.log("scheduler on");
+}
+// The book is independent of the scheduler: it opens on whatever is running,
+// whoever created it. Both halves are permissionless on chain, so this is the
+// thing that makes sure somebody does it promptly rather than the only party
+// allowed to.
+if (relayer && process.env.RUN_MARKET !== "0") {
+  book = makeMarket({ program: relayer.program, payer: relayer.kp, connection });
+  console.log("book on");
 }
 if (relayer) relayer.ready().then((r) =>
   console.log(`relayer ${r.pubkey} ${r.allowed ? "allowed" : "NOT ON THE ALLOW-LIST: run agents/allow-relayer.mjs"}`));
@@ -668,6 +682,24 @@ createServer(async (req,res)=>{
     return send(res, 200, scheduler
       ? { on: true, upcoming: scheduler.upcoming() }
       : { on: false, upcoming: [] });
+  }
+
+  // The book on one game: the pool, what sits on each agent, and when betting
+  // closes. Cached briefly because the arena polls it per open card and the
+  // pools only move when somebody bets.
+  if(p === "/api/market"){
+    if(!book) return send(res, 200, { on: false });
+    const gameId = url.searchParams.get("game");
+    if(!gameId || !/^[0-9]{1,20}$/.test(gameId))
+      return send(res, 400, { error: "game must be a numeric game id" });
+    const c = marketCache.get(gameId);
+    if(c && Date.now() - c.at < 4000) return send(res, 200, c.body);
+    try{
+      const m = await book.read(gameId);
+      const body = { on: true, game: gameId, market: m };
+      marketCache.set(gameId, { at: Date.now(), body });
+      return send(res, 200, body);
+    }catch(e){ return send(res, 502, { error: String(e.message ?? e).slice(0, 140) }); }
   }
 
   if(p === "/api/treasury"){

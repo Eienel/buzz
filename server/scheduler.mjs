@@ -53,7 +53,19 @@ const slotFor = (nowMs, everyS) => Math.floor(nowMs / (everyS * 1000)) * everyS 
  * backlog decides WHETHER. A slot skipped for backpressure is skipped for
  * good, it is not queued, because a queue is how you get the pile-up back.
  */
-const MAX_OPEN = Number(process.env.SCHED_MAX_OPEN ?? 1);
+const MAX_OPEN = Number(process.env.SCHED_MAX_OPEN ?? 2);
+
+/**
+ * How recent a lobby has to be to count as backlog at all.
+ *
+ * Backpressure is meant to stop the schedule outrunning the swarm. It is not
+ * meant to be held hostage by debris: a lobby nobody filled an hour ago is not
+ * evidence the swarm is behind, it is evidence that lobby is dead, and the
+ * cranker will abort it on the program's own timeout. Counting those stopped
+ * the scheduler opening anything at all while the backlog aged out, which is a
+ * dead board rather than a calm one.
+ */
+const FRESH_MS = Number(process.env.SCHED_BACKLOG_FRESH_MS ?? 15 * 60_000);
 
 export function makeScheduler({ program, payer, assets }) {
   const PID = program.programId;
@@ -161,6 +173,7 @@ export function makeScheduler({ program, payer, assets }) {
         for (const g of snapshot?.live ?? []) {
           if (g.status !== 0) continue;
           if ((g.aliveCircles ?? 0) >= MIN_CIRCLES) continue;
+          if (now - (g.createdAt ?? 0) * 1000 > FRESH_MS) continue;   // debris, not backlog
           waiting.set(g.instanceSeconds, (waiting.get(g.instanceSeconds) ?? 0) + 1);
         }
         for (const t of TEMPOS) {
