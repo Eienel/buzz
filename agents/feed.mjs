@@ -26,7 +26,13 @@ const { keccak_256 } = jsSha3;
 // is exactly the silence this had in production, with pods playing 22 of 40
 // games and the page empty. So a failure on loopback is taken as proof the
 // swarm is somewhere else, and it falls through to the hosted arena for good.
-const EXPLICIT = process.env.FEED_URL ?? process.env.BUZZ_URL ?? null;
+// Trailing slash stripped, because a URL pasted from a browser bar has one and
+// the join would then ask for //api/agent/thought, which is a 404 that reads
+// like the endpoint is missing rather than like the URL has a spare slash.
+// mcp/index.mjs has done this since it was written; this did not, and cost a
+// round trip to find out.
+const trim = (u) => u ? u.trim().replace(/\/+$/, "") : null;
+const EXPLICIT = trim(process.env.FEED_URL) ?? trim(process.env.BUZZ_URL) ?? null;
 const LOOPBACK = `http://127.0.0.1:${process.env.PORT ?? 3000}`;
 const PUBLIC = "https://lastbuzz.fun";
 let base = EXPLICIT ?? LOOPBACK;
