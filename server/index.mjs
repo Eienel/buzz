@@ -323,9 +323,16 @@ async function pollRelayer(){
 // Deliberately NOT wired into /healthz. A failing healthcheck on a hosted
 // platform means restart, restarting does not add SOL, and a quiet arena would
 // become a crash loop. This is a fuel gauge, not a liveness probe.
-const FUEL_FLOOR    = Number(process.env.FUEL_FLOOR    ?? 1.0);  // payer is low under this
+//
+// The transfer runs BOTH ways. It used to only ever move relayer -> payer,
+// from back when the swarm's payer was the only wallet that spent. Turning the
+// scheduler on changed that: the relayer opens every game and pays its rent,
+// so it is now the wallet that drains, and a one-way guard watched the wrong
+// tank. It sat at 0.86 SOL, under its own reserve, while the payer held 5.6
+// and the guard reported "nothing to spare".
+const FUEL_FLOOR    = Number(process.env.FUEL_FLOOR    ?? 1.0);  // either wallet is low under this
 const FUEL_TARGET   = Number(process.env.FUEL_TARGET   ?? 3.0);  // refill up to here
-const FUEL_RESERVE  = Number(process.env.FUEL_RESERVE  ?? 1.0);  // relayer never goes under
+const FUEL_RESERVE  = Number(process.env.FUEL_RESERVE  ?? 1.0);  // the donor never goes under
 const FUEL_EVERY_MS = Number(process.env.FUEL_EVERY_MS ?? 300_000);
 const FUEL_AUTO     = process.env.FUEL_AUTO !== "0";
 
@@ -339,41 +346,56 @@ async function pollFuel(){
     fuel.payer = starter.publicKey.toBase58();
     fuel.payerSol = (await connection.getBalance(starter.publicKey)) / 1e9;
     fuel.relayerSol = relayerSol;
-    fuel.low = fuel.payerSol < FUEL_FLOOR;
+    // Low if EITHER tank is under the floor: the arena stops on whichever
+    // empties first, so reporting only the payer's would have read "ok" all
+    // the way through a relayer that could no longer open a game.
+    fuel.low = fuel.payerSol < FUEL_FLOOR || (relayerSol != null && relayerSol < FUEL_FLOOR);
     // Under a hundredth of a SOL it cannot pay a fee, let alone fund a game.
-    fuel.dry = fuel.payerSol < 0.01;
+    fuel.dry = fuel.payerSol < 0.01 || (relayerSol != null && relayerSol < 0.01);
     if(fuel.low && !saidLow){
       saidLow = true;
-      console.log(`[fuel] payer ${fuel.payerSol.toFixed(4)} SOL, under the ${FUEL_FLOOR} floor` +
-        (fuel.dry ? " and effectively dry: the swarm cannot fund agents" : ""));
+      console.log(`[fuel] payer ${fuel.payerSol.toFixed(4)} / relayer ${relayerSol?.toFixed(4) ?? "?"} SOL,` +
+        ` under the ${FUEL_FLOOR} floor` +
+        (fuel.dry ? " and effectively dry: the arena cannot open or fund a game" : ""));
     }
-    if(!fuel.low && saidLow){ saidLow = false; console.log(`[fuel] payer back to ${fuel.payerSol.toFixed(3)} SOL`); }
+    if(!fuel.low && saidLow){
+      saidLow = false;
+      console.log(`[fuel] back to payer ${fuel.payerSol.toFixed(3)} / relayer ${relayerSol?.toFixed(3) ?? "?"} SOL`);
+    }
     await topUp();
   } catch(e){ fuel.note = String(e.message ?? e).slice(0, 90); }
 }
 
 async function topUp(){
-  if(!FUEL_AUTO || !fuel.low || !relayer || relayerSol == null) return;
+  if(!FUEL_AUTO || !fuel.low || !relayer || relayerSol == null || !starter) return;
   if(Date.now() - lastTopUpAt < FUEL_EVERY_MS) return;
-  // Only what the relayer can give up without going under its own reserve, and
-  // never more than the payer is short.
-  const spare = relayerSol - FUEL_RESERVE;
-  const want  = FUEL_TARGET - fuel.payerSol;
-  const move  = Math.min(spare, want);
+  // Whichever tank is lower is the one to fill, and the other is the donor.
+  // Picking by "which is lower" rather than by role means the guard keeps
+  // working when the roles change again.
+  const drained = fuel.payerSol <= relayerSol
+    ? { name: "payer",   sol: fuel.payerSol, kp: starter,    to: starter.publicKey }
+    : { name: "relayer", sol: relayerSol,    kp: relayer.kp, to: relayer.kp.publicKey };
+  const donor = drained.name === "payer"
+    ? { name: "relayer", sol: relayerSol,    kp: relayer.kp }
+    : { name: "payer",   sol: fuel.payerSol, kp: starter };
+  if(drained.sol >= FUEL_FLOOR) return;          // the low one is not this one
+  // Only what the donor can give up without going under its own reserve, and
+  // never more than the drained wallet is short.
+  const move = Math.min(donor.sol - FUEL_RESERVE, FUEL_TARGET - drained.sol);
   if(move < 0.1){
-    fuel.note = `relayer has ${relayerSol?.toFixed(3)} SOL, nothing to spare above its ${FUEL_RESERVE} reserve`;
+    fuel.note = `${donor.name} has ${donor.sol.toFixed(3)} SOL, nothing to spare above its ${FUEL_RESERVE} reserve`;
     return;
   }
   lastTopUpAt = Date.now();
   try {
     const tx = new Transaction().add(SystemProgram.transfer({
-      fromPubkey: relayer.kp.publicKey, toPubkey: starter.publicKey,
+      fromPubkey: donor.kp.publicKey, toPubkey: drained.to,
       lamports: Math.floor(move * 1e9),
     }));
-    const sig = await sendAndConfirmTransaction(connection, tx, [relayer.kp], { commitment: "confirmed" });
-    fuel.lastTopUp = { at: Date.now(), sol: move, sig };
+    const sig = await sendAndConfirmTransaction(connection, tx, [donor.kp], { commitment: "confirmed" });
+    fuel.lastTopUp = { at: Date.now(), sol: move, from: donor.name, to: drained.name, sig };
     fuel.note = null;
-    console.log(`[fuel] moved ${move.toFixed(3)} SOL relayer -> payer (${sig.slice(0,16)}…)`);
+    console.log(`[fuel] moved ${move.toFixed(3)} SOL ${donor.name} -> ${drained.name} (${sig.slice(0,16)}…)`);
   } catch(e){
     fuel.note = `top-up failed: ${String(e.message ?? e).slice(0, 80)}`;
     console.log(`[fuel] ${fuel.note}`);
