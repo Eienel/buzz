@@ -15,7 +15,8 @@ import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import jsSha3 from "js-sha3";
-import { Connection, PublicKey } from "@solana/web3.js";
+import { Connection, PublicKey, SystemProgram, Transaction,
+         sendAndConfirmTransaction } from "@solana/web3.js";
 import { makeArena, PRICE, challenge, registerAgent, authed, agentName } from "./arena-api.mjs";
 import { makeAutoplay } from "./autoplay.mjs";
 import { makeLimiter, LIMITS } from "./limits.mjs";
@@ -248,12 +249,16 @@ async function poll(){
                  // public board still means "being played", while the cranker
                  // can still see games that owe the treasury their rake.
                  settling:games.filter(g=>g.status===2 && !g.legacy && Number(g.fees||0)>0),
-                 recent: history.slice(0, 10) };
+                 recent: history.slice(0, 10),
+                 // What is left in the tank. An arena with no games looks the
+                 // same whether nobody is playing or the payer is empty, and
+                 // those want opposite responses.
+                 fuel };
     autoplay.tick(snapshot);          // walk easy-mode intents through the phases
     limiter.reconcile(games.filter(g=>g.status===0||g.status===1).map(g=>g.gameId));
     cranker?.once(snapshot);
     scheduler?.once(snapshot);
-    pollRelayer();
+    pollRelayer().then(pollFuel);
   }catch(e){
     snapshot = { ...snapshot, ok:false, error:String(e.message).slice(0,120), updatedAt:Date.now() };
   }
@@ -303,6 +308,76 @@ async function pollRelayer(){
   if(!relayer) return;
   try { relayerSol = (await connection.getBalance(relayer.pubkey)) / 1e9; }
   catch { /* leave the last reading */ }
+}
+
+// ---- fuel --------------------------------------------------------------------
+// The payer funds every agent in every game, and when it empties the swarm stops
+// opening games and the arena goes quiet. On the 26th that cost three hours and
+// nothing reported it: /healthz answered ok, every page rendered, and the only
+// symptom was a board with nothing on it. The relayer was holding 5.4 SOL the
+// whole time.
+//
+// So the balance is published, the drop is logged once, and the relayer refills
+// the payer itself rather than waiting for somebody to notice.
+//
+// Deliberately NOT wired into /healthz. A failing healthcheck on a hosted
+// platform means restart, restarting does not add SOL, and a quiet arena would
+// become a crash loop. This is a fuel gauge, not a liveness probe.
+const FUEL_FLOOR    = Number(process.env.FUEL_FLOOR    ?? 1.0);  // payer is low under this
+const FUEL_TARGET   = Number(process.env.FUEL_TARGET   ?? 3.0);  // refill up to here
+const FUEL_RESERVE  = Number(process.env.FUEL_RESERVE  ?? 1.0);  // relayer never goes under
+const FUEL_EVERY_MS = Number(process.env.FUEL_EVERY_MS ?? 300_000);
+const FUEL_AUTO     = process.env.FUEL_AUTO !== "0";
+
+let fuel = { payer: null, payerSol: null, relayerSol: null, floor: FUEL_FLOOR,
+             low: false, dry: false, lastTopUp: null, note: null };
+let lastTopUpAt = 0, saidLow = false;
+
+async function pollFuel(){
+  if(!starter) return;                       // no PAYER here, nothing to watch
+  try {
+    fuel.payer = starter.publicKey.toBase58();
+    fuel.payerSol = (await connection.getBalance(starter.publicKey)) / 1e9;
+    fuel.relayerSol = relayerSol;
+    fuel.low = fuel.payerSol < FUEL_FLOOR;
+    // Under a hundredth of a SOL it cannot pay a fee, let alone fund a game.
+    fuel.dry = fuel.payerSol < 0.01;
+    if(fuel.low && !saidLow){
+      saidLow = true;
+      console.log(`[fuel] payer ${fuel.payerSol.toFixed(4)} SOL, under the ${FUEL_FLOOR} floor` +
+        (fuel.dry ? " and effectively dry: the swarm cannot fund agents" : ""));
+    }
+    if(!fuel.low && saidLow){ saidLow = false; console.log(`[fuel] payer back to ${fuel.payerSol.toFixed(3)} SOL`); }
+    await topUp();
+  } catch(e){ fuel.note = String(e.message ?? e).slice(0, 90); }
+}
+
+async function topUp(){
+  if(!FUEL_AUTO || !fuel.low || !relayer || relayerSol == null) return;
+  if(Date.now() - lastTopUpAt < FUEL_EVERY_MS) return;
+  // Only what the relayer can give up without going under its own reserve, and
+  // never more than the payer is short.
+  const spare = relayerSol - FUEL_RESERVE;
+  const want  = FUEL_TARGET - fuel.payerSol;
+  const move  = Math.min(spare, want);
+  if(move < 0.1){
+    fuel.note = `relayer has ${relayerSol?.toFixed(3)} SOL, nothing to spare above its ${FUEL_RESERVE} reserve`;
+    return;
+  }
+  lastTopUpAt = Date.now();
+  try {
+    const tx = new Transaction().add(SystemProgram.transfer({
+      fromPubkey: relayer.kp.publicKey, toPubkey: starter.publicKey,
+      lamports: Math.floor(move * 1e9),
+    }));
+    const sig = await sendAndConfirmTransaction(connection, tx, [relayer.kp], { commitment: "confirmed" });
+    fuel.lastTopUp = { at: Date.now(), sol: move, sig };
+    fuel.note = null;
+    console.log(`[fuel] moved ${move.toFixed(3)} SOL relayer -> payer (${sig.slice(0,16)}…)`);
+  } catch(e){
+    fuel.note = `top-up failed: ${String(e.message ?? e).slice(0, 80)}`;
+    console.log(`[fuel] ${fuel.note}`);
+  }
 }
 const arena = makeArena({ snapshot: () => snapshot, enqueue });
 
