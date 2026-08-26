@@ -358,7 +358,43 @@ const thoughts = [];
 const txCache = new Map();
 // Enough to answer "is the swarm reaching us at all" from outside, which
 // otherwise takes a trip to the host's log viewer every single time.
-const intake = { posts: 0, accepted: 0, rejected: 0, lastRejectAt: null, lastReject: null };
+const intake = { posts: 0, accepted: 0, rejected: 0, lastRejectAt: null, lastReject: null,
+                 spooled: 0, spoolErr: null };
+
+// The swarm writes every trace here as well as posting it. When it shares a
+// container with the arena, which is how this is deployed, that file is the
+// channel that cannot be misrouted: no host to get wrong, no slash, no second
+// server answering on loopback. Read on a timer and merged by identity, so a
+// record arriving both ways lands once.
+const SPOOL = join(DATA_DIR, "thoughts.jsonl");
+const seen = new Set();
+const idOf = (t) => `${t.game}:${t.instance}:${t.agent}:${t.skipped ? "s" : "a"}`;
+
+function absorb(t) {
+  const id = idOf(t);
+  if (seen.has(id)) return false;
+  seen.add(id);
+  thoughts.push({ hit: null, ...t, at: t.at ?? Date.now() });
+  if (thoughts.length > THOUGHTS_MAX) {
+    for (const gone of thoughts.splice(0, thoughts.length - THOUGHTS_MAX)) seen.delete(idOf(gone));
+  }
+  return true;
+}
+
+function drainSpool() {
+  try {
+    if (!existsSync(SPOOL)) return;
+    const lines = readFileSync(SPOOL, "utf8").split("\n").filter(Boolean);
+    for (const line of lines.slice(-THOUGHTS_MAX)) {
+      try { if (absorb(JSON.parse(line))) intake.spooled++; } catch { /* half-written line */ }
+    }
+    // Rewritten rather than grown forever. The chain is the archive; this is a
+    // window, and the volume is shared with the results history.
+    if (lines.length > THOUGHTS_MAX * 3)
+      writeFileSync(SPOOL, lines.slice(-THOUGHTS_MAX).join("\n") + "\n");
+  } catch (e) { intake.spoolErr = String(e.message ?? e).slice(0, 90); }
+}
+drainSpool(); setInterval(drainSpool, 4000);
 // Derived from the seed both processes already share, so a swarm running as
 // its own Railway service authenticates with nothing configured. See the note
 // in agents/feed.mjs: this is worth exactly what SWARM_SEED is worth, which is
@@ -583,8 +619,7 @@ createServer(async (req,res)=>{
       return send(res, 400, { error: "agent and game are required" });
     }
     intake.accepted++;
-    thoughts.push({ ...b, at: Date.now(), hit: null });
-    if(thoughts.length > THOUGHTS_MAX) thoughts.splice(0, thoughts.length - THOUGHTS_MAX);
+    absorb({ ...b, at: Date.now() });
     return send(res, 202, { ok: true });
   }
   if(p === "/api/agent/resolved"){
