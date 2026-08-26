@@ -35,20 +35,20 @@ const trim = (u) => u ? u.trim().replace(/\/+$/, "") : null;
 const EXPLICIT = trim(process.env.FEED_URL) ?? trim(process.env.BUZZ_URL) ?? null;
 const LOOPBACK = `http://127.0.0.1:${process.env.PORT ?? 3000}`;
 const PUBLIC = "https://lastbuzz.fun";
-// Hosted, the arena is the public one, full stop.
+// The arena is the public one unless something says otherwise. No inference.
 //
 // Loopback was the default because RUN_SWARM=1 makes the swarm a child of the
 // arena and a local hop is free. But a swarm on its own service boots its own
 // copy of the server, so loopback answers, succeeds, and swallows every record
-// into a buffer nobody can read. That is not a failure the client can detect:
-// it looks exactly like working. Discovery cannot fix it, so it does not try.
-// A local hop was never worth a page that silently shows nothing.
+// into a buffer nobody can read. The client cannot detect that: the failure
+// looks exactly like working.
 //
-// Off Railway this still defaults to loopback, so running the swarm on a
-// laptop cannot post test traces into production by accident.
-const HOSTED = !!(process.env.RAILWAY_ENVIRONMENT ?? process.env.RAILWAY_ENVIRONMENT_NAME
-  ?? process.env.RAILWAY_PROJECT_ID ?? process.env.RAILWAY_SERVICE_ID);
-let base = EXPLICIT ?? (HOSTED ? PUBLIC : LOOPBACK);
+// The version before this one guessed at the deployment by sniffing RAILWAY_*
+// variables, which is the same mistake one level up: it depends on names
+// nobody here has verified, and when the guess is wrong it fails silently in
+// exactly the way it was written to prevent. So there is no guess. Point
+// FEED_URL at a local arena to develop against one.
+let base = EXPLICIT ?? PUBLIC;
 let fellBack = false;
 
 // Derived, not configured. Both processes already share SWARM_SEED, because
@@ -62,6 +62,10 @@ const SECRET = process.env.FEED_SECRET ?? keccak_256(`buzz-feed:${SEED}`);
 
 /** Off with FEED_OFF=1, for a swarm that should not publish. */
 const ENABLED = process.env.FEED_OFF !== "1";
+
+// Said at startup, not on the first post: where this is publishing should be
+// answerable the moment the process boots, not one pod game later.
+if (ENABLED) console.log(`[feed] target ${base}${EXPLICIT ? " (FEED_URL)" : " (default)"}`);
 
 // Swallowing every error keeps a broken feed from costing a game a round, and
 // it also made a feed that never worked look identical to one with nothing to
