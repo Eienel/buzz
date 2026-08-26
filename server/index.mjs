@@ -34,6 +34,12 @@ const PORT = Number(process.env.PORT ?? 3000);
 const RPC = process.env.RPC ?? "https://api.devnet.solana.com";
 const PROGRAM_ID = process.env.PROGRAM_ID ?? "4TNbztSMd3zxG57M25y8WhpcKrQMJQVYEK6EnnkQy1Hw";
 const POLL_MS = Number(process.env.POLL_MS ?? 5000);
+// A second copy of this process exists only to run the swarm, and it was also
+// running a poller every 5s and a cranker against the same RPC as the real
+// arena: two arenas' worth of load for one arena's work, and a large share of
+// the 429s in its own logs. SWARM_ONLY=1 keeps the swarm and the port (Railway
+// wants something listening) and drops everything that duplicates the arena.
+const SWARM_ONLY = process.env.SWARM_ONLY === "1";
 const USDC_DEFAULT = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"; // devnet USDC
 
 const connection = new Connection(RPC, "confirmed");
@@ -258,7 +264,8 @@ async function poll(){
     snapshot = { ...snapshot, ok:false, error:String(e.message).slice(0,120), updatedAt:Date.now() };
   }
 }
-poll(); setInterval(poll, POLL_MS);
+if (SWARM_ONLY) console.log("SWARM_ONLY: no poller, no cranker, no scheduler here");
+else { poll(); setInterval(poll, POLL_MS); }
 
 // ---- static + api ------------------------------------------------------------
 const MIME = {".html":"text/html; charset=utf-8",".css":"text/css",".js":"text/javascript",
@@ -326,10 +333,10 @@ let starter = null;
 try {
   if (process.env.PAYER) starter = loadKeypair(process.env.PAYER);
 } catch { /* no PAYER here: the rescue simply cannot run, and says so */ }
-if (relayer) cranker = makeCranker({ program: relayer.program, payer: relayer.kp, starter });
+if (relayer && !SWARM_ONLY) cranker = makeCranker({ program: relayer.program, payer: relayer.kp, starter });
 // Off by default: turning it on while the swarm still creates its own games
 // would double the arena rather than replace it.
-if (relayer && process.env.RUN_SCHEDULER === "1") {
+if (relayer && !SWARM_ONLY && process.env.RUN_SCHEDULER === "1") {
   scheduler = makeScheduler({
     program: relayer.program, payer: relayer.kp,
     assets: [{ name: "BUZZ", mint: new PublicKey(TREASURY_MINTS.BUZZ),
@@ -676,6 +683,10 @@ createServer(async (req,res)=>{
     return res.end(JSON.stringify(snapshot));
   }
   if(p === "/healthz"){
+    // A swarm-only process has no poller, so snapshot.ok is false forever and
+    // a healthcheck on this path would restart-loop the service. Here the
+    // process being up is the whole of its health.
+    if(SWARM_ONLY){ res.writeHead(200,{ "content-type":"text/plain" }); return res.end("ok (swarm only)"); }
     res.writeHead(snapshot.ok?200:503,{ "content-type":"text/plain" });
     return res.end(snapshot.ok ? "ok" : "rpc: "+snapshot.error);
   }
@@ -702,7 +713,8 @@ createServer(async (req,res)=>{
   }catch{
     res.writeHead(500,{ "content-type":"text/plain" }); res.end("read error");
   }
-}).listen(PORT, ()=>console.log(`buzz server on :${PORT} (rpc ${RPC}, poll ${POLL_MS}ms)`));
+}).listen(PORT, ()=>console.log(`buzz server on :${PORT} (rpc ${RPC}, ` +
+  `${SWARM_ONLY ? "swarm only, not polling" : `poll ${POLL_MS}ms`})`));
 
 // ---- optional: run the agent swarm alongside the web service -----------------
 if(process.env.RUN_SWARM === "1"){
