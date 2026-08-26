@@ -132,9 +132,15 @@
   .hrow{display:flex;gap:var(--hg)}
   .hrow+.hrow{margin-top:calc(var(--hw) * -0.2826)}  /* nest: overlap 25% */
   .hrow.off{margin-left:calc((var(--hw) + var(--hg)) / 2)}
-  .hex{width:var(--hw);height:calc(var(--hw) * 1.1449);position:relative;flex:0 0 auto;
+  /* The clip lives on a child, not here. clip-path is applied after filter, so
+     an element that clips itself also clips its own drop-shadow: the floor was
+     erased by the very shape it was meant to sit under. Measured rather than
+     assumed, with the filter moved to a wrapper the floor renders 6.5px deep.
+     This element is now that wrapper and holds nothing but the shadow. */
+  .hex{width:var(--hw);height:calc(var(--hw) * 1.1449);position:relative;flex:0 0 auto}
+  .hex .shape{position:absolute;inset:0;
     clip-path:polygon(50% 0%,100% 25%,100% 75%,50% 100%,0% 75%,0% 25%);
-    background:var(--edge)}
+    background:var(--band,var(--edge))}
   .hex .in{position:absolute;inset:2px;
     clip-path:polygon(50% 0%,100% 25%,100% 75%,50% 100%,0% 75%,0% 25%);
     background:
@@ -144,12 +150,12 @@
   /* Each band carries three colours: the outline, the floor sitting under it,
      and the light it throws. Healthy is green, crowded blue, thin amber, so
      the cell glows in whatever it is rather than everything glowing honey. */
-  .hex.thin   {background:var(--honey);--tint:var(--honey);--floor:#8a5a0b;--glow:rgba(255,179,0,.34)}
-  .hex.crowded{background:var(--cool); --tint:var(--cool); --floor:#3a5c84;--glow:rgba(111,176,255,.32)}
-  .hex.alive  {background:var(--alive);--tint:var(--alive);--floor:#317951;--glow:rgba(95,214,138,.36)}
-  .hex.dead   {background:#4a2029;     --tint:#8f3348;     --floor:#3a1a22;--glow:transparent}
+  .hex.thin   {--band:var(--honey);--tint:var(--honey);--floor:#8a5a0b;--glow:rgba(255,179,0,.34)}
+  .hex.crowded{--band:var(--cool); --tint:var(--cool); --floor:#3a5c84;--glow:rgba(111,176,255,.32)}
+  .hex.alive  {--band:var(--alive);--tint:var(--alive);--floor:#317951;--glow:rgba(95,214,138,.36)}
+  .hex.dead   {--band:#4a2029;     --tint:#8f3348;     --floor:#3a1a22;--glow:transparent}
   .hex.dead .in{background:linear-gradient(180deg,#1e0f12,#140b0d 60%,#0d0709)}
-  .hex.doomed {background:var(--dead); --tint:var(--dead); --floor:#5c202e;--glow:rgba(242,99,122,.34);
+  .hex.doomed {--band:var(--dead); --tint:var(--dead); --floor:#5c202e;--glow:rgba(242,99,122,.34);
     animation:doom .8s infinite}
 
   /* depth, kept quiet: one hard offset silhouette is the whole thickness, and
@@ -228,11 +234,11 @@
      backed. The comb needs a positioning context; both views already clip
      their own overflow, so the menu escapes on a layer of its own. */
   .backwrap{position:absolute;top:8px;right:8px;z-index:3}
-  /* In a hex, the top-right corner is outside the clip-path, so the control was
-     sliced down to "ba". The hexagon is widest through its middle, so inside a
-     comb it sits in the flow under the amount instead of in a corner that is
-     not there. */
-  .hex .backwrap{position:static;margin-top:5px}
+  /* A hexagon has no top-right corner, so a control pinned to one either gets
+     sliced off or floats in the empty bounding box beside the shape. It sits at
+     a quarter height instead, which is where the hexagon first reaches its full
+     width, beside the comb label rather than over the count. */
+  .hex .backwrap{top:25%;right:7px}
   .comb,.hex{position:relative}
   .backb{font:inherit;font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;
     padding:3px 9px;border-radius:99px;cursor:pointer;color:var(--dim);
@@ -298,7 +304,6 @@
     .hex .hamt{display:none}
     .hex .dots{max-width:56px;gap:3px;min-height:12px}
     .hex .dots i{width:8px;height:8px}
-    .hex .backwrap{margin-top:3px}
     .backb{font-size:9px;padding:2px 5px}
     /* The toggles are the controls the page is for; the read-outs beside them
        can wrap under rather than push them off the edge. */
@@ -581,12 +586,12 @@ function hive(g,totalStake){
   return `<div class="hive">${rows.map((row,ri)=>
     `<div class="hrow${ri%2?" off":""}">${row.map(cb=>{
       const doomed=g.phase>=2&&g.doomed===cb.id&&cb.alive;
-      if(!cb.alive) return `<div class="hex dead"><div class="in">
+      if(!cb.alive) return `<div class="hex dead"><div class="shape"></div><div class="in">
         <div class="hid">comb ${cb.id}</div>
         <div class="hband">refund ${(cb.refundBps/100).toFixed(0)}%</div>
         <div class="hamt">${sol(cb.stake)} ${sym(g.stakeMint)}</div></div></div>`;
       const [lbl,cls]=band(cb.members);
-      return `<div class="hex ${cls}${doomed?" doomed":""}"><div class="in">
+      return `<div class="hex ${cls}${doomed?" doomed":""}"><div class="shape"></div><div class="in">
         <div class="hid">comb ${cb.id}</div>
         ${dots(cb.members)}
         <div class="hband">${doomed?"dying":lbl}</div>
