@@ -100,11 +100,32 @@ export function makeScheduler({ program, payer, assets }) {
     }
   }
 
-  /** Start anything that has filled. Cheap, and it is what makes the schedule real. */
+  // Comb count per lobby at the previous tick, and when it last changed.
+  // Starting a lobby the instant it reaches MIN_CIRCLES races whoever is still
+  // filling it: the swarm joins nine agents one transaction at a time, the
+  // fourth one takes the lobby to four combs, and the scheduler started the
+  // game between that transaction and the fifth. create_circle then answered
+  // WrongPhase, which threw out of the swarm's whole join loop, and the game
+  // ran with three or four agents while the swarm abandoned it. Reproduced
+  // against devnet: "herd-03 staked into circle 3" then WrongPhase at
+  // lib.rs:138 on the next agent, every time.
+  const fill = new Map();
+  const QUIET_MS = Number(process.env.SCHED_FILL_QUIET_MS ?? 12_000);
+
+  /** Start anything that has filled AND stopped filling. */
   async function startFilled(snapshot) {
+    const now = Date.now();
+    const seen = new Set();
     for (const g of snapshot.live ?? []) {
       if (g.status !== 0) continue;
-      if ((g.aliveCircles ?? 0) < MIN_CIRCLES) continue;
+      seen.add(g.gameId);
+      const combs = g.aliveCircles ?? 0;
+      const prev = fill.get(g.gameId);
+      if (!prev || prev.combs !== combs) fill.set(g.gameId, { combs, since: now });
+      if (combs < MIN_CIRCLES) continue;
+      // A lobby that is full cannot grow, so there is nothing to wait for.
+      const full = combs >= (g.numCircles ?? MIN_CIRCLES);
+      if (!full && now - (fill.get(g.gameId).since) < QUIET_MS) continue;
       try {
         await program.methods.startGame()
           .accountsPartial({ game: gamePda(g.gameId), authority: payer.publicKey }).rpc();
@@ -115,6 +136,9 @@ export function makeScheduler({ program, payer, assets }) {
           log(`start ${g.gameId}: ${m.slice(0, 80)}`);
       }
     }
+    // Lobbies that left the board (started, aborted) stop being tracked, or the
+    // map grows for the life of the process.
+    for (const id of fill.keys()) if (!seen.has(id)) fill.delete(id);
   }
 
   return {
