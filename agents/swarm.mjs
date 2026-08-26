@@ -207,19 +207,31 @@ const ARENA_URL = process.env.ARENA_URL ?? `http://127.0.0.1:${process.env.PORT 
 const ADOPT_SCHEDULED = process.env.ADOPT_SCHEDULED === "1";
 
 /**
- * An open lobby for this asset that the scheduler opened and nobody has filled.
+ * The oldest unfilled lobby the scheduler opened, whatever it is staked in.
+ *
+ * It used to take an asset and only adopt a lobby matching it, which quietly
+ * defeated the whole arrangement: the swarm picks its asset first, the
+ * scheduler only opens BUZZ, so every ANSEM game found nothing to adopt and
+ * created its own. Two independent creators, no coordination, and the number
+ * of games on the board became the sum of both instead of the schedule. The
+ * scheduler exists precisely so concurrency is a number rather than an
+ * emergent property.
+ *
+ * So the lobby is chosen first and the asset comes from it. The asset a game
+ * is staked in is fixed at creation anyway, exactly like its tempo, so this is
+ * the same rule applied to the other field.
  *
  * Returns null on anything unexpected, and the caller opens its own game. A
  * swarm that cannot reach the arena should keep playing, not stop.
  */
-async function findScheduledLobby(asset) {
+async function findScheduledLobby() {
   if (!ADOPT_SCHEDULED) return null;
   try {
     const r = await fetch(`${ARENA_URL}/api/state`, { signal: AbortSignal.timeout(4000) });
     if (!r.ok) return null;
-    const mint = asset.mint.toBase58();
+    const known = new Set(ASSETS.map((a) => a.mint.toBase58()));
     const open = (await r.json()).live?.filter((g) =>
-      g.status === 0 && g.stakeMint === mint && (g.players ?? 0) === 0) ?? [];
+      g.status === 0 && known.has(g.stakeMint) && (g.players ?? 0) === 0) ?? [];
     // Oldest first: a lobby that has been waiting is the one to fill.
     open.sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
     return open[0] ?? null;
@@ -279,18 +291,18 @@ setInterval(() => {
 }, 30_000).unref();
 
 async function playGame(gameNo) {
-  // Only BUZZ has an open season, so only BUZZ games move the leaderboard.
-  // A strict alternation made half the arena unranked, which is the wrong
-  // shape when ranked play is the reason people are here. ANSEM still gets a
-  // share so it stays exercised rather than becoming dead code.
-  const asset = ASSETS[gameNo % BUZZ_EVERY === 0 && ASSETS.length > 1 ? 1 : 0];
+  // Adopt first, then take the asset from what was adopted. Only when there is
+  // nothing to adopt does the swarm choose, and then mostly BUZZ, because only
+  // BUZZ has an open season and ranked play is the reason people are here.
+  // ANSEM still gets a share so it stays exercised rather than becoming dead
+  // code.
+  const adopted = await findScheduledLobby();
+  const asset = adopted
+    ? (ASSETS.find((a) => a.mint.toBase58() === adopted.stakeMint) ?? ASSETS[0])
+    : ASSETS[gameNo % BUZZ_EVERY === 0 && ASSETS.length > 1 ? 1 : 0];
   const treasuryPda = pda(Buffer.from("treasury"), asset.mint.toBuffer());
   const tvaultPda = pda(Buffer.from("tvault"), asset.mint.toBuffer());
   const allowedPda = pda(Buffer.from("allowed"), asset.mint.toBuffer());
-  // Either adopt a game the scheduler opened, or open one. Adopting is the
-  // direction of travel: the swarm creating the games it plays is what strands
-  // lobbies, because a lobby only starts itself while its creator is alive.
-  const adopted = await findScheduledLobby(asset);
   const gid = adopted ? new BN(adopted.gameId) : new BN(Date.now());
   const gamePda = gamePdaOf(gid);
   const vaultPda = pda(Buffer.from("vault"), gamePda.toBuffer());
