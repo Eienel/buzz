@@ -17,7 +17,26 @@
 // is swallowed after the first one is named.
 
 import jsSha3 from "js-sha3";
+import { appendFileSync } from "node:fs";
+import { join } from "node:path";
+import { DATA_DIR } from "../server/keypair.mjs";
 const { keccak_256 } = jsSha3;
+
+// The channel that cannot be misrouted.
+//
+// HTTP has been wrong three different ways tonight: the wrong host, a doubled
+// slash, and a loopback server that answers but is not the one being read. All
+// three look identical from here, because a post that lands somewhere useless
+// still returns 202. When the swarm shares a container with the arena, which is
+// how this is deployed, the volume is a channel with no URL to get wrong and no
+// routing to land on the wrong instance. HTTP stays for the case where they are
+// genuinely separate; this is what makes the page work when they are not.
+const SPOOL = join(DATA_DIR, "thoughts.jsonl");
+
+function spool(entry) {
+  try { appendFileSync(SPOOL, JSON.stringify(entry) + "\n"); }
+  catch { /* a full or read-only volume must not cost a game a round */ }
+}
 
 // Where the arena is, worked out rather than configured.
 //
@@ -108,6 +127,7 @@ function report(url, e) {
 
 function post(path, body) {
   if (!ENABLED) return;
+  if (path === "/api/agent/thought") spool({ ...body, at: Date.now() });
   send(base, path, body, (url, e) => {
     // Loopback failing with nothing configured means the arena is not in this
     // process. Say so once, switch, and do not keep paying for the discovery.
