@@ -334,6 +334,17 @@ async function playGame(gameNo) {
     log(`  ${a.name}: ${pts} skill points buys ${budgets.get(a.name).granted} calls`);
   }
 
+  // Every past fog, so a reasoning agent can see which combs are bleeding and
+  // which just took a crowd. One snapshot alone has no trend in it.
+  //
+  // Declared here rather than beside readFog below, because the strategy
+  // closures are built above and everything below is inside a try block. A
+  // const in that block is invisible to them, so every reasoning call threw
+  // ReferenceError, the swarm logged "strategy failed" and moved on, and the
+  // agent held its comb. Which is indistinguishable, from the outside, from a
+  // model that declined to answer.
+  const fogHistory = [];
+
   await fundAgents(agents, asset);
 
   // Everything after funding is wrapped so sweepBack ALWAYS runs, a throw
@@ -376,9 +387,6 @@ async function playGame(gameNo) {
 
   // fog = previous instance's finalized member counts
   let fog = {};
-  // Every past fog, so a reasoning agent can see which combs are bleeding and
-  // which just took a crowd. One snapshot alone has no trend in it.
-  const fogHistory = [];
   const readFog = async () => {
     fog = {};
     for (const id of taken) {
