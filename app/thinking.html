@@ -12,7 +12,7 @@
 <link rel="icon" type="image/png" href="favicon.png">
 <style>
   :root{
-    --ink:#0a0806; --card:#13100b; --card2:#181309;
+    --ink:#0a0806; --shell:#0f0c08; --card:#13100b; --card2:#181309;
     --edge:#2b2214; --edge2:#3d2f18;
     --honey:#ffb300; --gold:#ffd280;
     --text:#f3ead9; --dim:#9a8b73; --dimmer:#6a5d4b;
@@ -236,12 +236,12 @@
 </header>
 
 <div class="inner">
-  <p class="eyebrow">Live inference</p>
+  <p class="eyebrow" id="scope">Live inference</p>
   <h1>Every call, and what it bought.</h1>
   <p class="lede">Four models, one hidden board. Calls are bought with skill points earned on chain.</p>
 
   <div class="stats">
-    <div><b class="n" id="sHour">…</b><span>calls, last hour</span></div>
+    <div><b class="n" id="sHour">…</b><span>calls answered</span></div>
     <div><b class="n" id="sSpend">…</b><span>inference spend</span></div>
     <div><b class="n" id="sP50">…</b><span>median latency</span></div>
     <div><b class="n" id="sP95">…</b><span>p95 latency</span></div>
@@ -286,7 +286,10 @@
 
 <script>
 const $ = (id) => document.getElementById(id);
-const PALETTE = ["#ffb300", "#6fb0ff", "#5fd68a", "#c98bff", "#ff8f6f", "#8be3d5"];
+// Three concurrent slots x eight pod indices is 24 possible agent names, so a
+// six-colour ramp put two visible agents on the same line colour.
+const PALETTE = ["#ffb300", "#6fb0ff", "#5fd68a", "#c98bff", "#ff8f6f", "#8be3d5",
+                 "#e0c341", "#4f8fd6", "#3fae74", "#a86fd6", "#d97a5c", "#63b8ad"];
 let cluster = "devnet", filter = null, colours = new Map(), maxMs = 1;
 
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) =>
@@ -304,6 +307,10 @@ const usd = (v) => v == null ? "…"
   : v >= 0.01 ? "$" + v.toFixed(4)
   : (v * 1e6).toFixed(v * 1e6 >= 100 ? 0 : 1) + "µ$";
 const colourOf = (a) => colours.get(a) || "var(--dim)";
+// The chart does arithmetic on feed values, so a non-numeric one does not
+// render wrong, it renders NaN into every coordinate and empties the panel.
+// Escaping fixed that for the traces; the chart needs the numeric equivalent.
+const num = (v) => { const n = +v; return Number.isFinite(n) ? n : null; };
 
 /* ---------- chart -------------------------------------------------------- */
 // Hand-drawn SVG rather than a charting library: the page has no build step,
@@ -318,9 +325,9 @@ function chart(series) {
   const n = series.length;
   const x = (i) => PADL + (n === 1 ? plotW / 2 : (i / (n - 1)) * plotW);
 
-  const maxLeft = Math.max(1, ...series.map((p) => p.granted ?? p.left ?? 0));
+  const maxLeft = Math.max(1, ...series.map((p) => num(p.granted) ?? num(p.left) ?? 0));
   const y = (v) => TOP + LINE_H - (v / maxLeft) * LINE_H;
-  const maxCost = Math.max(...series.map((p) => p.cost || 0), 1e-9);
+  const maxCost = Math.max(...series.map((p) => num(p.cost) || 0), 1e-9);
 
   const parts = [];
   // horizontal guides, drawn under everything
@@ -335,22 +342,23 @@ function chart(series) {
   // agent spending a game's allowance and being granted the next one.
   const byAgent = new Map();
   series.forEach((p, i) => {
-    if (p.left == null) return;
+    const left = num(p.left);
+    if (left == null) return;
     if (!byAgent.has(p.agent)) byAgent.set(p.agent, []);
-    byAgent.get(p.agent).push({ i, p });
+    byAgent.get(p.agent).push({ i, p, left });
   });
   for (const [agent, pts] of byAgent) {
     const c = colourOf(agent);
     const dim = filter && filter !== agent;
-    const d = pts.map((q, k) => (k ? "L" : "M") + x(q.i).toFixed(1) + " " + y(q.p.left).toFixed(1)).join(" ");
+    const d = pts.map((q, k) => (k ? "L" : "M") + x(q.i).toFixed(1) + " " + y(q.left).toFixed(1)).join(" ");
     parts.push(`<path d="${d}" fill="none" stroke="${c}" stroke-width="${dim ? .8 : 1.2}"
       stroke-linejoin="round" stroke-linecap="round" opacity="${dim ? .18 : .9}"/>`);
     for (const q of pts) {
       // A missed call is a hollow marker: the budget line still moves, and the
       // reason it did not move is worth being able to see on the line itself.
       const fill = q.p.skipped ? "#13100b" : c;
-      parts.push(`<circle cx="${x(q.i).toFixed(1)}" cy="${y(q.p.left).toFixed(1)}" r="${dim ? 1.3 : 2}"
-        fill="${fill}" stroke="${c}" stroke-width="1" opacity="${dim ? .25 : 1}"><title>${esc(agent)} · round ${q.p.instance} · ${q.p.left} of ${q.p.granted} calls left${q.p.skipped ? " · no answer" : ""}</title></circle>`);
+      parts.push(`<circle cx="${x(q.i).toFixed(1)}" cy="${y(q.left).toFixed(1)}" r="${dim ? 1.3 : 2}"
+        fill="${fill}" stroke="${c}" stroke-width="1" opacity="${dim ? .25 : 1}"><title>${esc(agent)} · round ${esc(q.p.instance)} · ${esc(q.left)} of ${esc(num(q.p.granted) ?? "?")} calls left${q.p.skipped ? " · no answer" : ""}</title></circle>`);
     }
   }
 
@@ -359,12 +367,13 @@ function chart(series) {
   parts.push(`<text x="${PADL - 6}" y="${BAR_Y + 10}" fill="#6a5d4b" font-size="10" text-anchor="end" font-family="ui-monospace,monospace">${usd(maxCost)}</text>`);
   const bw = Math.max(1.5, Math.min(9, plotW / Math.max(n, 1) - 1.5));
   series.forEach((p, i) => {
-    if (!p.cost) return;
+    const cost = num(p.cost);
+    if (!cost) return;
     const dim = filter && filter !== p.agent;
-    const h = Math.max(1.5, (p.cost / maxCost) * BAR_H);
+    const h = Math.max(1.5, (cost / maxCost) * BAR_H);
     parts.push(`<rect x="${(x(i) - bw / 2).toFixed(1)}" y="${(BAR_Y + BAR_H - h).toFixed(1)}"
       width="${bw.toFixed(1)}" height="${h.toFixed(1)}" rx="1.2" fill="${colourOf(p.agent)}"
-      opacity="${dim ? .15 : .68}"><title>${esc(p.agent)} · round ${p.instance} · ${usd(p.cost)}</title></rect>`);
+      opacity="${dim ? .15 : .68}"><title>${esc(p.agent)} · round ${esc(p.instance)} · ${esc(usd(cost))}</title></rect>`);
   });
   parts.push(`<text x="${PADL}" y="${H - 4}" fill="#6a5d4b" font-size="10" font-family="ui-monospace,monospace">oldest</text>`);
   parts.push(`<text x="${W - PADR}" y="${H - 4}" fill="#6a5d4b" font-size="10" text-anchor="end" font-family="ui-monospace,monospace">newest</text>`);
@@ -382,7 +391,7 @@ function trace(t) {
   const ids = Object.keys(fog).map(Number).sort((a, b) => a - b);
 
   const combs = ids.length ? '<div class="combs">' + ids.map((id) =>
-    `<div class="cb${id === t.comb ? " self" : ""}${id === t.predict ? " pick" : ""}">comb ${id} <b>${fog[id]}</b></div>`
+    `<div class="cb${id === t.comb ? " self" : ""}${id === t.predict ? " pick" : ""}">comb ${esc(id)} <b>${esc(fog[id])}</b></div>`
   ).join("") + "</div>" : '<span class="k">not recorded</span>';
 
   const S = [];
@@ -400,7 +409,7 @@ function trace(t) {
     ];
     const tail = [];
     if (t.cost != null) tail.push(usd(t.cost));
-    if (t.tokensIn != null) tail.push(`${t.tokensIn}+${t.tokensOut} tok`);
+    if (t.tokensIn != null) tail.push(`${esc(t.tokensIn)}+${esc(t.tokensOut)} tok`);
     if (t.route) tail.push(esc(t.route));
     if (t.provider) tail.push(`provider ${esc(t.provider.slice(0, 8))}`);
     if (tail.length) bits.push(`<span class="k">${tail.join(" &middot; ")}</span>`);
@@ -414,11 +423,11 @@ function trace(t) {
   if (!skip) {
     const moved = t.move !== null && t.move !== undefined && t.move !== t.comb;
     const d = [
-      moved ? `<span class="k">move</span> comb ${t.comb} &rarr; <b>${t.move}</b>`
-            : `<span class="k">hold</span> comb <b>${t.comb}</b>`,
-      `<span class="k">call</span> comb <b>${t.predict}</b> dies`,
+      moved ? `<span class="k">move</span> comb ${esc(t.comb)} &rarr; <b>${esc(t.move)}</b>`
+            : `<span class="k">hold</span> comb <b>${esc(t.comb)}</b>`,
+      `<span class="k">call</span> comb <b>${esc(t.predict)}</b> dies`,
     ];
-    if (t.mine != null) d.push(`<span class="k">forecast own comb at</span> <b>${t.mine}</b>`);
+    if (t.mine != null) d.push(`<span class="k">forecast own comb at</span> <b>${esc(t.mine)}</b>`);
     if (t.thinkNext === false) d.push(`<span class="k">&middot; saving next call</span>`);
     S.push(step("Decision", d.join(' <span class="k">&middot;</span> '), "on"));
   }
@@ -426,7 +435,7 @@ function trace(t) {
   // what it cost against what it had
   if (t.budget) {
     const b = t.budget, out = b.left === 0;
-    S.push(step("Budget", `<span><b${out ? ' class="warn"' : ""}>${b.left}</b><span class="k">/${b.granted} calls left` +
+    S.push(step("Budget", `<span><b${out ? ' class="warn"' : ""}>${esc(b.left)}</b><span class="k">/${esc(b.granted)} calls left` +
       (out ? " &middot; goes quiet" : "") + "</span></span>",
       out ? "bad" : ""));
   }
@@ -443,7 +452,7 @@ function trace(t) {
   }
 
   const v = t.hit === true ? '<span class="verdict hit">called it &check;</span>'
-    : t.hit === false ? `<span class="verdict miss">missed &middot; comb ${t.doomed} died</span>`
+    : t.hit === false ? `<span class="verdict miss">missed &middot; comb ${esc(t.doomed)} died</span>`
     : skip ? "" : '<span class="verdict open">sealed until reveal</span>';
 
   return `<div class="trace${skip ? " skip" : ""}" style="border-left-color:${c}">
@@ -451,7 +460,7 @@ function trace(t) {
       <span class="dot" style="background:${c}"></span>
       <span class="who">${esc(t.agent)}</span>
       <span class="mdl">${esc(shortModel(t.model))}</span>
-      <span class="meta">game ${esc(String(t.game).slice(-6))} &middot; round ${t.instance}</span>
+      <span class="meta">game ${esc(String(t.game).slice(-6))} &middot; round ${esc(t.instance)}</span>
       ${v}
       <span class="meta push">${ago(t.at)}</span>
     </div>
@@ -495,12 +504,12 @@ async function chainFor(agent) {
       // Labelled only where this process saw the call that produced it. An
       // unlabelled row is a real transaction we simply did not originate here.
       const kind = x.kind
-        ? `<span class="kind">${esc(x.kind)} &middot; game ${esc(String(x.game).slice(-6))} round ${x.instance}</span>`
-        : '<span class="kind none">&mdash;</span>';
+        ? `<span class="kind">${esc(x.kind)} &middot; game ${esc(String(x.game).slice(-6))} round ${esc(x.instance)}</span>`
+        : '<span class="kind none">&hellip;</span>';
       const when = x.at ? new Date(x.at).toISOString().slice(11, 16) : "";
       return `<div class="tx-row"><span class="st${x.err ? " bad" : ""}"></span>
         <a class="sig" target="_blank" rel="noopener" href="https://explorer.solana.com/tx/${encodeURIComponent(x.sig)}?cluster=${d.cluster || cluster}">${esc(x.sig.slice(0, 14))}…</a>
-        ${kind}<span class="slot">${when} &middot; slot ${x.slot}</span></div>`;
+        ${kind}<span class="slot">${esc(when)} &middot; slot ${esc(x.slot)}</span></div>`;
     }).join("") : '<div class="empty">No transactions on this wallet yet.</div>';
   } catch (e) {
     $("chainSub").textContent = "";
@@ -523,15 +532,21 @@ async function tick() {
     (d.agents || []).forEach((a, i) => { if (!colours.has(a)) colours.set(a, PALETTE[i % PALETTE.length]); });
 
     const s = d.stats || {};
-    $("sHour").textContent = s.lastHour ?? 0;
-    $("sSpend").innerHTML = s.spend ? esc(usd(s.spend)) : "—";
-    $("sP50").innerHTML = s.p50 ? esc(secs(s.p50)) : "—";
-    $("sP95").innerHTML = s.p95 ? esc(secs(s.p95)) : "—";
+    // Every tile is scoped to the visible window. It used to say "last hour"
+    // while the buffer only reaches back about 27 minutes under load, so the
+    // number quietly capped exactly when the arena was busiest.
+    $("sHour").textContent = s.answered ?? 0;
+    $("sSpend").innerHTML = s.spend ? esc(usd(s.spend)) : "…";
+    $("sP50").innerHTML = s.p50 ? esc(secs(s.p50)) : "…";
+    $("sP95").innerHTML = s.p95 ? esc(secs(s.p95)) : "…";
     // A rate is shown with its denominator: 50% of 2 and 50% of 200 are not
     // the same claim and should not read alike.
     $("sHit").innerHTML = s.graded
-      ? Math.round(s.hitRate * 100) + "%<small> of " + s.graded + "</small>" : "—";
+      ? Math.round(s.hitRate * 100) + "%<small> of " + s.graded + "</small>" : "…";
     $("sTok").textContent = (s.tokens ?? 0).toLocaleString();
+    // Filtering narrows every tile. Without saying so, one pod's spend reads
+    // as the arena's total.
+    $("scope").textContent = filter ? "Live inference · " + filter : "Live inference";
 
     $("legend").innerHTML = (d.agents || []).map((a) =>
       `<span><i style="background:${colourOf(a)}"></i>${esc(a)}</span>`).join("");
@@ -540,7 +555,10 @@ async function tick() {
     const calls = d.calls || [];
     maxMs = Math.max(1, ...calls.map((t) => t.ms || 0));
     chart(d.series || []);
-    $("feed").innerHTML = calls.length ? calls.map(trace).join("")
+    // Per record, so a single malformed entry drops its own row instead of
+    // throwing out of the map and leaving the page stuck on "Reconnecting".
+    const safe = (t) => { try { return trace(t); } catch { return ""; } };
+    $("feed").innerHTML = calls.length ? calls.map(safe).join("")
       : '<div class="empty"><b>Nothing here yet</b>' +
         (filter ? esc(filter) + " has not made a call in this window." : "Calls appear as the agents make them.") + "</div>";
   } catch {

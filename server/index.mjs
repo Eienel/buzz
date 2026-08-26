@@ -367,6 +367,11 @@ const CLUSTER = /mainnet/.test(RPC) ? "mainnet-beta" : /testnet/.test(RPC) ? "te
  * write does is put a wrong line on a page, but set the secret anyway.
  */
 const feedAuthed = (req) => {
+  // A JSON content-type is not a CORS-simple request, so a browser must
+  // preflight it. Nothing here answers a preflight, which is what keeps a page
+  // on another origin from posting to a loopback-gated dev server.
+  if(req.method !== "POST") return false;
+  if(!String(req.headers["content-type"] ?? "").startsWith("application/json")) return false;
   if(FEED_SECRET) return req.headers["x-feed-secret"] === FEED_SECRET;
   const ip = req.socket.remoteAddress ?? "";
   return ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1";

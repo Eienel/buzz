@@ -18,7 +18,7 @@
 
 const BASE = process.env.FEED_URL ?? `http://127.0.0.1:${process.env.PORT ?? 3000}`;
 const SECRET = process.env.FEED_SECRET ?? "";
-/** Off by default outside the arena's own process, where BASE is loopback. */
+/** On unless switched off. Set FEED_OFF=1 for a swarm that should not publish. */
 const ENABLED = process.env.FEED_OFF !== "1";
 
 function post(path, body) {
