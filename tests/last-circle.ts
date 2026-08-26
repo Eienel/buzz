@@ -466,15 +466,37 @@ describe("buzz: backing an agent", () => {
       systemProgram: SystemProgram.programId,
     }).rpc();
 
+  // The bettor signs for themselves. This is the wallet path.
   const place = async (b: typeof bettors[number], target: PublicKey, amount: number) =>
     program.methods.placeBet(new anchor.BN(amount)).accountsPartial({
       game: g, market, marketVault: mvaultPda(market),
       targetPlayer: playerPda(g, target), backable: backablePda(target),
       targetPool: tpoolPda(market, target),
-      bet: betPda(market, b.kp.publicKey, target), bettorToken: b.ata,
-      bettor: b.kp.publicKey, stakeMint: asset.mint,
+      bet: betPda(market, b.kp.publicKey, target), payerToken: b.ata,
+      bettor: b.kp.publicKey, payer: b.kp.publicKey, relayer: null,
+      stakeMint: asset.mint,
       tokenProgram: asset.tokenProgram, systemProgram: SystemProgram.programId,
     }).signers([b.kp]).rpc();
+
+  // Somebody who is not the bettor and is not allow-listed must not be able to
+  // open a bet under another identity, or the leaderboard is anyone's to forge.
+  it("refuses a bet placed under someone else's identity", async () => {
+    const stranger = bettors[1], victim = bettors[0].kp.publicKey;
+    let threw = false;
+    try {
+      await program.methods.placeBet(new anchor.BN(1 * UNIT)).accountsPartial({
+        game: g, market, marketVault: mvaultPda(market),
+        targetPlayer: playerPda(g, players[0].kp.publicKey),
+        backable: backablePda(players[0].kp.publicKey),
+        targetPool: tpoolPda(market, players[0].kp.publicKey),
+        bet: betPda(market, victim, players[0].kp.publicKey),
+        payerToken: stranger.ata, bettor: victim, payer: stranger.kp.publicKey,
+        relayer: null, stakeMint: asset.mint,
+        tokenProgram: asset.tokenProgram, systemProgram: SystemProgram.programId,
+      }).signers([stranger.kp]).rpc();
+    } catch { threw = true; }
+    assert.ok(threw, "an unrelated signer cannot bet as somebody else");
+  });
 
   it("refuses a bet on an agent nobody put on the book", async () => {
     // The whole point of the marker: an unmarked agent has no account to pass,

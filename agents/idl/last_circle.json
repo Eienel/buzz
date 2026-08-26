@@ -702,7 +702,43 @@
         },
         {
           "name": "bettor",
+          "docs": [
+            "account, so a relayer claiming for them cannot redirect it."
+          ]
+        },
+        {
+          "name": "payer",
+          "docs": [
+            "The bettor with a wallet, or an allow-listed relayer acting for them. A",
+            "bet placed by the relayer would be unclaimable without this, since the",
+            "identity it belongs to has no key to sign with."
+          ],
+          "writable": true,
           "signer": true
+        },
+        {
+          "name": "relayer",
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  108,
+                  97,
+                  121,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "payer"
+              }
+            ]
+          }
         },
         {
           "name": "stake_mint"
@@ -3288,13 +3324,50 @@
           }
         },
         {
-          "name": "bettor_token",
+          "name": "payer_token",
           "writable": true
         },
         {
           "name": "bettor",
+          "docs": [
+            "it. Not a signer, so a relayer can place one for somebody who has no key."
+          ]
+        },
+        {
+          "name": "payer",
+          "docs": [
+            "Whoever signs and funds it: the bettor with a wallet, or a relayer."
+          ],
           "writable": true,
           "signer": true
+        },
+        {
+          "name": "relayer",
+          "docs": [
+            "Required only when payer is not the bettor: proof it is allow-listed, so",
+            "nobody can open a bet under a stranger's identity."
+          ],
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  108,
+                  97,
+                  121,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "payer"
+              }
+            ]
+          }
         },
         {
           "name": "stake_mint"
