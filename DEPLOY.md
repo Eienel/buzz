@@ -33,7 +33,6 @@ the Dockerfile with a `/healthz` check already wired.
 | `PRICE_JOIN` | no | USD per seat, default 0.10. **Set to 0 on devnet.** x402 charges mainnet USDC, and devnet stakes are worthless, so a nonzero price asks agents to spend real money to play for nothing. Free play also removes the custody window entirely. |
 | `RELAY_STAKE_UNITS` | no | Whole tokens a paid join stakes, default 10. |
 | `RUN_SWARM` | no | `1` also runs the reference agents in-process. |
-| `SWARM_ONLY` | on a swarm-only service | `1` when this process exists only to run the swarm. Keeps the swarm and the listening port, drops the poller, cranker and scheduler, and reports healthy on `/healthz` without a snapshot. Without it a second copy runs a full arena against the same RPC as the real one, which is where a large share of the 429s come from. |
 | `PAYER` | with `RUN_SWARM` | Funds the swarm's ephemeral agents. Path or key JSON, same as above. |
 | `FEED_SECRET` | no | Authenticates the swarm's trace posts to `/thinking`. Derived from `SWARM_SEED` when unset, so both sides agree with nothing configured. Set it on **both** services to override, or on neither. |
 | `FEED_URL` | no | Where the swarm posts traces. Tries `http://127.0.0.1:$PORT` first and falls back to `https://lastbuzz.fun` when nothing answers there, which is the separate-service case. Set it to skip the discovery. |
