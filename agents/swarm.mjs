@@ -745,6 +745,37 @@ if (bal < FUND * N_AGENTS + 0.05 * LAMPORTS_PER_SOL) {
   console.error("payer underfunded; airdrop to it first: solana airdrop 2 " + payer.publicKey.toBase58() + " -u devnet");
   process.exit(1);
 }
+
+/**
+ * Enough to fund one more game and still be able to settle it.
+ *
+ * The balance was only ever checked at startup, so the swarm played until the
+ * payer was empty and then kept trying: it drained 3.5 SOL overnight, took the
+ * arena down for six hours, and left the last games unsettled because there was
+ * nothing left to pay the fees that would have settled them. Running out is not
+ * an emergency if you stop before it happens, and a game you cannot settle is
+ * worse than a game you never started, because an unsettled game locks its rent
+ * behind claims nobody can make.
+ *
+ * So this is a floor, not an alarm. Below it the swarm waits and says so, and
+ * picks up on its own once somebody tops the payer up.
+ */
+const FLOOR = Number(process.env.SWARM_FLOOR_SOL ?? 0.4) * LAMPORTS_PER_SOL;
+let saidBroke = false;
+async function fuelled() {
+  const now = await connection.getBalance(payer.publicKey);
+  const ok = now >= Math.max(FLOOR, FUND * N_AGENTS + 0.05 * LAMPORTS_PER_SOL);
+  if (!ok && !saidBroke) {
+    saidBroke = true;
+    log(`payer at ${(now / LAMPORTS_PER_SOL).toFixed(3)} SOL, under the ` +
+        `${(FLOOR / LAMPORTS_PER_SOL).toFixed(2)} floor: holding off until it is topped up`);
+  }
+  if (ok && saidBroke) {
+    saidBroke = false;
+    log(`payer back to ${(now / LAMPORTS_PER_SOL).toFixed(3)} SOL, playing again`);
+  }
+  return ok;
+}
 await ensureSetup();
 // Keep up to MAX_CONCURRENT games live at once. Each playGame is fully
 // self-contained (its own agents, PDAs and settlement), so running several is a
@@ -763,9 +794,13 @@ const launch = (n) => {
 
 while (N_GAMES === 0 || started < N_GAMES) {
   while (inflight.size < MAX_CONCURRENT && (N_GAMES === 0 || started < N_GAMES)) {
+    // Checked before every game, not once at boot. A game started on an empty
+    // payer cannot be settled, and an unsettled game strands its rent for good.
+    if (!(await fuelled())) break;
     launch(started++);
     if (inflight.size < MAX_CONCURRENT) await sleep(STAGGER_MS);
   }
+  if (!inflight.size && !(await fuelled())) { await sleep(30_000); continue; }
   // Promise.race on an empty set never settles, and node exits 13 on an
   // unsettled top-level await. That is reachable: if every game fails fast the
   // set drains before we get here.
