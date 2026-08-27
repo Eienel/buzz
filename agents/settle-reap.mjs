@@ -1,0 +1,190 @@
+// Settle the backlog, then reclaim its rent.
+//
+//   PAYER=~/.config/solana/id.json node agents/settle-reap.mjs
+//
+// `reap.mjs` closes accounts. It cannot touch most of the backlog, because
+// close_player refuses to close a player that is still Active with unclaimed
+// points, and it is right to: closing one would forfeit an entitlement its
+// owner never collected. Thousands of games were left that way by a crank race
+// that made the swarm skip settlement (see crankStep in swarm.mjs), so the
+// rent sat locked behind claims nobody had made.
+//
+// This settles first and closes second. Every claim is signed by the agent
+// that owns it, derived from the same seed the swarm uses, so nothing here can
+// pay anybody but the wallet the program already says is owed.
+//
+// Safe to stop and re-run: every step is idempotent, and anything already done
+// answers AlreadyClaimed or WrongPhase and is skipped.
+
+import anchorPkg from "@coral-xyz/anchor";
+import { Connection, Keypair, PublicKey, SystemProgram, LAMPORTS_PER_SOL } from "@solana/web3.js";
+import { getAssociatedTokenAddressSync } from "@solana/spl-token";
+import { readFileSync } from "node:fs";
+import jsSha3 from "js-sha3";
+import { loadKeypair } from "../server/keypair.mjs";
+import { houseWallets } from "../server/names.mjs";
+
+const { keccak_256 } = jsSha3;
+const { AnchorProvider, Program, Wallet, BN } = anchorPkg;
+
+const RPC = process.env.RPC ?? "https://api.devnet.solana.com";
+const PAUSE = Number(process.env.PAUSE_MS ?? 150);
+const LIMIT = Number(process.env.LIMIT ?? 0);          // 0 = the whole backlog
+const SEED = process.env.SWARM_SEED ?? "buzz-devnet-swarm-v1";
+
+const payer = loadKeypair(process.env.PAYER, `${process.env.HOME}/.config/solana/id.json`);
+const connection = new Connection(RPC, "confirmed");
+const program = new Program(
+  JSON.parse(readFileSync(new URL("./idl/last_circle.json", import.meta.url), "utf8")),
+  new AnchorProvider(connection, new Wallet(payer), { commitment: "confirmed" }));
+const PID = program.programId;
+const pda = (...s) => PublicKey.findProgramAddressSync(s, PID)[0];
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
+
+// The agent wallets are seed-derived, so we can sign for the ones we own. A
+// player owned by anything else is somebody's own agent and is left alone: its
+// claim is theirs to make.
+const agentKey = (name) => Keypair.fromSeed(
+  Uint8Array.from(Buffer.from(keccak_256.arrayBuffer(`${SEED}:${name}`)).subarray(0, 32)));
+const nameOf = new Map(houseWallets().map((h) => [h.wallet, h.name]));
+
+/** Decode per account rather than eagerly: older layouts are still on chain. */
+async function decodeAll(name) {
+  const raw = await connection.getProgramAccounts(PID, {
+    filters: [{ memcmp: { offset: 0, bytes: program.coder.accounts.memcmp(name).bytes } }],
+  });
+  const out = [];
+  for (const { pubkey, account } of raw) {
+    try { out.push({ pubkey, data: program.coder.accounts.decode(name, account.data) }); }
+    catch { /* predates this program; not ours to settle */ }
+  }
+  return out;
+}
+
+const quiet = /AlreadyClaimed|NothingToClaim|WrongPhase|PlayerInactive|Unauthorized|PlayersRemain|CirclesRemain/;
+async function step(label, fn) {
+  try { await fn(); return true; }
+  catch (e) {
+    const m = String(e.message ?? e);
+    if (!quiet.test(m)) log(`    ${label}: ${m.slice(0, 90)}`);
+    return false;
+  } finally { await sleep(PAUSE); }
+}
+
+const before = await connection.getBalance(payer.publicKey);
+log("reading the backlog…");
+const games = await decodeAll("game");
+await sleep(PAUSE);
+const players = await decodeAll("player");
+await sleep(PAUSE);
+const circles = await decodeAll("circle");
+
+const settling = games.filter((g) => g.data.status.settling);
+log(`${games.length} games, ${settling.length} in Settling, ${players.length} players, ${circles.length} circles`);
+
+// Newest first: the recent backlog is the part somebody might still claim.
+settling.sort((a, b) => Number(b.data.gameId) - Number(a.data.gameId));
+const work = LIMIT ? settling.slice(0, LIMIT) : settling;
+log(`working ${work.length} games\n`);
+
+let settled = 0, closed = 0, skippedForeign = 0;
+
+for (const [n, { pubkey: gamePda, data: g }] of work.entries()) {
+  const mine = players.filter((p) => p.data.game.equals(gamePda));
+  const combs = circles.filter((c) => c.data.game.equals(gamePda));
+  const winner = combs.find((c) => c.data.alive)?.data.circleId ?? null;
+  const mint = g.stakeMint;
+  const mintAcc = await connection.getAccountInfo(mint);
+  if (!mintAcc) continue;
+  const tokenProgram = mintAcc.owner;
+  const vault = pda(Buffer.from("vault"), gamePda.toBuffer());
+  const treasury = pda(Buffer.from("treasury"), mint.toBuffer());
+  const comb = (id) => pda(Buffer.from("circle"), gamePda.toBuffer(), Buffer.from([id]));
+
+  for (const { pubkey: P, data: p } of mine) {
+    const name = nameOf.get(p.owner.toBase58());
+    if (!name) { skippedForeign++; continue; }         // not ours to claim for
+    const kp = agentKey(name);
+    const ownerToken = getAssociatedTokenAddressSync(mint, kp.publicKey, false, tokenProgram);
+    const base = { game: gamePda, vault, player: P, owner: kp.publicKey, actor: kp.publicKey,
+                   stakeMint: mint, ownerToken, tokenProgram,
+                   systemProgram: SystemProgram.programId };
+    if (p.status.active && winner !== null && p.currentCircle === winner) {
+      await step("claimWinnings", () => program.methods.claimWinnings().accountsPartial({
+        ...base, winningCircle: comb(winner),
+        stats: pda(Buffer.from("agent"), kp.publicKey.toBuffer()), treasury }).signers([kp]).rpc());
+    } else if (p.status.active) {
+      await step("cashOut", () => program.methods.cashOut().accountsPartial({
+        ...base, circle: comb(p.currentCircle) }).signers([kp]).rpc());
+    }
+    if (p.points > 0 && !p.skillClaimed) {
+      await step("claimSkill", () => program.methods.claimSkill().accountsPartial({
+        ...base, stats: pda(Buffer.from("agent"), kp.publicKey.toBuffer()), treasury,
+      }).signers([kp]).rpc());
+    }
+    settled++;
+    // Now it can be closed permissionlessly: nothing is owed to it.
+    if (await step("closePlayer", () => program.methods.closePlayer().accountsPartial({
+      game: gamePda, player: P, owner: kp.publicKey, cranker: payer.publicKey }).rpc())) closed++;
+  }
+
+  // The rake has to be swept before close_game will accept the game.
+  if (Number(g.feesCollected) > 0) {
+    await step("collectFees", () => program.methods.collectFees().accountsPartial({
+      config: pda(Buffer.from("config")), game: gamePda, vault, treasury,
+      treasuryVault: pda(Buffer.from("tvault"), mint.toBuffer()), stakeMint: mint,
+      tokenProgram, cranker: payer.publicKey, systemProgram: SystemProgram.programId }).rpc());
+  }
+
+  for (const { pubkey: C, data: cc } of combs) {
+    const creatorName = nameOf.get(cc.creator.toBase58());
+    const signer = creatorName ? agentKey(creatorName) : null;
+    // A live comb whose creator never claimed kappa needs that creator's
+    // signature, which is an explicit forfeit. Only sign for wallets we own.
+    if (cc.alive && !g.creatorCutPaid && !signer) continue;
+    if (await step("closeCircle", () => {
+      const m = program.methods.closeCircle().accountsPartial({
+        game: gamePda, circle: C, creator: cc.creator, cranker: payer.publicKey });
+      return signer ? m.signers([signer]).rpc() : m.rpc();
+    })) closed++;
+  }
+
+  await step("closeGame", () => program.methods.closeGame().accountsPartial({
+    game: gamePda, vault, treasury, treasuryVault: pda(Buffer.from("tvault"), mint.toBuffer()),
+    authority: g.authority, cranker: payer.publicKey,
+    stakeMint: mint, tokenProgram, systemProgram: SystemProgram.programId }).rpc());
+
+  if ((n + 1) % 10 === 0) {
+    const now = await connection.getBalance(payer.publicKey);
+    log(`${n + 1}/${work.length} games | ${settled} players settled, ${closed} accounts closed ` +
+        `| payer ${(now / LAMPORTS_PER_SOL).toFixed(3)} SOL`);
+  }
+}
+
+// Rent from players and circles lands in the agent wallets, not here. Sweep it
+// back with the payer as fee payer, so no agent needs a balance of its own.
+log("\nsweeping the agent wallets…");
+let swept = 0;
+const { Transaction } = await import("@solana/web3.js");
+for (const { wallet, name } of houseWallets()) {
+  const kp = agentKey(name);
+  const bal = await connection.getBalance(kp.publicKey);
+  if (bal <= 0) continue;
+  try {
+    const tx = new Transaction().add(SystemProgram.transfer({
+      fromPubkey: kp.publicKey, toPubkey: payer.publicKey, lamports: bal }));
+    tx.feePayer = payer.publicKey;
+    await program.provider.sendAndConfirm(tx, [kp]);
+    swept += bal;
+    log(`  ${name}: ${(bal / LAMPORTS_PER_SOL).toFixed(4)} SOL`);
+  } catch (e) { log(`  sweep ${name}: ${String(e.message).slice(0, 60)}`); }
+  await sleep(PAUSE);
+}
+
+const after = await connection.getBalance(payer.publicKey);
+log(`\nsettled ${settled} players, closed ${closed} accounts`);
+if (skippedForeign) log(`left ${skippedForeign} players alone: not our wallets to claim for`);
+log(`swept ${(swept / LAMPORTS_PER_SOL).toFixed(4)} SOL from agent wallets`);
+log(`payer ${(before / LAMPORTS_PER_SOL).toFixed(4)} -> ${(after / LAMPORTS_PER_SOL).toFixed(4)} SOL ` +
+    `(net ${((after - before) / LAMPORTS_PER_SOL).toFixed(4)})`);
