@@ -193,6 +193,38 @@ const fetchPlayer = async (p) => {
   try { return await program.account.player.fetch(p); }
   catch { await sleep(1200); return program.account.player.fetch(p); }
 };
+/**
+ * Crank a phase, tolerating having lost the race to crank it.
+ *
+ * The swarm cranks the games it plays, and so does the server's cranker, and
+ * both are supposed to: cranking is permissionless precisely so no game depends
+ * on one process staying alive. But these calls had no error handling, so
+ * whenever the cranker got there first the swarm threw WrongPhase, fell out of
+ * the try that wraps the whole game, and skipped settlement entirely.
+ *
+ * That is why 7,136 Player accounts sit Active with unclaimed points and their
+ * rent cannot be reclaimed: close_player rightly refuses to close away an
+ * entitlement nobody collected. The arena was losing about 0.035 SOL a game and
+ * never getting it back, which is what finally took it down.
+ *
+ * WrongPhase here means somebody already advanced this phase, which is the
+ * outcome we wanted. PhaseNotOver means we are early, so wait. Anything else is
+ * a real failure and still throws.
+ */
+const crankStep = async (label, gid, fn, tries = 12) => {
+  for (let i = 0; i < tries; i++) {
+    try { await fn(); return true; }
+    catch (e) {
+      const m = String(e.message ?? e);
+      if (/WrongPhase/.test(m)) return false;          // someone else did it
+      if (/PhaseNotOver/.test(m)) { await sleep(1200); continue; }
+      throw e;
+    }
+  }
+  log(`game ${gid}: ${label} never opened after ${tries} tries`);
+  return false;
+};
+
 const waitPhaseEnd = async (gamePda, margin = 1500) => {
   const g = await fetchGame(gamePda);
   const ms = g.phaseEndsAt.toNumber() * 1000 - Date.now() + margin;
@@ -523,7 +555,8 @@ async function playGame(gameNo) {
       });
     }
     await waitPhaseEnd(gamePda);
-    await program.methods.advanceToReveal().accountsPartial({ game: gamePda, cranker: payer.publicKey }).rpc();
+    await crankStep("advanceToReveal", gid, () => program.methods.advanceToReveal()
+      .accountsPartial({ game: gamePda, cranker: payer.publicKey }).rpc());
 
     // reveal phase
     for (const [a, p] of plans) {
@@ -537,22 +570,15 @@ async function playGame(gameNo) {
     }
     await waitPhaseEnd(gamePda);
 
-    // death: select (retry until entropy slot passes), execute
-    for (;;) {
-      try {
-        await program.methods.selectDeath()
-          .accountsPartial({ game: gamePda, recentSlotHashes: SYSVAR_SLOT_HASHES_PUBKEY, randomness: null, cranker: payer.publicKey })
-          .remainingAccounts([...taken].filter((i) => fog[i] !== undefined).map((i) => ({ pubkey: circlePda(i), isSigner: false, isWritable: false })))
-          .rpc();
-        break;
-      } catch (e) {
-        if (String(e).includes("PhaseNotOver")) { await sleep(1200); continue; }
-        throw e;
-      }
-    }
+    // death: select (retry until the entropy slot passes), then execute
+    await crankStep("selectDeath", gid, () => program.methods.selectDeath()
+      .accountsPartial({ game: gamePda, recentSlotHashes: SYSVAR_SLOT_HASHES_PUBKEY, randomness: null, cranker: payer.publicKey })
+      .remainingAccounts([...taken].filter((i) => fog[i] !== undefined).map((i) => ({ pubkey: circlePda(i), isSigner: false, isWritable: false })))
+      .rpc());
     g = await fetchGame(gamePda);
     const doomed = g.doomedCircle;
-    await program.methods.executeDeath(doomed).accountsPartial({ game: gamePda, circle: circlePda(doomed), cranker: payer.publicKey }).rpc();
+    await crankStep("executeDeath", gid, () => program.methods.executeDeath(doomed)
+      .accountsPartial({ game: gamePda, circle: circlePda(doomed), cranker: payer.publicKey }).rpc());
     log(`game ${gid}: instance ${instance}, circle ${doomed} died`);
     // Scores this round's published predictions. Without it the feed shows
     // what the models said and never whether they were right, which is the
@@ -587,7 +613,8 @@ async function playGame(gameNo) {
       a.dead = true;
     }
     await waitPhaseEnd(gamePda);
-    await program.methods.advanceInstance().accountsPartial({ game: gamePda, cranker: payer.publicKey }).rpc();
+    await crankStep("advanceInstance", gid, () => program.methods.advanceInstance()
+      .accountsPartial({ game: gamePda, cranker: payer.publicKey }).rpc());
 
     g = await fetchGame(gamePda);
     if (g.status.running && g.instance >= g.lockInstance && !g.insaneRolled) {
