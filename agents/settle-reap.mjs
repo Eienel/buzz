@@ -142,11 +142,21 @@ for (const [n, { pubkey: gamePda, data: g }] of work.entries()) {
     const signer = creatorName ? agentKey(creatorName) : null;
     // A live comb whose creator never claimed kappa needs that creator's
     // signature, which is an explicit forfeit. Only sign for wallets we own.
-    if (cc.alive && !g.creatorCutPaid && !signer) continue;
-    if (await step("closeCircle", () => {
+    const needsCreator = cc.alive && !g.creatorCutPaid;
+    if (needsCreator && !signer) continue;
+    if (await step("closeCircle", async () => {
       const m = program.methods.closeCircle().accountsPartial({
         game: gamePda, circle: C, creator: cc.creator, cranker: payer.publicKey });
-      return signer ? m.signers([signer]).rpc() : m.rpc();
+      if (!needsCreator) return m.rpc();
+      // The IDL declares `creator` as an UncheckedAccount, so Anchor builds the
+      // meta with isSigner false and then rejects the keypair as an unknown
+      // signer. The program still requires the signature when the comb is alive
+      // and kappa is unclaimed, so the meta is flipped by hand. This is written
+      // down in CLAUDE.md and I hit it anyway.
+      const ix = await m.instruction();
+      for (const k of ix.keys) if (k.pubkey.equals(cc.creator)) k.isSigner = true;
+      const { Transaction } = await import("@solana/web3.js");
+      return program.provider.sendAndConfirm(new Transaction().add(ix), [signer]);
     })) closed++;
   }
 
