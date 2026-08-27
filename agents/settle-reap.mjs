@@ -72,6 +72,41 @@ async function step(label, fn) {
   } finally { await sleep(PAUSE); }
 }
 
+/**
+ * Send several instructions as one transaction.
+ *
+ * One close per transaction meant one round trip per account, and at roughly
+ * a game a minute the backlog was a seventeen hour job. The closes are cheap,
+ * independent, and touch disjoint accounts, so they batch: eight players and
+ * six combs go in two transactions instead of fourteen.
+ *
+ * On any failure it falls back to sending them one at a time, because a batch
+ * fails as a unit and one already-closed account would otherwise take thirteen
+ * good closes down with it.
+ */
+async function batch(label, ixs, signers = []) {
+  if (!ixs.length) return 0;
+  const { Transaction } = await import("@solana/web3.js");
+  const CHUNK = Number(process.env.BATCH ?? 7);
+  let done = 0;
+  for (let i = 0; i < ixs.length; i += CHUNK) {
+    const slice = ixs.slice(i, i + CHUNK);
+    const tx = new Transaction();
+    for (const ix of slice) tx.add(ix);
+    try {
+      await program.provider.sendAndConfirm(tx, signers);
+      done += slice.length;
+    } catch {
+      for (const ix of slice) {
+        if (await step(label, () =>
+          program.provider.sendAndConfirm(new Transaction().add(ix), signers))) done++;
+      }
+    }
+    await sleep(PAUSE);
+  }
+  return done;
+}
+
 const before = await connection.getBalance(payer.publicKey);
 log("reading the backlog…");
 const games = await decodeAll("game");
@@ -102,6 +137,7 @@ for (const [n, { pubkey: gamePda, data: g }] of work.entries()) {
   const treasury = pda(Buffer.from("treasury"), mint.toBuffer());
   const comb = (id) => pda(Buffer.from("circle"), gamePda.toBuffer(), Buffer.from([id]));
 
+  const closeIxs = [];
   for (const { pubkey: P, data: p } of mine) {
     const name = nameOf.get(p.owner.toBase58());
     if (!name) { skippedForeign++; continue; }         // not ours to claim for
@@ -124,10 +160,12 @@ for (const [n, { pubkey: gamePda, data: g }] of work.entries()) {
       }).signers([kp]).rpc());
     }
     settled++;
-    // Now it can be closed permissionlessly: nothing is owed to it.
-    if (await step("closePlayer", () => program.methods.closePlayer().accountsPartial({
-      game: gamePda, player: P, owner: kp.publicKey, cranker: payer.publicKey }).rpc())) closed++;
+    // Collected and sent together below: nothing is owed to these any more, so
+    // the order among them does not matter.
+    closeIxs.push(await program.methods.closePlayer().accountsPartial({
+      game: gamePda, player: P, owner: kp.publicKey, cranker: payer.publicKey }).instruction());
   }
+  closed += await batch("closePlayer", closeIxs);
 
   // The rake has to be swept before close_game will accept the game.
   if (Number(g.feesCollected) > 0) {
@@ -137,6 +175,7 @@ for (const [n, { pubkey: gamePda, data: g }] of work.entries()) {
       tokenProgram, cranker: payer.publicKey, systemProgram: SystemProgram.programId }).rpc());
   }
 
+  const plainCombs = [];
   for (const { pubkey: C, data: cc } of combs) {
     const creatorName = nameOf.get(cc.creator.toBase58());
     const signer = creatorName ? agentKey(creatorName) : null;
@@ -144,6 +183,11 @@ for (const [n, { pubkey: gamePda, data: g }] of work.entries()) {
     // signature, which is an explicit forfeit. Only sign for wallets we own.
     const needsCreator = cc.alive && !g.creatorCutPaid;
     if (needsCreator && !signer) continue;
+    if (!needsCreator) {
+      plainCombs.push(await program.methods.closeCircle().accountsPartial({
+        game: gamePda, circle: C, creator: cc.creator, cranker: payer.publicKey }).instruction());
+      continue;
+    }
     if (await step("closeCircle", async () => {
       const m = program.methods.closeCircle().accountsPartial({
         game: gamePda, circle: C, creator: cc.creator, cranker: payer.publicKey });
@@ -159,6 +203,7 @@ for (const [n, { pubkey: gamePda, data: g }] of work.entries()) {
       return program.provider.sendAndConfirm(new Transaction().add(ix), [signer]);
     })) closed++;
   }
+  closed += await batch("closeCircle", plainCombs);
 
   await step("closeGame", () => program.methods.closeGame().accountsPartial({
     game: gamePda, vault, treasury, treasuryVault: pda(Buffer.from("tvault"), mint.toBuffer()),
