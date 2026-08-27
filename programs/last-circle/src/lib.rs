@@ -1307,6 +1307,69 @@ pub mod last_circle {
         )?;
         Ok(())
     }
+
+    // ----- Rent recovery for the book ---------------------------------------
+    //
+    // The book had no close path at all, so every game left a Market and its
+    // vault behind for good: about 0.0036 SOL a game that nothing could ever
+    // reclaim. The game's own accounts at least had close_player and friends.
+    //
+    // A Bet's seeds name the MARKET, not the pool it sits in, so closing a pool
+    // cannot orphan a bet and the two are independent. Only the market has to
+    // go last, and the guard for that is an empty vault: every token that
+    // entered the book has left as a payout or a refund, so no bet is owed
+    // anything, whether or not its account has been closed yet.
+    //
+    // A bettor who never closes their own bet loses that account's rent, which
+    // was theirs. Nobody else's money is reachable from here.
+    //
+    // Deliberately no new fields on any of these accounts. Ten TargetPools are
+    // already on chain and a program upgrade never rewrites account data, so a
+    // field appended here would make every one of them fail to deserialize and
+    // strand the bets they hold.
+
+    /// Close a settled bet; its rent returns to the bettor.
+    ///
+    /// Permissionless once the bet is claimed, because a claimed bet is owed
+    /// nothing. A bet that has not claimed can only be closed by its own
+    /// bettor, whose signature is an explicit forfeit of whatever it was due.
+    pub fn close_bet(ctx: Context<CloseBet>) -> Result<()> {
+        if !ctx.accounts.bet.claimed {
+            require!(ctx.accounts.bettor.is_signer, GameError::Unauthorized);
+        }
+        Ok(())
+    }
+
+    /// Close a decided pool once every bet on it is gone; rent to the cranker,
+    /// which is whoever paid to open the book in the first place.
+    pub fn close_target_pool(ctx: Context<CloseTargetPool>) -> Result<()> {
+        require!(ctx.accounts.target_pool.resolved, GameError::WrongPhase);
+        let m = &mut ctx.accounts.market;
+        m.targets = m.targets.saturating_sub(1);
+        m.resolved = m.resolved.saturating_sub(1);
+        Ok(())
+    }
+
+    /// Close the book last, once no pool is left and the vault is empty.
+    ///
+    /// CONSERVATION: an empty vault is the whole guard. Every token that
+    /// entered the book left as a payout or a refund, so there is nothing here
+    /// to sweep and nobody left to pay.
+    pub fn close_market(ctx: Context<CloseMarket>) -> Result<()> {
+        require!(ctx.accounts.market.targets == 0, GameError::CirclesRemain);
+        require!(ctx.accounts.market_vault.amount == 0, GameError::ConservationViolated);
+        let mkey = ctx.accounts.market.key();
+        let seeds: &[&[u8]] = &[b"mvault", mkey.as_ref(), &[ctx.accounts.market.vault_bump]];
+        token_interface::close_account(CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            token_interface::CloseAccount {
+                account: ctx.accounts.market_vault.to_account_info(),
+                destination: ctx.accounts.cranker.to_account_info(),
+                authority: ctx.accounts.market_vault.to_account_info(),
+            },
+            &[seeds],
+        ))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2685,6 +2748,57 @@ pub struct Bet {
 }
 impl Bet {
     pub const SPACE: usize = 8 + 32 + 32 + 32 + 8 + 1 + 1;
+}
+
+#[derive(Accounts)]
+pub struct CloseBet<'info> {
+    #[account(seeds = [b"market", market.game.as_ref()], bump = market.bump)]
+    pub market: Account<'info, Market>,
+    #[account(
+        mut,
+        close = bettor,
+        seeds = [b"bet", market.key().as_ref(), bettor.key().as_ref(), bet.target.as_ref()],
+        bump = bet.bump,
+        constraint = bet.bettor == bettor.key() @ GameError::Unauthorized
+    )]
+    pub bet: Account<'info, Bet>,
+    /// CHECK: the rent goes here and nowhere else, and the seeds bind it to
+    /// this bet. Its signature is only required to close a bet that has not
+    /// claimed, which is an explicit forfeit.
+    #[account(mut)]
+    pub bettor: UncheckedAccount<'info>,
+    pub cranker: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct CloseTargetPool<'info> {
+    #[account(mut, seeds = [b"market", market.game.as_ref()], bump = market.bump)]
+    pub market: Account<'info, Market>,
+    #[account(
+        mut,
+        close = cranker,
+        seeds = [b"tpool", market.key().as_ref(), target_pool.target.as_ref()],
+        bump = target_pool.bump,
+        constraint = target_pool.market == market.key() @ GameError::BadParam
+    )]
+    pub target_pool: Account<'info, TargetPool>,
+    #[account(mut)]
+    pub cranker: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct CloseMarket<'info> {
+    #[account(mut, close = cranker, seeds = [b"market", market.game.as_ref()], bump = market.bump)]
+    pub market: Account<'info, Market>,
+    /// Drained to nothing before the book may close. Closed by CPI rather than
+    /// by Anchor's `close`, which only works on accounts this program owns: a
+    /// token account belongs to the token program and has to be told to close
+    /// itself, signed by the authority, which here is the vault PDA.
+    #[account(mut, seeds = [b"mvault", market.key().as_ref()], bump = market.vault_bump)]
+    pub market_vault: InterfaceAccount<'info, TokenAccount>,
+    #[account(mut)]
+    pub cranker: Signer<'info>,
+    pub token_program: Interface<'info, TokenInterface>,
 }
 
 #[derive(Accounts)]
