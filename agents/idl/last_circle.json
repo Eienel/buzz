@@ -1427,6 +1427,93 @@
       ]
     },
     {
+      "name": "close_bet",
+      "docs": [
+        "Close a settled bet; its rent returns to the bettor.",
+        "",
+        "Permissionless once the bet is claimed, because a claimed bet is owed",
+        "nothing. A bet that has not claimed can only be closed by its own",
+        "bettor, whose signature is an explicit forfeit of whatever it was due."
+      ],
+      "discriminator": [
+        185,
+        206,
+        13,
+        184,
+        176,
+        108,
+        140,
+        107
+      ],
+      "accounts": [
+        {
+          "name": "market",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market.game",
+                "account": "Market"
+              }
+            ]
+          }
+        },
+        {
+          "name": "bet",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              },
+              {
+                "kind": "account",
+                "path": "bettor"
+              },
+              {
+                "kind": "account",
+                "path": "bet.target",
+                "account": "Bet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "bettor",
+          "docs": [
+            "this bet. Its signature is only required to close a bet that has not",
+            "claimed, which is an explicit forfeit."
+          ],
+          "writable": true
+        },
+        {
+          "name": "cranker",
+          "signer": true
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "close_circle",
       "docs": [
         "Close a Circle account once every player is closed; rent returns to the",
@@ -1622,6 +1709,90 @@
       "args": []
     },
     {
+      "name": "close_market",
+      "docs": [
+        "Close the book last, once no pool is left and the vault is empty.",
+        "",
+        "CONSERVATION: an empty vault is the whole guard. Every token that",
+        "entered the book left as a payout or a refund, so there is nothing here",
+        "to sweep and nobody left to pay."
+      ],
+      "discriminator": [
+        88,
+        154,
+        248,
+        186,
+        48,
+        14,
+        123,
+        244
+      ],
+      "accounts": [
+        {
+          "name": "market",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market.game",
+                "account": "Market"
+              }
+            ]
+          }
+        },
+        {
+          "name": "market_vault",
+          "docs": [
+            "Drained to nothing before the book may close. Closed by CPI rather than",
+            "by Anchor's `close`, which only works on accounts this program owns: a",
+            "token account belongs to the token program and has to be told to close",
+            "itself, signed by the authority, which here is the vault PDA."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              }
+            ]
+          }
+        },
+        {
+          "name": "cranker",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "token_program"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "close_player",
       "docs": [
         "Close a Player account; its rent returns to the player's wallet.",
@@ -1755,6 +1926,82 @@
         },
         {
           "name": "authority",
+          "signer": true
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "close_target_pool",
+      "docs": [
+        "Close a decided pool once every bet on it is gone; rent to the cranker,",
+        "which is whoever paid to open the book in the first place."
+      ],
+      "discriminator": [
+        98,
+        236,
+        201,
+        30,
+        68,
+        122,
+        131,
+        169
+      ],
+      "accounts": [
+        {
+          "name": "market",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market.game",
+                "account": "Market"
+              }
+            ]
+          }
+        },
+        {
+          "name": "target_pool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              },
+              {
+                "kind": "account",
+                "path": "target_pool.target",
+                "account": "TargetPool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "cranker",
+          "writable": true,
           "signer": true
         }
       ],
