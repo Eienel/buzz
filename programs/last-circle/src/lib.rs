@@ -1052,7 +1052,14 @@ pub mod last_circle {
     /// the owner may close, their signature is an explicit forfeit.
     pub fn close_player(ctx: Context<ClosePlayer>) -> Result<()> {
         let g = &mut ctx.accounts.game;
-        require!(g.status == GameStatus::Settling, GameError::WrongPhase);
+        // Aborted counts as over. A lobby that timed out never ran, so its
+        // accounts are as finished as a settled game's, and refusing to close
+        // them stranded their rent with no instruction that could ever reach
+        // it. The guard below is what protects an entitlement, not the status.
+        require!(
+            g.status == GameStatus::Settling || g.status == GameStatus::Aborted,
+            GameError::WrongPhase
+        );
         let p = &ctx.accounts.player;
         let fully_settled = p.status != PlayerStatus::Active && (p.skill_claimed || p.points == 0);
         if !fully_settled {
@@ -1067,10 +1074,16 @@ pub mod last_circle {
     /// κ requires the creator's signature (an explicit forfeit of the cut).
     pub fn close_circle(ctx: Context<CloseCircle>) -> Result<()> {
         let g = &mut ctx.accounts.game;
-        require!(g.status == GameStatus::Settling, GameError::WrongPhase);
+        require!(
+            g.status == GameStatus::Settling || g.status == GameStatus::Aborted,
+            GameError::WrongPhase
+        );
         require!(g.player_count == 0, GameError::PlayersRemain);
         let c = &ctx.accounts.circle;
-        if c.alive && !g.creator_cut_paid {
+        // On an aborted lobby there is no kappa to forfeit: the game never ran,
+        // so no creator cut was ever earned. Asking the creator to sign away
+        // nothing would just lock the account.
+        if g.status == GameStatus::Settling && c.alive && !g.creator_cut_paid {
             require!(ctx.accounts.creator.is_signer, GameError::Unauthorized);
         }
         g.circle_count = g.circle_count.saturating_sub(1);
@@ -1083,7 +1096,10 @@ pub mod last_circle {
     pub fn close_game(ctx: Context<CloseGame>) -> Result<()> {
         {
             let g = &ctx.accounts.game;
-            require!(g.status == GameStatus::Settling, GameError::WrongPhase);
+            require!(
+                g.status == GameStatus::Settling || g.status == GameStatus::Aborted,
+                GameError::WrongPhase
+            );
             require!(g.player_count == 0, GameError::PlayersRemain);
             require!(g.circle_count == 0, GameError::CirclesRemain);
         }

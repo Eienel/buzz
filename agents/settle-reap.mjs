@@ -115,8 +115,20 @@ const players = await decodeAll("player");
 await sleep(PAUSE);
 const circles = await decodeAll("circle");
 
-const settling = games.filter((g) => g.data.status.settling);
-log(`${games.length} games, ${settling.length} in Settling, ${players.length} players, ${circles.length} circles`);
+// Aborted lobbies count too. They never ran, so nobody thinks of them as a
+// backlog, but there are hundreds of them and each one holds a Game, its combs
+// and its players: 2.449 SOL when this was measured. They settle differently,
+// through claim_abort_refund rather than a cash-out, and they owe no rake.
+// ABORTED=1 opts in. The close instructions only learned to accept an aborted
+// game in the upgrade that goes with this change, and against a program that
+// has not got it yet every close answers WrongPhase: the refunds land, the
+// rent does not, and the fees are spent for nothing. Off until deployed.
+const DO_ABORTED = process.env.ABORTED === "1";
+const settling = games.filter((g) =>
+  g.data.status.settling || (DO_ABORTED && g.data.status.aborted));
+const aborted = settling.filter((g) => g.data.status.aborted).length;
+log(`${games.length} games, ${settling.length - aborted} in Settling, ${aborted} aborted, ` +
+    `${players.length} players, ${circles.length} circles`);
 
 // Newest first: the recent backlog is the part somebody might still claim.
 settling.sort((a, b) => Number(b.data.gameId) - Number(a.data.gameId));
@@ -137,6 +149,7 @@ for (const [n, { pubkey: gamePda, data: g }] of work.entries()) {
   const treasury = pda(Buffer.from("treasury"), mint.toBuffer());
   const comb = (id) => pda(Buffer.from("circle"), gamePda.toBuffer(), Buffer.from([id]));
 
+  const abortedGame = !!g.status.aborted;
   const closeIxs = [];
   for (const { pubkey: P, data: p } of mine) {
     const name = nameOf.get(p.owner.toBase58());
@@ -146,7 +159,12 @@ for (const [n, { pubkey: gamePda, data: g }] of work.entries()) {
     const base = { game: gamePda, vault, player: P, owner: kp.publicKey, actor: kp.publicKey,
                    stakeMint: mint, ownerToken, tokenProgram,
                    systemProgram: SystemProgram.programId };
-    if (p.status.active && winner !== null && p.currentCircle === winner) {
+    if (abortedGame && p.status.active) {
+      // The lobby timed out, so the deposit comes back gross: the rake goes
+      // with it, because the house takes nothing from a game that never ran.
+      await step("claimAbortRefund", () => program.methods.claimAbortRefund().accountsPartial({
+        ...base, config: pda(Buffer.from("config")) }).signers([kp]).rpc());
+    } else if (p.status.active && winner !== null && p.currentCircle === winner) {
       await step("claimWinnings", () => program.methods.claimWinnings().accountsPartial({
         ...base, winningCircle: comb(winner),
         stats: pda(Buffer.from("agent"), kp.publicKey.toBuffer()), treasury }).signers([kp]).rpc());
@@ -167,8 +185,11 @@ for (const [n, { pubkey: gamePda, data: g }] of work.entries()) {
   }
   closed += await batch("closePlayer", closeIxs);
 
-  // The rake has to be swept before close_game will accept the game.
-  if (Number(g.feesCollected) > 0) {
+  // The rake has to be swept before close_game will accept the game. An
+  // aborted game has no rake to sweep: claim_abort_refund already handed each
+  // player's share back with their deposit, so collect_fees here would be the
+  // house taking a cut of a game nobody played.
+  if (!abortedGame && Number(g.feesCollected) > 0) {
     await step("collectFees", () => program.methods.collectFees().accountsPartial({
       config: pda(Buffer.from("config")), game: gamePda, vault, treasury,
       treasuryVault: pda(Buffer.from("tvault"), mint.toBuffer()), stakeMint: mint,
