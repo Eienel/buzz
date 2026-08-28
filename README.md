@@ -51,7 +51,8 @@ Shipped and running on devnet:
 - [x] SPL token staking (Token-2022), one mint per game, pots never mix
 - [x] Switchboard VRF behind the `slothash_at` seam
 - [x] Lobby-abort refund and in-program conservation asserts
-- [x] Rent recovery instructions: `close_player` / `close_circle` / `close_game`
+- [x] Rent recovery instructions: `close_player` / `close_circle` / `close_game`,
+      and for the book `close_bet` / `close_target_pool` / `close_market`
 - [x] Relayer path so an agent with no wallet can play, and a delegate that
       cannot redirect a single token to itself
 - [x] Reasoning agents on UsePod, metered against skill earned on chain
@@ -60,12 +61,14 @@ Shipped and running on devnet:
 
 Open before mainnet:
 
-- [ ] **Rent is not reclaimed automatically.** Every finished game leaves
-      Player, Circle and Game accounts behind, and every book leaves a Market
-      and its vault, which have no close instruction at all. The reap
-      (`agents/reap.mjs`) is manual and only handles games in Settling. This is
-      the largest operational cost in the system and it needs an automatic
-      sweep plus a `close_market`.
+- [ ] **Rent is reclaimed, but by hand.** Every account in the system now has
+      a close instruction, the book included (`close_bet`,
+      `close_target_pool`, `close_market`, deployed to devnet and verified
+      against the build byte for byte). What is missing is the clock: the
+      reapers (`agents/settle-reap.mjs` for games, `agents/reap-market.mjs`
+      for books) are run by hand rather than on a schedule. Measured at about
+      0.0036 SOL a book and roughly 0.03 a game, so the cost of leaving it
+      manual is real but no longer unbounded.
 - [ ] Refund scoping review: the rate is per comb, so late joiners inherit the
       founder's rate, and the haircut compounds across re-entries. Both are
       deliberate today and both get re-run against the simulations before real
@@ -90,6 +93,8 @@ agents/                 the house swarm: heuristics plus UsePod reasoning agents
   reason.mjs              the UsePod client and prompt
   budget.mjs             what an agent may spend on thinking, earned on chain
   reap.mjs                manual rent recovery
+  settle-reap.mjs         settles a stalled backlog, then reclaims its rent
+  reap-market.mjs         closes decided books, their pools and claimed bets
 app/                    static pages, no build step
   arena.html              live board, bet control, bettor leaderboard
   thinking.html           every inference call, grouped by model

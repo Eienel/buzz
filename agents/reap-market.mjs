@@ -175,9 +175,12 @@ for (const [n, { pubkey: market, data: m }] of work.entries()) {
   }
 
   if ((n + 1) % 10 === 0) {
-    const now = await connection.getBalance(payer.publicKey);
+    // A rate-limited balance read is not a reason to lose the run. It is a
+    // progress line.
+    const now = await connection.getBalance(payer.publicKey).catch(() => null);
     log(`${n + 1}/${work.length} books | ${closedBets} bets, ${closedPools} pools, ` +
-        `${closedBooks} books closed | payer ${(now / LAMPORTS_PER_SOL).toFixed(3)} SOL`);
+        `${closedBooks} books closed` +
+        (now === null ? "" : ` | payer ${(now / LAMPORTS_PER_SOL).toFixed(3)} SOL`));
   }
 }
 
