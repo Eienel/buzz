@@ -1216,6 +1216,54 @@ createServer(async (req,res)=>{
   }
 }).listen(PORT, ()=>console.log(`buzz server on :${PORT} (rpc ${RPC}, poll ${POLL_MS}ms)`));
 
+// ---- the reaper: settle and close what the swarm abandoned -------------------
+//
+// The swarm settles its own games at the end of one, which works right up until
+// the process does not survive to get there. A deploy, an OOM, a container
+// moving underneath it: the game reaches Settling with every player still
+// Active, nobody claims, and the rent is locked behind claims that will never
+// be made. Measured on devnet, five of the seven games that finished in one
+// hour ended that way.
+//
+// So settlement cannot depend on the process that played the game. This runs
+// the same two reapers on a clock, against the newest games first, which is
+// where the abandoned ones are. Both are idempotent and both skip anything
+// already done, so re-running costs a few reads and nothing else.
+//
+// Spawned rather than imported: they are scripts with top-level await that have
+// been driving real money on devnet for days, and a child process cannot take
+// the web service down with it.
+if (process.env.RUN_REAPER === "1") {
+  const EVERY = Number(process.env.REAP_EVERY_MS ?? 10 * 60_000);
+  const NEWEST = Number(process.env.REAP_LIMIT ?? 25);
+  let running = false;
+
+  const run = (script, env) => new Promise((resolve) => {
+    const c = spawn("node", [fileURLToPath(new URL(`../agents/${script}`, import.meta.url))],
+      { stdio: "inherit", env: { ...process.env, ...env } });
+    c.on("exit", (code) => resolve(code));
+    c.on("error", () => resolve(-1));
+  });
+
+  const pass = async () => {
+    // One pass at a time. A slow reap under a rate limit must not stack up
+    // behind itself and turn into a dozen processes fighting for the same RPC.
+    if (running) return;
+    running = true;
+    try {
+      // SWEEP=0: the swarm funds its agents before a game and sweeps them
+      // after, so pulling their balances mid-game would take the lamports they
+      // are about to spend. The rent still comes back, one game later.
+      await run("settle-reap.mjs", { LIMIT: String(NEWEST), SWEEP: "0" });
+      await run("reap-market.mjs", { LIMIT: String(NEWEST) });
+    } finally { running = false; }
+  };
+
+  console.log(`reaper on, every ${Math.round(EVERY / 1000)}s over the newest ${NEWEST}`);
+  setTimeout(pass, 60_000).unref?.();       // let the service come up first
+  setInterval(pass, EVERY).unref?.();
+}
+
 // ---- optional: run the agent swarm alongside the web service -----------------
 if(process.env.RUN_SWARM === "1"){
   const start = () => {

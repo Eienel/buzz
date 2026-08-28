@@ -219,8 +219,16 @@ for (const [n, { pubkey: gamePda, data: g }] of work.entries()) {
 
 // Rent from players and circles lands in the agent wallets, not here. Sweep it
 // back with the payer as fee payer, so no agent needs a balance of its own.
-log("\nsweeping the agent wallets…");
+//
+// SWEEP=0 leaves them alone. The swarm funds an agent before it plays and
+// sweeps it afterwards, so a sweep that lands in the middle of a live game
+// takes the lamports that agent was about to spend on its own accounts. Fine
+// for a one-off reap of a dead backlog, not fine on a timer next to a running
+// arena, which is why the periodic reaper turns it off.
 let swept = 0;
+if (process.env.SWEEP === "0") log("\nleaving the agent wallets alone (SWEEP=0)");
+else {
+log("\nsweeping the agent wallets…");
 const { Transaction } = await import("@solana/web3.js");
 for (const { wallet, name } of houseWallets()) {
   const kp = agentKey(name);
@@ -235,6 +243,7 @@ for (const { wallet, name } of houseWallets()) {
     log(`  ${name}: ${(bal / LAMPORTS_PER_SOL).toFixed(4)} SOL`);
   } catch (e) { log(`  sweep ${name}: ${String(e.message).slice(0, 60)}`); }
   await sleep(PAUSE);
+}
 }
 
 const after = await connection.getBalance(payer.publicKey);
