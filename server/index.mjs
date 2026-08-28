@@ -1254,7 +1254,7 @@ if (process.env.RUN_REAPER === "1") {
       // SWEEP=0: the swarm funds its agents before a game and sweeps them
       // after, so pulling their balances mid-game would take the lamports they
       // are about to spend. The rent still comes back, one game later.
-      await run("settle-reap.mjs", { LIMIT: String(NEWEST), SWEEP: "0" });
+      await run("settle-reap.mjs", { LIMIT: String(NEWEST), SWEEP: "0", ABORTED: "1" });
       await run("reap-market.mjs", { LIMIT: String(NEWEST) });
     } finally { running = false; }
   };

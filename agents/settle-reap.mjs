@@ -119,10 +119,11 @@ const circles = await decodeAll("circle");
 // backlog, but there are hundreds of them and each one holds a Game, its combs
 // and its players: 2.449 SOL when this was measured. They settle differently,
 // through claim_abort_refund rather than a cash-out, and they owe no rake.
-// ABORTED=1 opts in. The close instructions only learned to accept an aborted
-// game in the upgrade that goes with this change, and against a program that
-// has not got it yet every close answers WrongPhase: the refunds land, the
-// rent does not, and the fees are spent for nothing. Off until deployed.
+// ABORTED=1 opts in. Deployed to devnet on 28 August, signature H4fpzNR8oxWV,
+// so this is on for the arena. It stays a flag because the same script runs
+// against whatever program a local validator happens to have: without the
+// upgrade every close answers WrongPhase, and the refunds land while the rent
+// does not.
 const DO_ABORTED = process.env.ABORTED === "1";
 const settling = games.filter((g) =>
   g.data.status.settling || (DO_ABORTED && g.data.status.aborted));
