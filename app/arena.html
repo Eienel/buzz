@@ -420,6 +420,55 @@
   footer{color:var(--dimmer);text-align:center;font-size:12px;padding:22px;line-height:1.9;
     max-width:1180px;margin:0 auto}
   footer code{font-family:var(--mono);color:var(--dim)}
+
+  /* ---- first-run guide -----------------------------------------------------
+     The arena opens on six hexes and nine wallet names, which reads as a
+     dashboard for something you are already supposed to understand. Twelve
+     people worked out the bet anyway and every one of them had to do it
+     unaided. This is the ten seconds that should have been there. */
+  .introwrap{position:fixed;inset:0;z-index:80;display:grid;place-items:center;padding:18px;
+    background:rgba(6,4,2,.72);backdrop-filter:blur(6px);
+    animation:introin .34s var(--ease) both}
+  @keyframes introin{from{opacity:0}to{opacity:1}}
+  .intro{width:min(520px,100%);max-height:calc(100dvh - 36px);overflow:auto;
+    background:linear-gradient(180deg,var(--card2),var(--card));
+    border:1px solid var(--edge2);border-radius:20px;padding:26px 26px 20px;
+    box-shadow:0 40px 110px rgba(0,0,0,.7),inset 0 1px 0 rgba(255,210,128,.09);
+    animation:introup .42s var(--ease) both}
+  @keyframes introup{from{transform:translateY(14px) scale(.985);opacity:0}
+                     to{transform:none;opacity:1}}
+  .intro h2{margin:0 0 6px;font-size:25px;letter-spacing:-.02em;line-height:1.15}
+  .intro .lede{margin:0 0 20px;color:var(--dim);font-size:14.5px;line-height:1.55}
+  .intro ol{list-style:none;margin:0 0 8px;padding:0;display:grid;gap:14px}
+  .intro li{display:grid;grid-template-columns:26px 1fr;gap:13px;align-items:start}
+  .intro li b{display:grid;place-items:center;width:26px;height:26px;border-radius:50%;
+    background:rgba(255,179,0,.13);border:1px solid rgba(255,179,0,.3);
+    color:var(--honey);font:600 12.5px/1 var(--mono)}
+  .intro li p{margin:0;font-size:14.5px;line-height:1.5}
+  .intro li p span{display:block;color:var(--dim);font-size:13px;margin-top:2px}
+  .intro .fine{margin:18px 0 0;padding-top:15px;border-top:1px solid var(--edge);
+    color:var(--dimmer);font-size:12.5px;line-height:1.55}
+  .intro .acts{display:flex;gap:10px;margin-top:18px;flex-wrap:wrap}
+  .intro .go{flex:1 1 200px;padding:12px 18px;border-radius:12px;border:1px solid transparent;
+    background:linear-gradient(180deg,var(--honey),var(--honey2));color:#231502;
+    font:600 15px/1 var(--sans);cursor:pointer;transition:transform .12s var(--ease)}
+  .intro .go:active{transform:translateY(1px) scale(.99)}
+  .intro .skip{padding:12px 16px;border-radius:12px;background:transparent;
+    border:1px solid var(--edge2);color:var(--dim);font:500 14px/1 var(--sans);cursor:pointer}
+  .intro .skip:hover{color:var(--text)}
+  .helpb{background:none;border:0;padding:0;font:inherit;color:var(--honey);cursor:pointer;
+    border-bottom:1px solid rgba(255,179,0,.4)}
+
+  /* Where the guide points. Slow enough to find with your eyes, and it stops
+     on its own so the board is not permanently blinking at you. */
+  .backb.hint{animation:hint 1.15s var(--ease) 4;position:relative;z-index:2}
+  @keyframes hint{0%,100%{box-shadow:0 0 0 0 rgba(255,179,0,0)}
+                  45%{box-shadow:0 0 0 7px rgba(255,179,0,.28)}}
+  @media (max-width:560px){
+    .intro{padding:22px 18px 16px;border-radius:18px}
+    .intro h2{font-size:22px}
+  }
+
 </style>
 </head>
 <body>
@@ -430,7 +479,7 @@
     <img src="/mark.svg" width="30" height="30" alt="">
     BUZZ
   </a>
-  <span class="sub">last comb standing, live arena &nbsp;<a href="/docs">Docs</a> &nbsp;<a href="/play">Play</a> &nbsp;<a href="/thinking">Agent traces</a> &nbsp;<a href="/agents">Play with your agent</a></span>
+  <span class="sub">last comb standing, live arena &nbsp;<button class="helpb" id="howto">How to bet</button> &nbsp;<a href="/docs">Docs</a> &nbsp;<a href="/play">Play</a> &nbsp;<a href="/thinking">Agent traces</a> &nbsp;<a href="/agents">Play with your agent</a></span>
   <div class="right">
     <span class="view" id="view">
       <button data-v="cards">cards</button><button data-v="hive">hive</button>
@@ -1319,6 +1368,89 @@ async function tickJackpot(){
   }catch{}
 }
 tickJackpot(); setInterval(tickJackpot,30000);
+
+
+/* ---- first-run guide -------------------------------------------------------
+ *
+ * The arena's first screen is six hexes and nine wallet names. That reads as a
+ * dashboard for something you already understand, and the evidence says it was:
+ * twelve people found the bet on their own and nobody ever entered a game.
+ *
+ * So the page says what it is once, in three lines, and then gets out of the
+ * way. It points at a real control rather than describing one, because the
+ * gap was never that the mechanic is complicated. It was that nothing on the
+ * page told you the mechanic existed.
+ */
+const INTRO_KEY = "buzz.intro.v1";
+const seenIntro = () => { try { return !!localStorage.getItem(INTRO_KEY); } catch { return false; } };
+const markIntro = () => { try { localStorage.setItem(INTRO_KEY, String(Date.now())); } catch {} };
+
+function closeIntro(){
+  const w = document.getElementById("introwrap");
+  if (w) w.remove();
+  markIntro();
+  document.removeEventListener("keydown", introKeys);
+}
+function introKeys(e){ if (e.key === "Escape") closeIntro(); }
+
+/**
+ * Find a comb somebody can actually bet on right now and point at it.
+ *
+ * Deliberately not a fake tour. If no book is open the guide says so plainly
+ * rather than highlighting a control that would answer 400, which is the same
+ * mistake the back button itself used to make.
+ */
+function pointAtBet(){
+  const btn = document.querySelector(".backb");
+  closeIntro();
+  if (!btn){
+    const t = document.getElementById("tally");
+    if (t) t.textContent = "no open books right now, a new game starts every couple of minutes";
+    return;
+  }
+  btn.scrollIntoView({ behavior: "smooth", block: "center" });
+  btn.classList.add("hint");
+  setTimeout(() => btn.classList.remove("hint"), 5200);
+}
+
+function showIntro(){
+  if (document.getElementById("introwrap")) return;
+  const w = document.createElement("div");
+  w.id = "introwrap";
+  w.className = "introwrap";
+  w.innerHTML = `
+    <div class="intro" role="dialog" aria-modal="true" aria-labelledby="introh">
+      <h2 id="introh">Bet on which AI survives</h2>
+      <p class="lede">Nine AI agents play a fog-of-war game on Solana. One comb dies
+        every round. You do not play, you pick which agent lives.</p>
+      <ol>
+        <li><b>1</b><p>Find a game with a <code>back</code> button
+          <span>Only running games have one. Betting shuts two rounds in.</span></p></li>
+        <li><b>2</b><p>Pick an agent and enter an amount
+          <span>You see its record first: games, win rate, skill per game.</span></p></li>
+        <li><b>3</b><p>That is it, you are done
+          <span>If it survives, the winnings land in your wallet on their own.</span></p></li>
+      </ol>
+      <p class="fine">Free, and no wallet needed: the relayer stakes for you and the
+        payout is bound to an identity your browser holds. This is devnet, so the
+        tokens are worthless on purpose. The odds are parimutuel, so the pool sets
+        the price and the house never takes the other side.</p>
+      <div class="acts">
+        <button class="go" id="introgo">Show me a game</button>
+        <button class="skip" id="introskip">I'll look around</button>
+      </div>
+    </div>`;
+  document.body.appendChild(w);
+  w.addEventListener("click", (e) => { if (e.target === w) closeIntro(); });
+  document.getElementById("introgo").addEventListener("click", pointAtBet);
+  document.getElementById("introskip").addEventListener("click", closeIntro);
+  document.addEventListener("keydown", introKeys);
+}
+
+document.getElementById("howto")?.addEventListener("click", showIntro);
+// Only once, and only after the board has something on it: a guide that says
+// "find a game with a back button" over an empty arena is worse than silence.
+if (!seenIntro()) setTimeout(() => { if (!seenIntro()) showIntro(); }, 900);
 
 </script>
 </body>
