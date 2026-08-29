@@ -28,7 +28,7 @@ import { nameFor, houseWallets } from "./names.mjs";
 import { verifyPayment } from "./x402.mjs";
 import { loadRelayer, startDrain } from "./relayer.mjs";
 import { DATA_DIR } from "./keypair.mjs";
-import { makeConnection } from "./rpc.mjs";
+import { makeConnection, surviveRateLimits } from "./rpc.mjs";
 
 const { keccak_256 } = jsSha3;
 
@@ -42,6 +42,9 @@ const USDC_DEFAULT = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"; // devnet U
 // Falls back to public devnet when the primary rate-limits, so a spent quota
 // degrades the arena instead of breaking it. See server/rpc.mjs.
 const connection = makeConnection(RPC, { label: "rpc" });
+// A 429 from inside the RPC client arrives as an unhandled rejection, and
+// node kills the process on those. It took the whole arena down repeatedly.
+surviveRateLimits("rpc");
 
 const PID = new PublicKey(PROGRAM_ID);
 

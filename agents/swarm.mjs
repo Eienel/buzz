@@ -11,7 +11,7 @@
 import anchorPkg from "@coral-xyz/anchor";
 import { Connection, Keypair, PublicKey, SystemProgram, LAMPORTS_PER_SOL,
          SYSVAR_SLOT_HASHES_PUBKEY, Transaction, sendAndConfirmTransaction } from "@solana/web3.js";
-import { makeConnection } from "../server/rpc.mjs";
+import { makeConnection, surviveRateLimits } from "../server/rpc.mjs";
 import { getOrCreateAssociatedTokenAccount, mintTo, getAssociatedTokenAddressSync } from "@solana/spl-token";
 import jsSha3 from "js-sha3";
 const { keccak_256 } = jsSha3;
@@ -107,6 +107,7 @@ const payer = loadKeypair(process.env.PAYER, `${process.env.HOME}/.config/solana
 // died again, for ten hours, while the web service stayed up and the board sat
 // empty. See server/rpc.mjs.
 const connection = makeConnection(RPC, { label: "swarm" });
+surviveRateLimits("swarm");
 const provider = new AnchorProvider(connection, new Wallet(payer), { commitment: "confirmed" });
 const idl = JSON.parse(readFileSync(new URL("./idl/last_circle.json", import.meta.url), "utf8"));
 const program = new Program(idl, provider);

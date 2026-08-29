@@ -59,3 +59,39 @@ export function makeConnection(rpc, opts = {}) {
     },
   });
 }
+
+/**
+ * Stop a rate limit from killing the process.
+ *
+ * The fallback above only catches what it wraps: a rejection from a method
+ * called on the Connection. It cannot see a 429 thrown from inside the RPC
+ * client's own callback, which arrives as an unhandled rejection, and node
+ * kills the process on those. In production that read as a crash loop with a
+ * different stack every time.
+ *
+ * A rate limit is not a fatal condition. It means try again later, and every
+ * loop in this codebase already does: the poller polls, the cranker cranks, the
+ * swarm asks about fuel before each game. Losing the whole process is the one
+ * response guaranteed to make it worse, because it takes the arena down with
+ * it. So these are logged and swallowed.
+ *
+ * Everything else still kills the process, deliberately. An unhandled rejection
+ * that is not a rate limit is a bug, and a bug that keeps running is worse than
+ * one that stops.
+ */
+export function surviveRateLimits(label = "rpc") {
+  let last = 0;
+  const handle = (err) => {
+    const msg = String(err?.message ?? err);
+    if (!LIMITED.test(msg)) throw err;              // not ours: die as before
+    // Rate limits arrive in floods, so this would otherwise be the noisiest
+    // line in the log by two orders of magnitude.
+    const now = Date.now();
+    if (now - last > 30_000) {
+      last = now;
+      console.log(`[${label}] rate limited (${msg.slice(0, 60)}), carrying on`);
+    }
+  };
+  process.on("unhandledRejection", handle);
+  process.on("uncaughtException", handle);
+}
