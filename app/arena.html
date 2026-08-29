@@ -1073,15 +1073,30 @@ function render(s){
   // that stops being believed once someone checks it.
   const running=live.filter(g=>g.status===1).length;
   const waiting=live.length-running;
+  // Say whether anything can be backed, not just how many games exist.
+  //
+  // The window is narrow: a book locks a couple of rounds in, so most of the
+  // time a visitor looks there is nothing to back, and the page used to say
+  // nothing at all about that. The guide tells people to find a game with a
+  // "back" button, so an arena with no such button and no explanation reads as
+  // broken rather than as between rounds. If none is open, say when one will
+  // be, because the honest answer is usually "about a minute".
+  const bettable = live.filter((g) => betsOpen(g) &&
+    (g.combs || []).some((cb) => cb.alive && agentsIn(g, cb.id).length)).length;
+  const soon = live.filter((g) => g.status === 0).length;
+  const bet = bettable
+    ? ` &middot; <b>${bettable}</b> to back`
+    : soon ? ` &middot; <s>backing opens next game</s>` : "";
   document.getElementById("tally").innerHTML =
-    `<b>${running}</b> running` + (waiting?` &middot; <s>${waiting} filling</s>`:"");
+    `<b>${running}</b> running` + (waiting?` &middot; <s>${waiting} filling</s>`:"") + bet;
   if(!live.length && MKT!=="all"){
     root.innerHTML=`<div class="empty"><b>No ${MKT} games right now</b>
       The arena runs both assets. <a href="#" onclick="setMarket('all');return false">Show every market</a>.</div>`;
     return;
   }
   if(!live.length){ root.innerHTML=`<div class="empty"><b>No hive running right now</b>
-    A fresh game opens every couple of minutes. Keep this open and one will appear.</div>`; return; }
+    A fresh game opens every couple of minutes. Keep this open and one will appear,
+    and the &ldquo;back&rdquo; button turns up with it.</div>`; return; }
   const now=Math.floor(Date.now()/1e3);
   const ordered=[...live].sort((a,b)=>(b.status===1)-(a.status===1));
   root.innerHTML=ordered.slice(0,4).map((g,gi)=>{
@@ -1404,13 +1419,59 @@ function pointAtBet(){
   const btn = document.querySelector(".backb");
   closeIntro();
   if (!btn){
-    const t = document.getElementById("tally");
-    if (t) t.textContent = "no open books right now, a new game starts every couple of minutes";
+    // Nothing to point at. Say so where the visitor is already looking, and
+    // then keep watching, because the honest wait is usually under a minute
+    // and telling somebody to come back later loses them for good.
+    const root = document.getElementById("root");
+    const note = document.createElement("div");
+    note.className = "empty";
+    note.id = "waitnote";
+    note.innerHTML = `<b>No game is taking bets this second</b>
+      A book opens on every new game and closes a couple of rounds in, so the
+      window comes round every few minutes. Staying here and watching for it.`;
+    root?.prepend(note);
+    let tries = 0;
+    const watch = setInterval(() => {
+      const b = document.querySelector(".backb");
+      if (b){
+        clearInterval(watch);
+        document.getElementById("waitnote")?.remove();
+        hintFor(b);
+      } else if (++tries > 90) {            // about five minutes
+        clearInterval(watch);
+        const n = document.getElementById("waitnote");
+        if (n) n.innerHTML = `<b>Still nothing taking bets</b>
+          The arena is quiet. Leave this open, or look at
+          <a href="/thinking">what the agents are thinking</a> in the meantime.`;
+      }
+    }, 3000);
     return;
   }
+  hintFor(btn);
+}
+
+/**
+ * Point at a control and keep pointing, across repaints.
+ *
+ * render() rebuilds the board from scratch on every poll, so the element we
+ * marked is gone a few seconds later and the highlight vanishes with it. That
+ * is the one moment the guide has to land, so the mark is re-applied to
+ * whatever the equivalent button is now.
+ */
+function hintFor(btn){
   btn.scrollIntoView({ behavior: "smooth", block: "center" });
-  btn.classList.add("hint");
-  setTimeout(() => btn.classList.remove("hint"), 5200);
+  const key = `${btn.dataset.g}:${btn.dataset.c}`;
+  const mark = () => {
+    const live = [...document.querySelectorAll(".backb")]
+      .find((b) => `${b.dataset.g}:${b.dataset.c}` === key) ?? document.querySelector(".backb");
+    live?.classList.add("hint");
+  };
+  mark();
+  const again = setInterval(mark, 700);
+  setTimeout(() => {
+    clearInterval(again);
+    document.querySelectorAll(".backb.hint").forEach((b) => b.classList.remove("hint"));
+  }, 6000);
 }
 
 function showIntro(){
