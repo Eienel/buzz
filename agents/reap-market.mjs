@@ -153,7 +153,14 @@ for (const [n, { pubkey: market, data: m }] of work.entries()) {
   const poolIxs = [];
   for (const { pubkey: P, data: p } of myPools) {
     const live = myBets.filter((b) => b.data.target.equals(p.target) && !b.data.claimed);
-    const dead = p.resolved && (!live.length || (!p.won && Number(m.winningPool) > 0));
+    // Only once nothing unclaimed is left on it.
+    //
+    // This used to also close a pool that had lost while somebody else won, on
+    // the grounds that every bet still on it pays zero. That was wrong in a way
+    // that costs nothing and breaks something: claim_bet reads the pool, so
+    // closing it early makes those bets permanently unclaimable, and a bet that
+    // cannot be claimed cannot be closed for its rent either. It stranded one.
+    const dead = p.resolved && !live.length;
     if (!dead) { heldPools++; continue; }
     poolIxs.push(await program.methods.closeTargetPool().accountsPartial({
       market, targetPool: P, cranker: payer.publicKey }).instruction());
@@ -187,6 +194,6 @@ for (const [n, { pubkey: market, data: m }] of work.entries()) {
 const after = await connection.getBalance(payer.publicKey);
 log(`\nclosed ${closedBets} bets, ${closedPools} pools, ${closedBooks} books`);
 if (heldBets) log(`left ${heldBets} bets alone: their rent is the bettor's`);
-if (heldPools) log(`left ${heldPools} pools alone: undecided, or still owed on`);
+if (heldPools) log(`left ${heldPools} pools alone: undecided, or still holding an unclaimed bet`);
 log(`payer ${(before / LAMPORTS_PER_SOL).toFixed(4)} -> ${(after / LAMPORTS_PER_SOL).toFixed(4)} SOL ` +
     `(net ${((after - before) / LAMPORTS_PER_SOL).toFixed(4)})`);

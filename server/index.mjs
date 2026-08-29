@@ -655,6 +655,30 @@ if (relayer && process.env.RUN_SCHEDULER === "1") {
 if (relayer && process.env.RUN_MARKET !== "0") {
   book = makeMarket({ program: relayer.program, payer: relayer.kp, connection });
   console.log("book on");
+
+  // Winners get paid without being asked to come back for it.
+  //
+  // The first weekend the book was live, eleven of thirteen bets won and not
+  // one was claimed. That is not people failing to understand the game: they
+  // found the arena, worked out the mechanic and staked, and then were asked
+  // to return to a devnet page a second time to collect. The step goes away.
+  //
+  // On a timer rather than on the settle tick, because a payout has to survive
+  // a restart, a book that settles while nothing is watching, and a claim that
+  // failed once on a rate limit. It scans, so any of those still ends in the
+  // bettor being paid.
+  const PAY_EVERY = Number(process.env.PAY_EVERY_MS ?? 5 * 60_000);
+  let paying = false;
+  const payout = async () => {
+    if (paying) return;
+    paying = true;
+    try { await book.sweepClaims(); }
+    catch (e) { console.log("[book] payout sweep:", String(e.message ?? e).slice(0, 100)); }
+    finally { paying = false; }
+  };
+  setTimeout(payout, 45_000).unref?.();
+  setInterval(payout, PAY_EVERY).unref?.();
+  console.log(`auto-payout on, every ${Math.round(PAY_EVERY / 1000)}s`);
 }
 if (relayer) relayer.ready().then((r) =>
   console.log(`relayer ${r.pubkey} ${r.allowed ? "allowed" : "NOT ON THE ALLOW-LIST: run agents/allow-relayer.mjs"}`));

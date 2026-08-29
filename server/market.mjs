@@ -10,8 +10,9 @@
 // leave a book unopened or undecided. It cannot cost a player their pot.
 
 import anchorPkg from "@coral-xyz/anchor";
-import { PublicKey, SystemProgram } from "@solana/web3.js";
-import { getAssociatedTokenAddressSync } from "@solana/spl-token";
+import { PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
+import { getAssociatedTokenAddressSync,
+         createAssociatedTokenAccountIdempotentInstruction } from "@solana/spl-token";
 
 const { BN } = anchorPkg;
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), "[book]", ...a);
@@ -37,6 +38,9 @@ export function makeMarket({ program, payer, connection }) {
   const tpoolPda = (m, t) => pda(Buffer.from("tpool"), m.toBuffer(), t.toBuffer());
   const betPda = (m, b, t) => pda(Buffer.from("bet"), m.toBuffer(), b.toBuffer(), t.toBuffer());
   const backablePda = (t) => pda(Buffer.from("backable"), t.toBuffer());
+  // The book already runs on the relayer key, so this is the allow-list entry
+  // that lets it act for a bettor. claim_bet checks it and nothing else.
+  const relayerPda = pda(Buffer.from("relayer"), payer.publicKey.toBuffer());
 
   // Games whose book we have already opened or found, and what we need to know
   // to decide them later. The real guard against opening twice is the account
@@ -151,7 +155,118 @@ export function makeMarket({ program, payer, connection }) {
     log(`decided ${pools.length} backed agent(s) on ${gameId}, comb ${comb} survived`);
   }
 
+  /**
+   * Pay out every decided bet, without asking the bettor to come back.
+   *
+   * The first weekend the book was live, twelve wallets placed thirteen bets
+   * and eleven of them won. Not one was ever claimed. Nobody had misunderstood
+   * the game: they had done the hard part, found the arena, worked out the
+   * mechanic and staked, and then been asked to return to a devnet page a
+   * second time to collect. That is where the funnel broke, so the step goes
+   * away.
+   *
+   * Safe because it cannot pay anybody but the bettor. claim_bet sends the
+   * payout to the bettor's own associated token account, derived on chain from
+   * the Bet's own bettor field, and resolve_delegate lets the relayer sign for
+   * them without ever being able to redirect a token. The worst this can do is
+   * spend our own fees paying somebody what they are already owed.
+   *
+   * Losing bets are claimed too. The payout is zero either way, and marking one
+   * claimed is what lets close_bet return its rent to them later.
+   */
+  async function claimBets(market, m, bets) {
+    let paid = 0, zero = 0;
+    const mint = m.stakeMint;
+    const tokenProgram = await tokenProgramFor(mint);
+    for (const b of bets) {
+      if (b.claimed) continue;
+      const bettorToken = getAssociatedTokenAddressSync(mint, b.bettor, true, tokenProgram);
+      const win = Number(m.winningPool), total = Number(m.totalPool);
+      const won = poolWon.has(tpoolPda(market, b.target).toBase58());
+      const payout = win === 0 ? Number(b.amount) : won ? Number(b.amount) * total / win : 0;
+      try {
+        // A bettor who paid with their own wallet already has this account, and
+        // a relayer bettor got one when they staked. Created anyway when it is
+        // missing, because the alternative to spending the rent is not paying
+        // them at all.
+        if (!(await connection.getAccountInfo(bettorToken))) {
+          await program.provider.sendAndConfirm(new Transaction().add(
+            createAssociatedTokenAccountIdempotentInstruction(
+              payer.publicKey, bettorToken, b.bettor, mint, tokenProgram)), []);
+        }
+        await program.methods.claimBet().accountsPartial({
+          market, marketVault: mvaultPda(market),
+          targetPool: tpoolPda(market, b.target), bet: b.pubkey,
+          bettorToken, bettor: b.bettor,
+          payer: payer.publicKey, relayer: relayerPda,
+          stakeMint: mint, tokenProgram,
+        }).rpc();
+        if (payout > 0) paid++; else zero++;
+      } catch (e) {
+        const msg = String(e.message ?? e);
+        // AccountNotInit: the pool is gone, so this bet can never be claimed.
+        // Only reachable for bets whose pool an older reaper closed early.
+        if (!/AlreadyClaimed|WrongPhase|AccountNotInit/.test(msg))
+          log(`claim ${b.bettor.toBase58().slice(0, 8)}: ${msg.slice(0, 70)}`);
+      }
+    }
+    if (paid || zero) log(`paid ${paid} winning bet(s), closed out ${zero} losing`);
+    return paid;
+  }
+
+  // Which pools won, filled by sweepClaims before it claims so claimBets can
+  // tell a payout from a write-off without another round trip per bet.
+  const poolWon = new Map();
+
+  /**
+   * Find every decided bet nobody has claimed, anywhere, and pay it.
+   *
+   * Scans rather than tracks. A bet can outlive the tick that would have
+   * noticed it: the server restarts, a book settles while we are not watching,
+   * a payout fails once on a rate limit. The scan is three getProgramAccounts
+   * calls and it is the only thing that makes a winner eventually get paid
+   * regardless of what happened in between.
+   */
+  async function sweepClaims() {
+    const load = async (name) => {
+      const raw = await connection.getProgramAccounts(PID, {
+        filters: [{ memcmp: { offset: 0, bytes: program.coder.accounts.memcmp(name).bytes } }],
+      });
+      const out = [];
+      for (const { pubkey, account } of raw) {
+        try { out.push({ pubkey, ...program.coder.accounts.decode(name, account.data) }); }
+        catch { /* an older layout is not ours to pay */ }
+      }
+      return out;
+    };
+    const [bets, pools, markets] = await Promise.all(
+      [load("bet"), load("targetPool"), load("market")]);
+    poolWon.clear();
+    for (const p of pools) if (p.resolved && p.won) poolWon.set(p.pubkey.toBase58(), true);
+
+    const byMarket = new Map();
+    for (const b of bets) {
+      if (b.claimed) continue;
+      const k = b.market.toBase58();
+      if (!byMarket.has(k)) byMarket.set(k, []);
+      byMarket.get(k).push(b);
+    }
+    if (!byMarket.size) return 0;
+
+    let paid = 0;
+    for (const m of markets) {
+      // settled means the denominator is final. Claiming before that would be
+      // pricing a bet against a pool that is still moving.
+      if (!m.settled) continue;
+      const mine = byMarket.get(m.pubkey.toBase58());
+      if (mine?.length) paid += await claimBets(m.pubkey, m, mine);
+    }
+    return paid;
+  }
+
   return {
+    /** Pay out everything decided and unclaimed. Safe to call at any time. */
+    sweepClaims,
     /** Read a book for the page. Null when there is none. */
     async read(gameId) {
       const game = gamePda(gameId);
