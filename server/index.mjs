@@ -41,6 +41,7 @@ const USDC_DEFAULT = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"; // devnet U
 
 // Falls back to public devnet when the primary rate-limits, so a spent quota
 // degrades the arena instead of breaking it. See server/rpc.mjs.
+const BOOTED_AT = Date.now();
 const connection = makeConnection(RPC, { label: "rpc" });
 // A 429 from inside the RPC client arrives as an unhandled rejection, and
 // node kills the process on those. It took the whole arena down repeatedly.
@@ -1208,6 +1209,34 @@ createServer(async (req,res)=>{
   // resetting looks identical whether the volume is unmounted, mounted
   // somewhere else, or mounted correctly and the records were never written.
   // Guessing at that from the outside wasted an afternoon.
+  // Which commit is actually serving.
+  //
+  // Same reasoning as /api/storage: it cannot be answered from outside. Two
+  // deploys today shipped only server-side changes, so the pages were
+  // byte-identical either way and "is the fix live" came down to reading log
+  // lines and inferring. That is a bad way to answer a question this simple,
+  // especially during an incident, when it is the first thing you want to know.
+  if(p === "/api/version"){
+    return send(res, 200, {
+      // Railway sets these on every deploy. Null locally, which is honest:
+      // there is no commit serving a working tree.
+      commit: process.env.RAILWAY_GIT_COMMIT_SHA ?? process.env.GIT_SHA ?? null,
+      branch: process.env.RAILWAY_GIT_BRANCH ?? null,
+      message: process.env.RAILWAY_GIT_COMMIT_MESSAGE ?? null,
+      deployedAt: process.env.RAILWAY_DEPLOYMENT_ID ? BOOTED_AT : null,
+      bootedAt: BOOTED_AT,
+      uptimeSeconds: Math.round((Date.now() - BOOTED_AT) / 1000),
+      // What is switched on, so a missing env var is visible rather than
+      // deduced from the absence of behaviour.
+      running: {
+        scheduler: process.env.RUN_SCHEDULER === "1",
+        swarm: process.env.RUN_SWARM === "1",
+        market: process.env.RUN_MARKET !== "0",
+        reaper: process.env.RUN_REAPER === "1",
+      },
+      rpcHost: (() => { try { return new URL(RPC).host; } catch { return null; } })(),
+    });
+  }
   if(p === "/api/storage"){
     return send(res, 200, {
       dataDir: DATA_DIR,
