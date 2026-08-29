@@ -11,6 +11,7 @@
 import anchorPkg from "@coral-xyz/anchor";
 import { Connection, Keypair, PublicKey, SystemProgram, LAMPORTS_PER_SOL,
          SYSVAR_SLOT_HASHES_PUBKEY, Transaction, sendAndConfirmTransaction } from "@solana/web3.js";
+import { makeConnection } from "../server/rpc.mjs";
 import { getOrCreateAssociatedTokenAccount, mintTo, getAssociatedTokenAddressSync } from "@solana/spl-token";
 import jsSha3 from "js-sha3";
 const { keccak_256 } = jsSha3;
@@ -100,7 +101,12 @@ const GAME_INTERVAL = Number(process.env.GAME_INTERVAL_SECONDS ?? 180) * 1000; /
 const FUND = 12_000_000; // 0.012 SOL: fees, PDA rent, and room for a first claim
 
 const payer = loadKeypair(process.env.PAYER, `${process.env.HOME}/.config/solana/id.json`);
-const connection = new Connection(RPC, "confirmed");
+// Falls back to public devnet when the primary rate-limits. The swarm used to
+// build a plain Connection here, and a 429 on its very first read threw out of
+// the process: it died, restarted twenty seconds later, hit the same wall and
+// died again, for ten hours, while the web service stayed up and the board sat
+// empty. See server/rpc.mjs.
+const connection = makeConnection(RPC, { label: "swarm" });
 const provider = new AnchorProvider(connection, new Wallet(payer), { commitment: "confirmed" });
 const idl = JSON.parse(readFileSync(new URL("./idl/last_circle.json", import.meta.url), "utf8"));
 const program = new Program(idl, provider);
@@ -739,11 +745,23 @@ async function ensureSetup() {
   log(`assets in play: ${ASSETS.map((a) => a.name).join(", ")}`);
 }
 
-const bal = await connection.getBalance(payer.publicKey);
-log(`swarm payer ${payer.publicKey.toBase58()}, ${bal / LAMPORTS_PER_SOL} SOL`);
-if (bal < FUND * N_AGENTS + 0.05 * LAMPORTS_PER_SOL) {
-  console.error("payer underfunded; airdrop to it first: solana airdrop 2 " + payer.publicKey.toBase58() + " -u devnet");
-  process.exit(1);
+// A balance we could not read is not a balance of zero.
+//
+// This used to be a bare getBalance, and when the RPC quota ran out the 429
+// threw straight out of the process. The supervisor restarted it, the next read
+// hit the same wall, and the swarm crash-looped for ten hours. A read that
+// fails tells us nothing about the payer, so the boot check now skips itself
+// rather than deciding the wallet is empty.
+const bal = await connection.getBalance(payer.publicKey).catch((e) => {
+  log(`could not read the payer balance (${String(e.message ?? e).slice(0, 60)}); starting anyway`);
+  return null;
+});
+if (bal !== null) {
+  log(`swarm payer ${payer.publicKey.toBase58()}, ${bal / LAMPORTS_PER_SOL} SOL`);
+  if (bal < FUND * N_AGENTS + 0.05 * LAMPORTS_PER_SOL) {
+    console.error("payer underfunded; airdrop to it first: solana airdrop 2 " + payer.publicKey.toBase58() + " -u devnet");
+    process.exit(1);
+  }
 }
 
 /**
@@ -763,7 +781,12 @@ if (bal < FUND * N_AGENTS + 0.05 * LAMPORTS_PER_SOL) {
 const FLOOR = Number(process.env.SWARM_FLOOR_SOL ?? 0.4) * LAMPORTS_PER_SOL;
 let saidBroke = false;
 async function fuelled() {
-  const now = await connection.getBalance(payer.publicKey);
+  // Same reasoning as the boot check: a failed read is not an empty wallet.
+  // It holds off for one round and asks again, which is the safe answer both
+  // ways round. Starting a game we cannot settle strands its rent, and dying
+  // here strands the whole arena.
+  const now = await connection.getBalance(payer.publicKey).catch(() => null);
+  if (now === null) return false;
   const ok = now >= Math.max(FLOOR, FUND * N_AGENTS + 0.05 * LAMPORTS_PER_SOL);
   if (!ok && !saidBroke) {
     saidBroke = true;

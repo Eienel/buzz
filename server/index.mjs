@@ -28,6 +28,7 @@ import { nameFor, houseWallets } from "./names.mjs";
 import { verifyPayment } from "./x402.mjs";
 import { loadRelayer, startDrain } from "./relayer.mjs";
 import { DATA_DIR } from "./keypair.mjs";
+import { makeConnection } from "./rpc.mjs";
 
 const { keccak_256 } = jsSha3;
 
@@ -38,65 +39,10 @@ const PROGRAM_ID = process.env.PROGRAM_ID ?? "4TNbztSMd3zxG57M25y8WhpcKrQMJQVYEK
 const POLL_MS = Number(process.env.POLL_MS ?? 5000);
 const USDC_DEFAULT = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"; // devnet USDC
 
-/**
- * The RPC, with somewhere to fall back to.
- *
- * The primary is a paid-tier endpoint with a monthly quota. When that quota is
- * spent every read starts answering 429, and the whole arena degrades at once:
- * the poller cannot refresh, so /api/state serves a stale board with ok:false,
- * and /api/bettors hands the browser a raw rate-limit error. A visitor sees a
- * site that looks broken, which is worse than a site that is merely slower.
- *
- * Public devnet is slower and rate-limits harder per call, but it is always
- * there. So a 429 on the primary is not a failure any more, it is a signal to
- * read from the fallback for a while and try the primary again later.
- */
-const RPC_FALLBACK = process.env.RPC_FALLBACK ?? "https://api.devnet.solana.com";
-const COOLDOWN_MS = Number(process.env.RPC_COOLDOWN_MS ?? 10 * 60_000);
+// Falls back to public devnet when the primary rate-limits, so a spent quota
+// degrades the arena instead of breaking it. See server/rpc.mjs.
+const connection = makeConnection(RPC, { label: "rpc" });
 
-const primary = new Connection(RPC, "confirmed");
-const fallback = RPC_FALLBACK === RPC ? null : new Connection(RPC_FALLBACK, "confirmed");
-let benchedUntil = 0;
-
-/** True while the primary is sitting out after rate-limiting us. */
-const benched = () => Date.now() < benchedUntil;
-
-/**
- * A Connection that swaps itself out when the primary starts refusing.
- *
- * A Proxy rather than a wrapper with named methods: everything downstream
- * (Anchor, the poller, the book, the relayer) takes a Connection and calls
- * whatever it likes on it, so intercepting the whole surface is the only
- * version of this that cannot be defeated by a method nobody thought of.
- */
-const connection = new Proxy(primary, {
-  get(target, prop, receiver) {
-    const live = benched() && fallback ? fallback : target;
-    const v = Reflect.get(live, prop, live);
-    if (typeof v !== "function") return v;
-    return function (...args) {
-      const out = v.apply(live, args);
-      // Only promises carry the rate-limit answer, and only the primary's
-      // rejections should bench anything.
-      if (live === target && out && typeof out.then === "function") {
-        return out.catch((e) => {
-          if (/429|Too Many Requests|max usage reached|rate limit/i.test(String(e?.message ?? e))) {
-            if (!benched()) console.log(`[rpc] primary rate-limited, falling back for ${Math.round(COOLDOWN_MS / 1000)}s`);
-            benchedUntil = Date.now() + COOLDOWN_MS;
-            // Retry once on the fallback so this call still answers, rather
-            // than making the caller pay for the discovery.
-            if (fallback) {
-              const again = Reflect.get(fallback, prop, fallback);
-              if (typeof again === "function") return again.apply(fallback, args);
-            }
-          }
-          throw e;
-        });
-      }
-      return out;
-    };
-  },
-});
 const PID = new PublicKey(PROGRAM_ID);
 
 // ---- account decoding (manual borsh; avoids pulling anchor into the server) --

@@ -14,3 +14,6 @@ id.json
 .DS_Store
 Thumbs.db
 history.json
+
+# local run artefact: the feed writes here when DATA_DIR is unset
+server/thoughts.jsonl
