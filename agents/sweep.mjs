@@ -16,12 +16,14 @@ import { Connection, Keypair, SystemProgram, Transaction, LAMPORTS_PER_SOL } fro
 import jsSha3 from "js-sha3";
 import { loadKeypair } from "../server/keypair.mjs";
 import { houseWallets } from "../server/names.mjs";
+import { makeConnection, surviveRateLimits } from "../server/rpc.mjs";
 
 const { keccak_256 } = jsSha3;
 const { AnchorProvider, Wallet } = anchorPkg;
 const SEED = process.env.SWARM_SEED ?? "buzz-devnet-swarm-v1";
 const payer = loadKeypair(process.env.PAYER, `${process.env.HOME}/.config/solana/id.json`);
-const connection = new Connection(process.env.RPC ?? "https://api.devnet.solana.com", "confirmed");
+const connection = makeConnection(process.env.RPC ?? "https://api.devnet.solana.com", { label: "sweep" });
+surviveRateLimits("sweep");
 const provider = new AnchorProvider(connection, new Wallet(payer), { commitment: "confirmed" });
 const agentKey = (name) => Keypair.fromSeed(
   Uint8Array.from(Buffer.from(keccak_256.arrayBuffer(`${SEED}:${name}`)).subarray(0, 32)));

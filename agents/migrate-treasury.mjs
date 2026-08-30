@@ -11,9 +11,11 @@ import anchorPkg from "@coral-xyz/anchor";
 import { Connection, Keypair, PublicKey, SystemProgram } from "@solana/web3.js";
 import { readFileSync } from "node:fs";
 import { loadKeypair } from "../server/keypair.mjs";
+import { makeConnection, surviveRateLimits } from "../server/rpc.mjs";
 
 const { AnchorProvider, Program, Wallet } = anchorPkg;
-const connection = new Connection(process.env.RPC ?? "https://api.devnet.solana.com", "confirmed");
+const connection = makeConnection(process.env.RPC ?? "https://api.devnet.solana.com", { label: "migrate-treasury" });
+surviveRateLimits("migrate-treasury");
 const payer = loadKeypair(process.env.PAYER, `${process.env.HOME}/.config/solana/id.json`);
 const provider = new AnchorProvider(connection, new Wallet(payer), { commitment: "confirmed" });
 const program = new Program(JSON.parse(

@@ -10,10 +10,12 @@ import anchorPkg from "@coral-xyz/anchor";
 import { Connection, PublicKey } from "@solana/web3.js";
 import { readFileSync } from "node:fs";
 import { loadKeypair } from "../server/keypair.mjs";
+import { makeConnection, surviveRateLimits } from "../server/rpc.mjs";
 
 const { AnchorProvider, Program, Wallet } = anchorPkg;
 const which = (process.argv[2] ?? "BUZZ").toUpperCase();
-const connection = new Connection(process.env.RPC ?? "https://api.devnet.solana.com", "confirmed");
+const connection = makeConnection(process.env.RPC ?? "https://api.devnet.solana.com", { label: "close-season" });
+surviveRateLimits("close-season");
 const payer = loadKeypair(process.env.PAYER, `${process.env.HOME}/.config/solana/id.json`);
 const program = new Program(
   JSON.parse(readFileSync(new URL("./idl/last_circle.json", import.meta.url), "utf8")),

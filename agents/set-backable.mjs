@@ -10,6 +10,7 @@ import { Connection, PublicKey, Keypair } from "@solana/web3.js";
 import { readFileSync } from "node:fs";
 import jsSha3 from "js-sha3";
 import { loadKeypair } from "../server/keypair.mjs";
+import { makeConnection, surviveRateLimits } from "../server/rpc.mjs";
 
 const { AnchorProvider, Program, Wallet } = anchorPkg;
 const { keccak_256 } = jsSha3;
@@ -34,7 +35,8 @@ for (let slot = 0; slot < SLOTS; slot++)
 const authority = loadKeypair(process.env.PAYER, `${process.env.HOME}/.config/solana/id.json`);
 if (!authority) throw new Error("no PAYER: the config authority has to sign this");
 
-const connection = new Connection(RPC, "confirmed");
+const connection = makeConnection(RPC, { label: "set-backable" });
+surviveRateLimits("set-backable");
 const provider = new AnchorProvider(connection, new Wallet(authority), { commitment: "confirmed" });
 const idl = JSON.parse(readFileSync(new URL("./idl/last_circle.json", import.meta.url), "utf8"));
 const program = new Program(idl, provider);

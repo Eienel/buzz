@@ -9,12 +9,14 @@
 import anchorPkg from "@coral-xyz/anchor";
 import { Connection, Keypair, PublicKey, SystemProgram } from "@solana/web3.js";
 import { readFileSync } from "node:fs";
+import { makeConnection, surviveRateLimits } from "../server/rpc.mjs";
 
 const { AnchorProvider, Program, Wallet } = anchorPkg;
 const [target, off] = process.argv.slice(2);
 if (!target) { console.error("usage: allow-relayer.mjs <pubkey> [off]"); process.exit(1); }
 
-const connection = new Connection(process.env.RPC ?? "https://api.devnet.solana.com", "confirmed");
+const connection = makeConnection(process.env.RPC ?? "https://api.devnet.solana.com", { label: "allow-relayer" });
+surviveRateLimits("allow-relayer");
 const payer = Keypair.fromSecretKey(new Uint8Array(JSON.parse(
   readFileSync(process.env.PAYER ?? `${process.env.HOME}/.config/solana/id.json`, "utf8"))));
 const provider = new AnchorProvider(connection, new Wallet(payer), { commitment: "confirmed" });

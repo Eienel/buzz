@@ -11,12 +11,14 @@ import anchorPkg from "@coral-xyz/anchor";
 import { Connection, Keypair, PublicKey, SystemProgram } from "@solana/web3.js";
 import { createMint, TOKEN_2022_PROGRAM_ID } from "@solana/spl-token";
 import { readFileSync, writeFileSync } from "node:fs";
+import { makeConnection, surviveRateLimits } from "../server/rpc.mjs";
 
 const { AnchorProvider, Program, Wallet } = anchorPkg;
 const RPC = process.env.RPC ?? "https://api.devnet.solana.com";
 const payer = Keypair.fromSecretKey(new Uint8Array(JSON.parse(
   readFileSync(process.env.PAYER ?? `${process.env.HOME}/.config/solana/id.json`, "utf8"))));
-const connection = new Connection(RPC, "confirmed");
+const connection = makeConnection(RPC, { label: "setup-devnet" });
+surviveRateLimits("setup-devnet");
 const provider = new AnchorProvider(connection, new Wallet(payer), { commitment: "confirmed" });
 const idl = JSON.parse(readFileSync(new URL("./idl/last_circle.json", import.meta.url), "utf8"));
 const program = new Program(idl, provider);

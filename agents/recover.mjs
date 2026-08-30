@@ -25,6 +25,7 @@ import sha3 from "js-sha3";
 const { keccak_256 } = sha3;   // js-sha3 is CommonJS; named imports do not resolve
 import { readFileSync } from "node:fs";
 import { loadKeypair } from "../server/keypair.mjs";
+import { makeConnection, surviveRateLimits } from "../server/rpc.mjs";
 
 const { AnchorProvider, Program, Wallet } = anchorPkg;
 const RPC = process.env.RPC ?? "https://api.devnet.solana.com";
@@ -32,7 +33,8 @@ const MAX_GAMES = Number(process.argv[2] ?? process.env.MAX_GAMES ?? 40);
 const PAUSE = Number(process.env.PAUSE_MS ?? 120);
 
 const payer = loadKeypair(process.env.PAYER, `${process.env.HOME}/.config/solana/id.json`);
-const connection = new Connection(RPC, "confirmed");
+const connection = makeConnection(RPC, { label: "recover" });
+surviveRateLimits("recover");
 const provider = new AnchorProvider(connection, new Wallet(payer), { commitment: "confirmed" });
 const program = new Program(
   JSON.parse(readFileSync(new URL("./idl/last_circle.json", import.meta.url), "utf8")), provider);

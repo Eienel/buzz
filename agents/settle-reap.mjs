@@ -23,6 +23,7 @@ import { readFileSync } from "node:fs";
 import jsSha3 from "js-sha3";
 import { loadKeypair } from "../server/keypair.mjs";
 import { houseWallets } from "../server/names.mjs";
+import { makeConnection, surviveRateLimits } from "../server/rpc.mjs";
 
 const { keccak_256 } = jsSha3;
 const { AnchorProvider, Program, Wallet, BN } = anchorPkg;
@@ -33,7 +34,8 @@ const LIMIT = Number(process.env.LIMIT ?? 0);          // 0 = the whole backlog
 const SEED = process.env.SWARM_SEED ?? "buzz-devnet-swarm-v1";
 
 const payer = loadKeypair(process.env.PAYER, `${process.env.HOME}/.config/solana/id.json`);
-const connection = new Connection(RPC, "confirmed");
+const connection = makeConnection(RPC, { label: "settle-reap" });
+surviveRateLimits("settle-reap");
 const program = new Program(
   JSON.parse(readFileSync(new URL("./idl/last_circle.json", import.meta.url), "utf8")),
   new AnchorProvider(connection, new Wallet(payer), { commitment: "confirmed" }));

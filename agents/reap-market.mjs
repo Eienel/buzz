@@ -32,6 +32,7 @@ import anchorPkg from "@coral-xyz/anchor";
 import { Connection, PublicKey, Transaction, LAMPORTS_PER_SOL } from "@solana/web3.js";
 import { readFileSync } from "node:fs";
 import { loadKeypair } from "../server/keypair.mjs";
+import { makeConnection, surviveRateLimits } from "../server/rpc.mjs";
 
 const { AnchorProvider, Program, Wallet } = anchorPkg;
 
@@ -41,7 +42,8 @@ const LIMIT = Number(process.env.LIMIT ?? 0);
 const DRY = process.env.DRY === "1";
 
 const payer = loadKeypair(process.env.PAYER, `${process.env.HOME}/.config/solana/id.json`);
-const connection = new Connection(RPC, "confirmed");
+const connection = makeConnection(RPC, { label: "reap-market" });
+surviveRateLimits("reap-market");
 const program = new Program(
   JSON.parse(readFileSync(new URL("./idl/last_circle.json", import.meta.url), "utf8")),
   new AnchorProvider(connection, new Wallet(payer), { commitment: "confirmed" }));

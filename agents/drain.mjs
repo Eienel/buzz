@@ -13,9 +13,11 @@
 import anchorPkg from "@coral-xyz/anchor";
 import { Connection, Keypair, PublicKey, SYSVAR_SLOT_HASHES_PUBKEY } from "@solana/web3.js";
 import { readFileSync } from "node:fs";
+import { makeConnection, surviveRateLimits } from "../server/rpc.mjs";
 
 const { AnchorProvider, Program, Wallet } = anchorPkg;
-const connection = new Connection(process.env.RPC ?? "https://api.devnet.solana.com", "confirmed");
+const connection = makeConnection(process.env.RPC ?? "https://api.devnet.solana.com", { label: "drain" });
+surviveRateLimits("drain");
 const payer = Keypair.fromSecretKey(new Uint8Array(JSON.parse(
   readFileSync(process.env.PAYER ?? `${process.env.HOME}/.config/solana/id.json`, "utf8"))));
 const provider = new AnchorProvider(connection, new Wallet(payer), { commitment: "confirmed" });
