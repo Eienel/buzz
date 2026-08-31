@@ -938,7 +938,19 @@ createServer(async (req,res)=>{
       const body = { on: true, game: gameId, market: m };
       marketCache.set(gameId, { at: Date.now(), body });
       return send(res, 200, body);
-    }catch(e){ return send(res, 502, { error: String(e.message ?? e).slice(0, 140) }); }
+    }catch(e){
+      // Odds a minute old beat no odds at all.
+      //
+      // This used to answer 502 and cache nothing, so once the RPC started
+      // refusing, every retry hit the same failing read and the bet panel sat
+      // on "Waiting for the book" forever. The pool moves slowly and the page
+      // labels it as a rate rather than a promise, so serving the last good
+      // answer is honest, and it means one successful read keeps the panel
+      // alive through a rate-limit storm.
+      if(c && Date.now() - c.at < 60_000)
+        return send(res, 200, { ...c.body, stale: Math.round((Date.now() - c.at) / 1000) });
+      return send(res, 502, { error: String(e.message ?? e).slice(0, 140) });
+    }
   }
 
   // Build an unsigned place_bet for somebody with their own wallet. Nothing is
