@@ -320,6 +320,71 @@ async function poll(){
 }
 poll(); setInterval(poll, POLL_MS);
 
+/**
+ * Crank on its own clock, without paying for a whole-program scan.
+ *
+ * The cranker used to ride the poll tick, which quietly made POLL_MS two
+ * settings at once: how often the board refreshes, and how promptly a phase
+ * advances. A game is about ten phase transitions, and each one waits for the
+ * next tick, so raising the poll to save on reads stretched every game by
+ * roughly half the interval times ten. Cheaper reads bought slower games.
+ *
+ * They are separate concerns, so they get separate clocks. The expensive scan
+ * stays on POLL_MS because the board and the reaper genuinely need the whole
+ * program. Cranking only needs the games currently being played and their
+ * combs, which is a bounded handful: at sixteen live games that is about 112
+ * accounts through getMultipleAccounts, against 10,743 through
+ * getProgramAccounts.
+ *
+ * Deliberately best effort. It reuses the account list from the last full poll,
+ * so a game that appeared since is simply cranked by the next full poll as it
+ * always was, and any failure here leaves that backstop untouched. It never
+ * writes `snapshot`: the board keeps showing what the last real poll saw,
+ * because a partial view is a worse answer for a reader than a slightly old
+ * complete one.
+ */
+const CRANK_MS = Number(process.env.CRANK_MS ?? 3000);
+let fastBusy = false;
+
+async function fastCrank(){
+  if(fastBusy || !cranker) return;
+  const live = (snapshot.live ?? []).filter(g => g.status === 1);
+  if(!live.length) return;                    // nothing mid-game to advance
+  fastBusy = true;
+  try{
+    // The games we are watching, plus their combs, and nothing else.
+    // Comb addresses are derived, not remembered: decodeCircle keeps the
+    // circle's fields but not its own key, and a PDA is cheaper to recompute
+    // than to carry around.
+    const keys = [];
+    for(const g of live){
+      const game = new PublicKey(g.pubkey);
+      keys.push(game);
+      for(const c of (g.combs ?? []))
+        keys.push(PublicKey.findProgramAddressSync(
+          [Buffer.from("circle"), game.toBuffer(), Buffer.from([c.id])], PID)[0]);
+    }
+    if(keys.length > 100) keys.length = 100;   // one request, no pagination
+    const accs = await connection.getMultipleAccountsInfo(keys);
+    const games = [], circles = [];
+    accs.forEach((acc, i) => {
+      if(!acc) return;
+      const d = acc.data, disc = Array.from(d.slice(0,8));
+      if(eq(disc, DISC.game)) games.push({ pubkey: keys[i].toBase58(), ...decodeGame(d) });
+      else if(eq(disc, DISC.circle)) circles.push(decodeCircle(d));
+    });
+    if(!games.length) return;
+    for(const g of games) g.combs = circles.filter(c => c.game === g.pubkey).sort((a,b)=>a.id-b.id);
+    // settling is left empty on purpose: sweeping a finished game's rake is
+    // not latency sensitive and belongs on the full poll.
+    await cranker.once({ live: games, settling: [] });
+  }catch(e){
+    // A failed fast crank is not an incident. The full poll still cranks.
+  }finally{ fastBusy = false; }
+}
+setInterval(fastCrank, CRANK_MS).unref?.();
+
+
 // ---- static + api ------------------------------------------------------------
 const MIME = {".html":"text/html; charset=utf-8",".css":"text/css",".js":"text/javascript",
   ".png":"image/png",".svg":"image/svg+xml",".json":"application/json",".ico":"image/x-icon"};
