@@ -1046,8 +1046,16 @@ function note(id,cls,text){const f=feeds.get(id)||[];
   f.unshift({t:new Date().toISOString().slice(11,19),cls,text});feeds.set(id,f.slice(0,6))}
 function diff(g){
   const id=g.gameId, prev=seen.get(id);
-  if(!prev) note(id,"k",`hive opened with ${g.combs?.length??0} combs`);
-  else{
+  // Said when the game starts, not when we first notice it.
+  //
+  // This used to fire on first sight, which during a lobby is whenever the
+  // poller happened to look: a hive still filling was announced as "opened
+  // with 2 combs" above a board already showing five, and the line never
+  // corrected itself. The comb count is only final once the game is running.
+  if(!prev && g.status===1) note(id,"k",`hive opened with ${g.combs?.length??0} combs`);
+  else if(prev){
+    if(prev.status===0 && g.status===1)
+      note(id,"k",`hive opened with ${g.combs?.length??0} combs`);
     if(g.instance>prev.instance) note(id,"k",`instance ${g.instance}`);
     for(const c of g.combs||[]){const p=(prev.combs||[]).find(z=>z.id===c.id);
       if(p&&p.alive&&!c.alive) note(id,"dead",`comb ${c.id} died, refund ${(c.refundBps/100).toFixed(0)}%`)}
