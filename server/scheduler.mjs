@@ -31,7 +31,20 @@ const MIN_CIRCLES = 4;
  * fifteen that sit half empty, and an empty lobby is the thing that made the
  * board read as busy when it was not.
  */
-const TEMPOS = (process.env.SCHED_TEMPOS ?? "24:120,60:240")
+// 60s only, and here is why the fast tier went.
+//
+// Two tiers opened 1,080 lobbies a day, 720 of them on the 24s tempo. Every
+// finished game leaves up to sixteen accounts behind, so that tier alone was
+// roughly eleven thousand new accounts a day landing in the getProgramAccounts
+// scan the poller runs every few seconds. Measured: 10,743 accounts, 1.91 MB a
+// poll, 34.7 GB a day, and the reaper cannot outrun it because its own passes
+// start with three scans of that same growing pile.
+//
+// The fast tier was also the unbettable one. Reasoning agents only join at or
+// above POD_MIN_TEMPO, so a 24s game has none, and an agent nobody can back is
+// a game nobody can bet on. Two thirds of the account growth, none of the
+// convertible surface. Dropping it makes every game on the board backable.
+const TEMPOS = (process.env.SCHED_TEMPOS ?? "60:240")
   .split(",").map((s) => {
     const [tempo, every] = s.split(":").map(Number);
     return { tempo, every };

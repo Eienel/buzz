@@ -36,7 +36,11 @@ const ROOT = fileURLToPath(new URL("../app/", import.meta.url));
 const PORT = Number(process.env.PORT ?? 3000);
 const RPC = process.env.RPC ?? "https://api.devnet.solana.com";
 const PROGRAM_ID = process.env.PROGRAM_ID ?? "4TNbztSMd3zxG57M25y8WhpcKrQMJQVYEK6EnnkQy1Hw";
-const POLL_MS = Number(process.env.POLL_MS ?? 5000);
+// 10s, not 5s. The poll is a whole-program getProgramAccounts, which is the
+// single most expensive call the arena makes, and at 5s it ran 17,280 times a
+// day. Instances are 60s long, so a board that refreshes twice a minute loses a
+// viewer nothing and halves the bill.
+const POLL_MS = Number(process.env.POLL_MS ?? 10_000);
 const USDC_DEFAULT = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"; // devnet USDC
 
 // Falls back to public devnet when the primary rate-limits, so a spent quota
@@ -1307,7 +1311,11 @@ createServer(async (req,res)=>{
 // the web service down with it.
 if (process.env.RUN_REAPER === "1") {
   const EVERY = Number(process.env.REAP_EVERY_MS ?? 10 * 60_000);
-  const NEWEST = Number(process.env.REAP_LIMIT ?? 25);
+  // 60 a pass, not 25. Each pass pays for three full account scans before it
+  // closes anything, so that fixed cost wants spreading over as many games as
+  // possible. Clearing 25 behind three scans of a 10,000 account program is
+  // what let the backlog outrun the reaper in the first place.
+  const NEWEST = Number(process.env.REAP_LIMIT ?? 60);
   let running = false;
 
   const run = (script, env) => new Promise((resolve) => {
