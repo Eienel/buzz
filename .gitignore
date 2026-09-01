@@ -17,3 +17,6 @@ history.json
 
 # local run artefact: the feed writes here when DATA_DIR is unset
 server/thoughts.jsonl
+
+# scratch scripts used to measure things against a live chain
+*.tmp.mjs
