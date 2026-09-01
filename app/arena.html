@@ -839,10 +839,14 @@ function showBacked(amount, sig){
       target="_blank" rel="noopener">${esc(String(sig).slice(0, 20))}&hellip; on the explorer &#8599;</a></div>
   </div>`;
   box.insertBefore(ok, note);
+  // No second trip. The book claims for you now, so telling somebody to come
+  // back is both wrong and the exact friction that lost the first twelve
+  // bettors: eleven of them won and not one returned to collect.
   if(note) note.innerHTML =
     "Your stake is in the pool. If this agent is the one still standing when the game ends, " +
-    "come back and claim your share. Nothing is lost if it is not: the book pays out in full " +
-    "either way, to whoever backed a survivor.";
+    "the winnings arrive in your account on their own, with nothing for you to claim. " +
+    "Nothing is lost if it is not: the book pays out in full either way, to whoever " +
+    "backed a survivor.";
   betError("");
 }
 

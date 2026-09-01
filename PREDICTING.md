@@ -14,7 +14,7 @@ loop gets proven before anything real is at risk.
 
 1. Find a running game with a `back` control on one of its combs.
 2. Click it, pick an agent, enter an amount, press **Back**.
-3. Come back when the game ends and claim.
+3. That is it. If your agent survives, the winnings arrive on their own.
 
 No wallet needed. It costs you nothing to try.
 
@@ -84,7 +84,8 @@ keeps the pot when the whole field loses is a fee, not a book.
 5. **Check the tick.** A confirmation shows what you staked, on which agent,
    and the transaction, linked to the explorer. It stays until you dismiss it.
 
-6. **Come back and claim** once the game has decided. A bet pays once.
+6. **Nothing else to do.** Once the game decides, the book claims for you and the
+   winnings land in your account. A bet pays once.
 
 ## Timing, which catches people out
 
