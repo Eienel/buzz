@@ -649,6 +649,59 @@ const FAUCET_BUZZ = Number(process.env.FAUCET_BUZZ ?? 200);
 const FAUCET_SOL = Number(process.env.FAUCET_SOL ?? 0.02);
 const FAUCET_PER_IP_DAY = Number(process.env.FAUCET_PER_IP_DAY ?? 5);
 
+/**
+ * What the faucet may spend, and the floor it may never spend past.
+ *
+ * The faucet pays SOL out of the payer, and the payer is what funds the swarm.
+ * So an emptied faucet is not an inconvenience, it is the arena going dark: the
+ * swarm stops at its fuel floor and no games get played. Rate limiting alone
+ * does not bound that, because the limits were per IP and an IP is the cheapest
+ * thing on the internet to have more of.
+ *
+ * Three guards, of which only the reserve actually bounds the damage:
+ *
+ *   RESERVE   the payer's floor. Below it the faucet switches itself off and
+ *             says so. However many wallets ask, however they are spread, the
+ *             faucet cannot take the arena down. This is the one that matters.
+ *   DAY_MAX   a daily ceiling, so an attack costs a day rather than a payer.
+ *   once      genuinely once per wallet, written to the volume, so a deploy no
+ *             longer hands everybody a fresh allowance.
+ *
+ * The old per-wallet check ran through overLimit, whose window is an hour, so
+ * the message promising "One per wallet" was enforcing one per wallet per hour.
+ */
+const FAUCET_RESERVE_SOL = Number(process.env.FAUCET_RESERVE_SOL ?? 2);
+const FAUCET_SOL_DAY_MAX = Number(process.env.FAUCET_SOL_DAY_MAX ?? 1);
+const FAUCET_FILE = join(DATA_DIR, "faucet.json");
+
+let faucetLog = { day: "", solToday: 0, wallets: {} };
+try { faucetLog = { ...faucetLog, ...JSON.parse(readFileSync(FAUCET_FILE, "utf8")) }; } catch {}
+
+const faucetDay = () => new Date().toISOString().slice(0, 10);
+function faucetRoll(){
+  if (faucetLog.day !== faucetDay()) { faucetLog.day = faucetDay(); faucetLog.solToday = 0; }
+}
+function faucetSave(){
+  try { writeFileSync(FAUCET_FILE, JSON.stringify(faucetLog)); }
+  catch (e) { console.log("[faucet] ledger write failed:", String(e.message).slice(0, 60)); }
+}
+
+/** Null when the faucet may pay, otherwise the reason it may not. */
+async function faucetBlocked(wallet){
+  faucetRoll();
+  if (faucetLog.wallets[wallet]) return "this wallet has already been topped up";
+  if (faucetLog.solToday + FAUCET_SOL > FAUCET_SOL_DAY_MAX)
+    return "the faucet has given out its allowance for today, try tomorrow";
+  // Asked last and cheaply: one balance read, and only when the rest passed.
+  try {
+    const bal = await connection.getBalance(starter.publicKey);
+    if (bal - FAUCET_SOL * 1e9 < FAUCET_RESERVE_SOL * 1e9)
+      return "the faucet is paused while the arena tops itself up";
+  } catch { return "could not check the faucet balance, try again shortly"; }
+  return null;
+}
+
+
 async function fundNewcomer(wallet){
   const who = new PublicKey(wallet);
   const mint = new PublicKey(TREASURY_MINTS.BUZZ);
@@ -1104,13 +1157,21 @@ createServer(async (req,res)=>{
     if(!isPubkey(b.wallet)) return send(res, 400, { error: "wallet must be a base58 address" });
     const ip = String(req.headers["x-forwarded-for"] ?? "").split(",")[0].trim()
       || req.socket.remoteAddress || "?";
-    // Once per wallet, and a handful per address behind one IP. The SOL is the
-    // scarce half: the payer cannot mint that, only the tokens.
-    if(overLimit(`faucet-ip:${ip}`, FAUCET_PER_IP_DAY) || overLimit(`faucet:${b.wallet}`, 1))
-      return send(res, 429, { error: "this wallet has already been topped up. One per wallet." });
+    // A handful per address behind one IP, which slows a casual script and
+    // nothing more: IPs are cheap. The guards that actually bound the damage
+    // are in faucetBlocked, and the reserve is the one that cannot be evaded.
+    if(overLimit(`faucet-ip:${ip}`, FAUCET_PER_IP_DAY))
+      return send(res, 429, { error: "too many requests from here, try later" });
+    const blocked = await faucetBlocked(b.wallet);
+    if(blocked) return send(res, 429, { error: blocked });
     try{
       const funded = await fundNewcomer(b.wallet);
-      recordHit(`faucet-ip:${ip}`); recordHit(`faucet:${b.wallet}`);
+      recordHit(`faucet-ip:${ip}`);
+      // Written before the response, so a crash between the two costs the
+      // faucet an allowance rather than handing out an unbounded number.
+      faucetLog.wallets[b.wallet] = faucetDay();
+      faucetLog.solToday = Number((faucetLog.solToday + (funded.sol ?? 0)).toFixed(6));
+      faucetSave();
       return send(res, 200, funded);
     }catch(e){ return send(res, 502, { error: reason(e) }); }
   }
@@ -1316,6 +1377,13 @@ createServer(async (req,res)=>{
         reaper: process.env.RUN_REAPER === "1",
       },
       rpcHost: (() => { try { return new URL(RPC).host; } catch { return null; } })(),
+      // The faucet spends the payer, so its remaining allowance is worth being
+      // able to read without guessing from the outside.
+      faucet: starter ? {
+        day: faucetLog.day, solToday: faucetLog.solToday,
+        dayMax: FAUCET_SOL_DAY_MAX, reserveSol: FAUCET_RESERVE_SOL,
+        walletsFunded: Object.keys(faucetLog.wallets).length,
+      } : null,
     });
   }
   if(p === "/api/storage"){
