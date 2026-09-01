@@ -32,7 +32,21 @@ const N_AGENTS = Math.max(MIN_COMBS, Number(process.env.AGENTS ?? 5));
 // leaderboard that herd-00 has been building for days. Reasoning agents are
 // appended after the heuristics instead: the control group keeps its names,
 // its wallets and its record.
-const POD_AGENTS = Number(process.env.POD_AGENTS ?? (reasoningEnabled() ? 4 : 0));
+// One reasoning agent per model, not four over three.
+//
+// modelFor cycles the model list, so a fourth pod agent is a second copy of
+// whatever sits at index 0: the benchmark quietly sampled llama twice a game
+// and the other two once. That is a flaw in the comparison, which is the whole
+// claim here, and it cost a quarter of the inference bill to produce.
+//
+// Cost is the reason it got looked at. Measured over 60 calls: haiku answered
+// 12 of 20 at 11.5s and is 74% of spend, mistral and llama sit at 28 and 29
+// seconds against a 30.6s deadline and between them produced 15 of the 16
+// aborts. So the cheap models are cheap partly because half their answers never
+// arrive, and lowering max_tokens saves nothing because it is a cap rather than
+// a charge. Matching the agent count to the model count is the one cut that
+// takes no measurement away.
+const POD_AGENTS = Number(process.env.POD_AGENTS ?? (reasoningEnabled() ? 3 : 0));
 // Measured UsePod latency is 0.5s to 21s, routing variance rather than model
 // choice, so on a 24s instance the model will often miss the commit window.
 // That is no longer a reason to sit the game out: a reasoning agent that misses
