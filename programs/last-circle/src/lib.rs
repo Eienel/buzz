@@ -2970,3 +2970,132 @@ pub struct ClaimBet<'info> {
     pub stake_mint: InterfaceAccount<'info, Mint>,
     pub token_program: Interface<'info, TokenInterface>,
 }
+
+/// Unit tests for the economics that are pure arithmetic.
+///
+/// These add nothing to the program and change nothing in it: they are the
+/// first `#[test]` in a codebase whose 47 instructions were covered only by 13
+/// integration tests against a validator, which is slow enough that nobody runs
+/// it while editing a formula.
+///
+/// Only genuinely pure functions are here. The rest of the economics lives
+/// inside instruction handlers where it needs accounts, and reaching it would
+/// mean refactoring the handlers, which is a bigger and riskier change than
+/// this file is for. The conservation properties those handlers assert are
+/// still only covered by the integration suite.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---- refund_bps ----------------------------------------------------
+    //
+    // The haircut a player takes for dying, which rises the longer they
+    // survived. The whole design claim "nobody hits zero" rests on this
+    // never returning less than REFUND_LO_BPS.
+
+    #[test]
+    fn refund_never_falls_below_the_floor() {
+        // The promise on the tin: whatever the instance or the board size,
+        // a dead player gets at least 55% back.
+        for circles in 1u8..=12 {
+            for instance in 0u16..=64 {
+                let bps = refund_bps(instance, circles) as u64;
+                assert!(bps >= REFUND_LO_BPS,
+                    "instance {instance}, {circles} combs gave {bps}, under the floor");
+                assert!(bps <= REFUND_HI_BPS,
+                    "instance {instance}, {circles} combs gave {bps}, over the ceiling");
+            }
+        }
+    }
+
+    #[test]
+    fn refund_starts_at_the_floor_and_reaches_the_ceiling() {
+        // Dying on the first instance is the worst case and pays the floor.
+        assert_eq!(refund_bps(0, 6) as u64, REFUND_LO_BPS);
+        // Surviving to the last pays the ceiling, and staying longer cannot
+        // pay more: t is clamped to tmax.
+        assert_eq!(refund_bps(6, 6) as u64, REFUND_HI_BPS);
+        assert_eq!(refund_bps(99, 6) as u64, REFUND_HI_BPS);
+    }
+
+    #[test]
+    fn refund_rises_with_survival() {
+        // Monotonic: surviving longer is never punished.
+        let mut last = 0u16;
+        for instance in 0u16..=6 {
+            let bps = refund_bps(instance, 6);
+            assert!(bps >= last, "instance {instance} paid less than the one before");
+            last = bps;
+        }
+    }
+
+    #[test]
+    fn refund_survives_a_zero_comb_board() {
+        // num_circles is clamped to at least 1 before dividing. A board that
+        // reported zero combs would otherwise divide by zero and panic the
+        // whole instruction.
+        let bps = refund_bps(3, 0) as u64;
+        assert!((REFUND_LO_BPS..=REFUND_HI_BPS).contains(&bps));
+    }
+
+    // ---- pot_split -----------------------------------------------------
+    //
+    // How a finished game's leftover is cut three ways. CONSERVATION: the
+    // three parts must sum to exactly the leftover, or the vault cannot drain
+    // and close_game refuses forever.
+
+    #[test]
+    fn pot_split_conserves_the_leftover() {
+        for leftover in [0u64, 1, 2, 3, 7, 99, 100, 1_000, 999_999, 1_000_000_000] {
+            for points in [0u64, 1, 50] {
+                let (creator, luck, skill) = pot_split(leftover, points);
+                assert_eq!(creator + luck + skill, leftover,
+                    "leftover {leftover} with {points} points did not conserve");
+            }
+        }
+    }
+
+    #[test]
+    fn pot_split_pays_no_skill_pool_when_nobody_scored() {
+        // With no points earned there is nobody to pay, so the skill share
+        // folds into luck rather than stranding in the vault.
+        let (creator, luck, skill) = pot_split(1_000, 0);
+        assert_eq!(skill, 0);
+        assert_eq!(creator + luck, 1_000);
+    }
+
+    #[test]
+    fn pot_split_takes_kappa_off_the_top() {
+        // The creator's cut is a share of the whole leftover, before the
+        // skill and luck split, which is what KAPPA_BPS means.
+        let (creator, _, _) = pot_split(10_000, 10);
+        assert_eq!(creator as u128, 10_000u128 * KAPPA_BPS / BPS);
+    }
+
+    #[test]
+    fn pot_split_handles_dust_without_losing_a_lamport() {
+        // Integer division rounds down three times here. Whatever it drops
+        // has to land in luck, not vanish: the vault has to reach zero.
+        for leftover in 0u64..200 {
+            let (creator, luck, skill) = pot_split(leftover, 7);
+            assert_eq!(creator + luck + skill, leftover, "lost dust at {leftover}");
+        }
+    }
+
+    // ---- the abort refund's reconstruction ------------------------------
+
+    #[test]
+    fn gross_reconstruction_returns_at_least_the_net_stake() {
+        // claim_abort_refund recomputes what a player paid from what was
+        // banked, rather than storing it: gross = net * BPS / (BPS - fee).
+        // A lobby that never ran hands back the rake too, so the result can
+        // never be less than the net stake.
+        for fee_bps in [0u128, 1, 50, 250, 900] {
+            for net in [1u64, 1_000, 1_000_000, 1_000_000_000] {
+                let gross = ((net as u128) * BPS / (BPS - fee_bps)) as u64;
+                assert!(gross >= net,
+                    "fee {fee_bps}bps on a net of {net} reconstructed {gross}");
+            }
+        }
+    }
+}
