@@ -920,7 +920,29 @@ function drainSpool() {
       writeFileSync(SPOOL, lines.slice(-THOUGHTS_MAX).join("\n") + "\n");
   } catch (e) { intake.spoolErr = String(e.message ?? e).slice(0, 90); }
 }
+// The swarm's other half of the same channel. It cranks too, and when it wins
+// the race the death is only ever announced here.
+const RESOLVED_SPOOL = join(DATA_DIR, "resolved.jsonl");
+function drainResolved() {
+  try {
+    if (!existsSync(RESOLVED_SPOOL)) return;
+    const lines = readFileSync(RESOLVED_SPOOL, "utf8").split("\n").filter(Boolean);
+    for (const line of lines.slice(-THOUGHTS_MAX * 2)) {
+      try {
+        const { gameId, instance, doomed } = JSON.parse(line);
+        // Already known, and gradeRound walks the whole buffer, so skipping
+        // here is what keeps a four second timer off a full rescan.
+        if (grades.get(`${gameId}:${instance}`) === doomed) continue;
+        gradeRound(gameId, instance, doomed);
+      } catch { /* half-written line */ }
+    }
+    if (lines.length > THOUGHTS_MAX * 6)
+      writeFileSync(RESOLVED_SPOOL, lines.slice(-THOUGHTS_MAX * 2).join("\n") + "\n");
+  } catch (e) { intake.spoolErr = String(e.message ?? e).slice(0, 90); }
+}
+
 drainSpool(); setInterval(drainSpool, 4000);
+drainResolved(); setInterval(drainResolved, 4000);
 // Derived from the seed both processes already share, so a swarm running as
 // its own Railway service authenticates with nothing configured. See the note
 // in agents/feed.mjs: this is worth exactly what SWARM_SEED is worth, which is

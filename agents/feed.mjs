@@ -32,9 +32,15 @@ const { keccak_256 } = jsSha3;
 // routing to land on the wrong instance. HTTP stays for the case where they are
 // genuinely separate; this is what makes the page work when they are not.
 const SPOOL = join(DATA_DIR, "thoughts.jsonl");
+// Resolutions get their own, for the same reason and then some: measured in
+// production, intake.posts was 0 while 400 thoughts had arrived by spool, so
+// every HTTP post from this container has always failed and /api/agent/resolved
+// has never once landed. Thoughts survived that because they spool. Grades did
+// not, and the thinking page showed forecasts that were never scored.
+const RESOLVED = join(DATA_DIR, "resolved.jsonl");
 
-function spool(entry) {
-  try { appendFileSync(SPOOL, JSON.stringify(entry) + "\n"); }
+function spool(entry, file = SPOOL) {
+  try { appendFileSync(file, JSON.stringify(entry) + "\n"); }
   catch { /* a full or read-only volume must not cost a game a round */ }
 }
 
@@ -149,5 +155,8 @@ function post(path, body) {
 export const thought = (entry) => post("/api/agent/thought", entry);
 
 /** The round resolved. Marks every prediction made for it hit or miss. */
-export const resolved = (gameId, instance, doomed) =>
-  post("/api/agent/resolved", { gameId: String(gameId), instance, doomed });
+export const resolved = (gameId, instance, doomed) => {
+  const body = { gameId: String(gameId), instance, doomed };
+  spool(body, RESOLVED);
+  post("/api/agent/resolved", body);
+};
