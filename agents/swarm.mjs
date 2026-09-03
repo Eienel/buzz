@@ -373,10 +373,28 @@ function withDeadline(promise, ms, what) {
  */
 const BEAT = join(DATA_DIR, "swarm.json");
 let beatErr = null;
+// The last few games that failed, and why.
+//
+// This went to log() and nowhere else, which is fine on a terminal and useless
+// on a host whose logs you cannot read. A swarm launching a game a minute and
+// seating nobody looks identical from outside to one that is simply between
+// games, because `started` climbs either way. The reason is the thing that
+// separates them, so it rides along on the heartbeat.
+//
+// Declared here rather than next to launch(), because beat() runs at boot and
+// a const declared further down is in its temporal dead zone: reading it would
+// throw, and typeof does not save you from that.
+const failures = [];
+const noteFailure = (n, e) => {
+  failures.unshift({ game: n, at: Date.now(), error: String(e?.message ?? e).slice(0, 160) });
+  failures.length = Math.min(failures.length, 5);
+};
 function beat(state, extra = {}) {
   try {
     writeFileSync(BEAT, JSON.stringify({ at: Date.now(), state, pid: process.pid,
-                                         bootedAt: BOOTED, ...extra }));
+                                         bootedAt: BOOTED,
+                                         recentFailures: failures,
+                                         ...extra }));
   } catch (e) { beatErr = String(e.message ?? e).slice(0, 80); }
 }
 const BOOTED = Date.now();
@@ -879,7 +897,7 @@ let started = 0;
 const launch = (n) => {
   const task = (async () => {
     try { await withDeadline(playGame(n), GAME_DEADLINE_MS, `game ${n}`); }
-    catch (e) { log(`game failed: ${e.message?.slice(0, 200)}`); }
+    catch (e) { log(`game failed: ${e.message?.slice(0, 200)}`); noteFailure(n, e); }
   })().finally(() => { inflight.delete(task); lastProgress = Date.now(); });
   inflight.add(task);
   return task;
