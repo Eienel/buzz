@@ -268,16 +268,63 @@ const HOUSE_WALLETS = new Set(houseWallets().map((h) => h.wallet));
 
 let snapshot = { ok:false, updatedAt:0, games:[], error:"starting" };
 
+/**
+ * Every account of one kind, by discriminator, optionally for one game.
+ *
+ * The game field sits at offset 8 on both Player and Circle, straight after
+ * the discriminator, which is what lets a game be asked for by name instead of
+ * filtered out of everything in memory.
+ */
+function fetchKind(kind, gamePubkey){
+  const filters = [{ memcmp: { offset: 0, bytes: b58(DISC[kind]) } }];
+  if (gamePubkey) filters.push({ memcmp: { offset: 8, bytes: gamePubkey } });
+  return connection.getProgramAccounts(PID, { encoding: "base64", filters });
+}
+
+// How many just-decided games to write up in one pass. Steady state is zero or
+// one; this only bites when a batch settles at once, and they keep until the
+// next poll rather than turning one tick into a hundred round trips.
+const RECORD_PER_POLL = Number(process.env.RECORD_PER_POLL ?? 4);
+
 async function poll(){
   try{
-    const accs = await connection.getProgramAccounts(PID, { encoding:"base64" });
+    // Games, then detail only for the games that need it.
+    //
+    // This used to be one unfiltered getProgramAccounts: every account the
+    // program has ever owned, pulled whole, every POLL_MS. Measured on the live
+    // program that is 3.87 MB and 9,198 accounts a tick, which at a ten second
+    // poll is 33.4 GB a day, and it is why the swarm spent its life being
+    // rate-limited: six games in a row died on "429 Connection rate limits
+    // exceeded" while this ran underneath them.
+    //
+    // Almost all of it is waste. Players and combs are only read for games on
+    // the board and for a game being written into history the first time it
+    // reads as decided, and both are reachable by a memcmp on the game field.
+    // Same shape, 0.44 MB a tick, 3.8 GB a day.
+    const gameAccs = await connection.getProgramAccounts(PID, { encoding:"base64",
+      filters: [{ memcmp: { offset: 0, bytes: b58(DISC.game) } }] });
     const games=[], circles=[], players=[];
-    for(const {pubkey, account} of accs){
+    for(const {pubkey, account} of gameAccs){
       const d = account.data;
-      const disc = Array.from(d.slice(0,8));
-      if(eq(disc,DISC.game)) games.push({ pubkey: pubkey.toBase58(), ...decodeGame(d) });
-      else if(eq(disc,DISC.circle)) circles.push(decodeCircle(d));
-      else if(eq(disc,DISC.player)) players.push(decodePlayer(d));
+      if(eq(Array.from(d.slice(0,8)), DISC.game))
+        games.push({ pubkey: pubkey.toBase58(), ...decodeGame(d) });
+    }
+
+    // Detail is for two sets: what is on the board, and what is about to be
+    // written into history. record() refuses anything already recorded, not
+    // decided, or under four players, and all three are answerable from the
+    // game account alone, so the ones that cannot produce a record never cost
+    // a request.
+    const onBoard = games.filter((g) => (g.status===0 || g.status===1) && !g.legacy);
+    const toRecord = games
+      .filter((g) => !recorded.has(g.gameId) && DECIDED.has(g.status) && (g.players ?? 0) >= 4)
+      .sort((a,b) => Number(BigInt(b.gameId) - BigInt(a.gameId)))
+      .slice(0, RECORD_PER_POLL);
+    const need = [...new Set([...onBoard, ...toRecord])];
+    for(const g of need){
+      const [cs, ps] = await Promise.all([fetchKind("circle", g.pubkey), fetchKind("player", g.pubkey)]);
+      for(const {account} of cs) circles.push(decodeCircle(account.data));
+      for(const {account} of ps) players.push(decodePlayer(account.data));
     }
     for(const g of games) g.combs = circles.filter(c=>c.game===g.pubkey).sort((a,b)=>a.id-b.id);
     // Who is actually playing each game, with the name and the record the
