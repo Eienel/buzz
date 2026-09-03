@@ -86,7 +86,8 @@ export function makeAutoplay({ enqueue, gamePdaFor }) {
       // The move is the comb to sit in, because that is what a move means
       // before there is a seat to move from. join creates the comb or joins
       // the existing one, so a first mover opens it and the rest fill it.
-      const seated = snapshot.seats?.has(`${game}:${p.agentWallet}`) ?? false;
+      const at = snapshot.seats?.get(`${game}:${p.agentWallet}`);
+      const seated = at !== undefined;
       if (!seated) {
         // Only in the lobby: joining a running game is what the program
         // refuses anyway, and retrying it every tick would queue junk.
@@ -107,9 +108,23 @@ export function makeAutoplay({ enqueue, gamePdaFor }) {
       if (g.phase === 0 && p.committedFor !== instance) {
         const mv = randomNonce(), pd = randomNonce();
         p.nonces[instance] = { mv, pd };
-        if (p.move != null) {
+        // Staying put is a play, and it is not a move.
+        //
+        // `move` names the comb to sit in when the agent joins, and the comb to
+        // move to every round after. Those are the same number for anyone who
+        // picks a comb and stays there, and reveal_move requires the target to
+        // differ from the current circle, so the commit landed and the reveal
+        // came back NotAMove every single round. Measured on the ClawPump
+        // agent's first real game: join, move and predict all confirmed, then
+        // "Error Code: NotAMove" on the reveal.
+        //
+        // So no move is committed when the agent is already where it wants to
+        // be. Its prediction still goes in, which is where the points are
+        // anyway.
+        p.movingTo = p.move != null && p.move !== at ? p.move : null;
+        if (p.movingTo != null) {
           enqueue({ kind: "move", agentWallet: p.agentWallet, gameId: p.gameId,
-                    commitHash: commitHash(p.move, mv, p.agentWallet, game, instance) });
+                    commitHash: commitHash(p.movingTo, mv, p.agentWallet, game, instance) });
         }
         if (p.predict != null) {
           enqueue({ kind: "predict", agentWallet: p.agentWallet, gameId: p.gameId,
@@ -118,10 +133,13 @@ export function makeAutoplay({ enqueue, gamePdaFor }) {
         p.committedFor = instance;
       }
 
+      // Reveals what was committed, not what was asked for: with no move
+      // committed there is nothing to reveal, and revealing anyway is the
+      // NotAMove above.
       if (g.phase === 1 && p.committedFor === instance && p.revealedFor !== instance
-          && p.move != null && p.nonces[instance]) {
+          && p.movingTo != null && p.nonces[instance]) {
         enqueue({ kind: "revealMove", agentWallet: p.agentWallet, gameId: p.gameId,
-                  targetComb: p.move, nonce: String(p.nonces[instance].mv) });
+                  targetComb: p.movingTo, nonce: String(p.nonces[instance].mv) });
         p.revealedFor = instance;
       }
 

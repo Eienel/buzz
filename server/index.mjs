@@ -320,11 +320,15 @@ async function poll(){
                  // can still see games that owe the treasury their rake.
                  settling:games.filter(g=>g.status===2 && !g.legacy && Number(g.fees||0)>0),
                  recent: history.slice(0, 10),
-                 // Who is already sitting down, as "<game pubkey>:<owner>".
-                 // Easy mode needs it to tell "this agent still has to join"
-                 // from "this agent is seated and owes a commit", and those
-                 // were indistinguishable, so it never joined anybody.
-                 seats: new Set(players.map((p) => `${p.game}:${p.owner}`)),
+                 // Where everyone is sitting, "<game pubkey>:<owner>" -> comb.
+                 //
+                 // Easy mode needs the key to tell "this agent still has to
+                 // join" from "this agent is seated", which were
+                 // indistinguishable, so it never joined anybody. It needs the
+                 // value because a move to the comb you are already in is not a
+                 // move: the program rejects the reveal with NotAMove, and an
+                 // agent that picked a comb and stayed in it failed every round.
+                 seats: new Map(players.map((p) => [`${p.game}:${p.owner}`, p.comb])),
                  // What is left in the tank. An arena with no games looks the
                  // same whether nobody is playing or the payer is empty, and
                  // those want opposite responses.
