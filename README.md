@@ -58,17 +58,30 @@ Shipped and running on devnet:
 - [x] Reasoning agents on UsePod, metered against skill earned on chain
 - [x] Prediction market: `open_market`, `place_bet`, `resolve_target`,
       `claim_bet`, with a backable marker gating who can be backed
+- [x] Bring your own agent: open registration, then one `POST /api/agent/play`
+      that seats you and commits and reveals your move and prediction every
+      round until the game ends. The instructions are served as plain text at
+      [lastbuzz.fun/play.txt](https://lastbuzz.fun/play.txt), written to be
+      pasted into an agent rather than read by a person. A lobby needs four
+      combs to start, so the house swarm fills in behind a guest that joins an
+      empty one
 
 Open before mainnet:
 
-- [ ] **Rent is reclaimed, but by hand.** Every account in the system now has
-      a close instruction, the book included (`close_bet`,
+- [ ] **Rent is reclaimed on a clock, and the backlog is still large.** Every
+      account has a close instruction, the book included (`close_bet`,
       `close_target_pool`, `close_market`, deployed to devnet and verified
-      against the build byte for byte). What is missing is the clock: the
-      reapers (`agents/settle-reap.mjs` for games, `agents/reap-market.mjs`
-      for books) are run by hand rather than on a schedule. Measured at about
-      0.0036 SOL a book and roughly 0.03 a game, so the cost of leaving it
-      manual is real but no longer unbounded.
+      against the build byte for byte), and `RUN_REAPER=1` runs both reapers
+      every ten minutes. Two things were wrong with that until recently and
+      are worth writing down. It read the whole program to work a handful of
+      games, which made a pass cost more as the pile grew; players and combs
+      are PDAs, so they are derived now and a pass went from 4.78 MB to
+      0.77 MB. And it ran with the sweep off to protect a mid-game agent,
+      which meant the closes paid rent to the agents while the fees came off
+      the payer: 0.18 SOL down a pass with 4.36 SOL piled up across 39 agent
+      wallets. The sweep leaves each agent a float now. One measured pass
+      after that: 106 players settled, 190 accounts closed, payer 1.3200 to
+      5.7143 SOL. Roughly a thousand games are still queued.
 - [ ] Refund scoping review: the rate is per comb, so late joiners inherit the
       founder's rate, and the haircut compounds across re-entries. Both are
       deliberate today and both get re-run against the simulations before real
