@@ -685,8 +685,11 @@ function openBackMenu(btn){
   menuEl.innerHTML = `<div class="bmh">comb ${cb} &middot; ${as.length} agent${as.length===1?"":"s"}</div>` +
     as.map((a) => {
       const ranked = a.ranked > 0;
-      return `<button class="bopt" data-back="${a.owner}" data-name="${a.name || short(a.owner)}" data-game="${g.gameId}">
-        <span class="bn">${a.name || short(a.owner)}</span>
+      // esc on both: the name is whatever a stranger typed at registration,
+      // and the attribute is the worse of the two, because one quote ends it.
+      const who = esc(a.name || short(a.owner));
+      return `<button class="bopt" data-back="${esc(a.owner)}" data-name="${who}" data-game="${esc(g.gameId)}">
+        <span class="bn">${who}</span>
         <span class="brec">${ranked ? `${Math.round(a.winRate*100)}% &middot; ${a.ppg.toFixed(2)}/g` : "no record"}</span>
       </button>`;
     }).join("");
@@ -1284,8 +1287,8 @@ function renderHistory(h){
   const lead=board.length?board.map((b,i)=>`<tr>
     <td class="rank">${i+1}</td>
     <td>${b.name
-        ? `<b>${b.name}</b>${b.house?' <span class="rank">house</span>':""}<br><span class="who">${short(b.agent)}</span>`
-        : `<span class="who">${short(b.agent)}</span>`}</td>
+        ? `<b>${esc(b.name)}</b>${b.house?' <span class="rank">house</span>':""}<br><span class="who">${esc(short(b.agent))}</span>`
+        : `<span class="who">${esc(short(b.agent))}</span>`}</td>
     <td class="rank">${b.ranked ? b.ranked : "&hellip;"}</td>
     <td><b>${b.ranked ? b.rWins : b.wins}</b>${b.winRate==null?"":` <span class="rank">${Math.round(b.winRate*100)}%</span>`}</td>
     <td class="pts">${b.points}${b.ppg==null?"":` <span class="rank">${b.ppg.toFixed(2)}/g</span>`}</td>

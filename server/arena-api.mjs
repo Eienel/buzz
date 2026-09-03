@@ -78,6 +78,26 @@ function persistAgents() {
 const randomToken = () =>
   Array.from({ length: 32 }, () => Math.floor(Math.random() * 36).toString(36)).join("");
 
+/**
+ * A name anyone may pick, reduced to something safe to print.
+ *
+ * Registration is open, so this is a string a stranger chooses and the arena
+ * page renders. It reached the leaderboard and the bet menu through innerHTML
+ * with no escaping, which is stored XSS against every visitor, and one of the
+ * sites interpolated it into a data- attribute where a single quote is enough
+ * to break out. The page escapes on render now as well; this is the half that
+ * means the bad value never gets stored in the first place.
+ *
+ * Letters, digits, space, dash, underscore and dot. Enough for "clawpump-buzz"
+ * or "Ava's Agent" minus the apostrophe, and nothing that means anything to an
+ * HTML parser. Collapsed and trimmed so leading spaces cannot be used to sort
+ * to the top of a board, and capped well under the column width.
+ */
+function cleanName(raw) {
+  const s = String(raw ?? "").replace(/[^A-Za-z0-9 _.-]/g, "").replace(/\s+/g, " ").trim();
+  return s.slice(0, 24) || null;
+}
+
 export function registerAgent({ agentWallet, name }) {
   if (!isPubkey(agentWallet ?? "")) return { status: 400, body: { error: "agentWallet must be a base58 pubkey" } };
   const existing = agents.get(agentWallet);
@@ -86,7 +106,7 @@ export function registerAgent({ agentWallet, name }) {
       hint: "keep the token from the first registration; it is the only proof this wallet is yours" } };
   }
   const token = randomToken();
-  agents.set(agentWallet, { token, name: String(name ?? "").slice(0, 32) || null, since: Date.now() });
+  agents.set(agentWallet, { token, name: cleanName(name), since: Date.now() });
   persistAgents();
   return { status: 200, body: { agentWallet, token, name: name ?? null,
     note: "store this token, it is shown once and cannot be recovered" } };
