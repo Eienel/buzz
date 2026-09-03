@@ -254,6 +254,16 @@ function makeRelayer({ connection, kp, program }) {
  * Drain queued actions one at a time. Serial on purpose: two joins racing for
  * the same comb would both try to create it and one would fail confusingly.
  */
+// Worth another go: the chain never heard the instruction, so sending it again
+// is the same instruction rather than a second one. A program error is not
+// here on purpose. "already in use", WrongPhase and the rest mean the chain
+// did hear it and said no, and retrying those just burns fees.
+const TRANSIENT = /429|Too Many Requests|rate limit|Connection rate limits|Blockhash not found|block height exceeded|timed out|timeout|ETIMEDOUT|ECONNRESET|ENOTFOUND|socket hang up|fetch failed|502|503|504/i;
+const MAX_TRIES = Number(process.env.RELAY_TRIES ?? 4);
+// Multiplied by the attempt number: 2s, 4s, 6s. A game phase is tens of
+// seconds, so a slower backoff would miss the window it is retrying into.
+const RETRY_MS = Number(process.env.RELAY_RETRY_MS ?? 2000);
+
 export function startDrain(relayer, actions, intervalMs = 1500) {
   if (!relayer) return () => {};
   let busy = false;
@@ -261,21 +271,37 @@ export function startDrain(relayer, actions, intervalMs = 1500) {
     if (busy) return;
     busy = true;
     try {
+      const now = Date.now();
       for (const a of actions.values()) {
         if (a.state !== "queued") continue;
+        if (a.retryAt && now < a.retryAt) continue;
         const fn = relayer.handlers[a.kind];
-        if (!fn) { a.state = "failed"; a.error = `no handler for ${a.kind}`; continue; }
+        if (!fn) { a.state = "failed"; a.error = `no handler for ${a.kind}`; a.settledAt = now; continue; }
         a.state = "relaying";
         try {
           a.result = await fn(a);
           a.state = "done";
+          a.settledAt = Date.now();
           log(`${a.kind} for ${String(a.agentWallet).slice(0, 8)} -> ${a.result.sig ?? "ok"}`);
         } catch (e) {
-          a.state = "failed";
           a.error = String(e.message ?? e).slice(0, 200);
-          log(`${a.kind} failed: ${a.error}`);
+          a.tries = (a.tries ?? 0) + 1;
+          // A rate limit used to lose the action outright, and on this arena
+          // that is the common case rather than the rare one: the ClawPump
+          // agent's first real join came back "429 Connection rate limits
+          // exceeded" and was dropped, so /api/agent/play had answered 202 and
+          // the agent never appeared in the game. The caller has no way to
+          // tell, and nothing retries on its behalf.
+          if (TRANSIENT.test(a.error) && a.tries < MAX_TRIES) {
+            a.state = "queued";
+            a.retryAt = Date.now() + RETRY_MS * a.tries;
+            log(`${a.kind} rate limited, retry ${a.tries}/${MAX_TRIES - 1} in ${RETRY_MS * a.tries / 1000}s`);
+            continue;
+          }
+          a.state = "failed";
+          a.settledAt = Date.now();
+          log(`${a.kind} failed after ${a.tries}: ${a.error}`);
         }
-        a.settledAt = Date.now();
       }
     } finally { busy = false; }
   };

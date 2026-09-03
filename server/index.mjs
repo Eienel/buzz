@@ -1041,8 +1041,18 @@ createServer(async (req,res)=>{
   }
   if(p === "/api/agent/relayer"){
     if(!relayer) return send(res, 503, { error: "no relayer configured" });
+    // The last few failures, so a diagnosis does not mean guessing action ids
+    // one at a time against /api/agent/action. The ClawPump agent's first join
+    // died on a 429 and finding that out took twenty five probes.
+    const recent = [...actions.values()]
+      .filter((a) => a.state === "failed" || a.tries > 0)
+      .sort((a, b) => (b.settledAt ?? b.at) - (a.settledAt ?? a.at)).slice(0, 8)
+      .map((a) => ({ kind: a.kind, state: a.state, tries: a.tries ?? 0,
+                     wallet: String(a.agentWallet ?? "").slice(0, 8),
+                     error: String(a.error ?? "").slice(0, 120), at: a.settledAt ?? a.at }));
     return send(res, 200, { ...await relayer.ready(), sol: relayerSol,
-                            queued: queuedCount(), limits: LIMITS, ...limiter.stats() });
+                            queued: queuedCount(), recentFailures: recent,
+                            limits: LIMITS, ...limiter.stats() });
   }
   if(p.startsWith("/api/agent/") && ROUTES.has(routeName(p.split("/").pop()))){
     const kind = routeName(p.split("/").pop());
