@@ -126,9 +126,27 @@ try { history = JSON.parse(readFileSync(HISTORY_FILE, "utf8")); } catch {}
 // Drop what the bug above already wrote. An aborted lobby recorded as a game
 // has a field too small to have ever started, and there is no way to repair
 // the row because the game it claims to describe never happened.
+/**
+ * The field a record describes, whichever half of it survived.
+ *
+ * `entrants` is the per-agent detail and it is empty on a game the reaper got
+ * to before the poller did: record() marks those `partial` and keeps the real
+ * count in `players`, precisely so the row is still worth having. The filter
+ * below read `h.entrants?.length ?? h.players`, and `[].length` is 0, which is
+ * not null, so `??` never fell through and every partial record scored 0.
+ *
+ * That deleted them at boot. Worse, it deleted them from `recorded` too, so
+ * the game was eligible to be written again, arrive partial again, and be
+ * dropped again on the next restart. It went unnoticed while the reaper was
+ * too slow to close a game before it was recorded, and today's reaper fix is
+ * what made it start eating results: every game finished today was gone by the
+ * next deploy.
+ */
+const fieldOf = (h) => Math.max(h.entrants?.length ?? 0, h.players ?? 0);
+
 {
   const before = history.length;
-  history = history.filter((h) => (h.entrants?.length ?? h.players ?? 0) >= 4);
+  history = history.filter((h) => fieldOf(h) >= 4);
   if(history.length !== before){
     console.log(`[history] dropped ${before - history.length} aborted lobbies recorded as games`);
     // Written back now rather than on the next record(). Otherwise a quiet
