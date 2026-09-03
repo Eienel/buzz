@@ -760,6 +760,10 @@ async function fundNewcomer(wallet){
  */
 function gradeRound(gameId, instance, doomed){
   const id = String(gameId);
+  if (grades.get(`${id}:${instance}`) !== doomed) {
+    grades.set(`${id}:${instance}`, doomed);
+    gradesDirty = true;
+  }
   for(const t of thoughts){
     if(t.game !== id || t.instance !== instance) continue;
     if(t.predict != null) t.hit = t.predict === doomed;
@@ -862,6 +866,22 @@ const intake = { posts: 0, accepted: 0, rejected: 0, lastRejectAt: null, lastRej
 // channel that cannot be misrouted: no host to get wrong, no slash, no second
 // server answering on loopback. Read on a timer and merged by identity, so a
 // record arriving both ways lands once.
+// game:instance -> the comb that died. Survives a restart, which the grades on
+// the thought records themselves do not: they are recomputed from this on load.
+const GRADES = join(DATA_DIR, "grades.json");
+const grades = new Map();
+try { for (const [k, v] of JSON.parse(readFileSync(GRADES, "utf8"))) grades.set(k, v); } catch {}
+let gradesDirty = false;
+setInterval(() => {
+  if (!gradesDirty) return;
+  gradesDirty = false;
+  // Bounded the same way the thought buffer is: the chain is the archive.
+  const keep = [...grades.entries()].slice(-THOUGHTS_MAX * 2);
+  if (keep.length < grades.size) { grades.clear(); for (const [k, v] of keep) grades.set(k, v); }
+  try { writeFileSync(GRADES, JSON.stringify(keep)); }
+  catch (e) { console.log("[grades] write failed:", e.message); }
+}, 5000).unref?.();
+
 const SPOOL = join(DATA_DIR, "thoughts.jsonl");
 const seen = new Set();
 const idOf = (t) => `${t.game}:${t.instance}:${t.agent}:${t.skipped ? "s" : "a"}`;
@@ -870,7 +890,17 @@ function absorb(t) {
   const id = idOf(t);
   if (seen.has(id)) return false;
   seen.add(id);
-  thoughts.push({ hit: null, ...t, at: t.at ?? Date.now() });
+  const rec = { hit: null, ...t, at: t.at ?? Date.now() };
+  // Grades are not in the spool: the swarm writes a trace at commit time, and
+  // the answer arrives a phase later. Without this a restart reloaded every
+  // thought with hit null, so the page's hit rate started again from zero
+  // while showing a full window of calls beside it.
+  const doomed = grades.get(`${rec.game}:${rec.instance}`);
+  if (doomed != null) {
+    if (rec.predict != null) rec.hit = rec.predict === doomed;
+    rec.doomed = doomed;
+  }
+  thoughts.push(rec);
   if (thoughts.length > THOUGHTS_MAX) {
     for (const gone of thoughts.splice(0, thoughts.length - THOUGHTS_MAX)) seen.delete(idOf(gone));
   }
