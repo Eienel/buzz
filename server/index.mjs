@@ -1692,6 +1692,21 @@ createServer(async (req,res)=>{
       // its loop. `running.swarm` only says a child was spawned, which stayed
       // true through 25 minutes of a hung swarm and an empty arena.
       swarm: swarmBeat(),
+      // Where the results live, and whether they are actually landing there.
+      //
+      // The board showed nothing newer than 88 hours while games had finished
+      // minutes earlier, and every fact needed to tell a lost volume from a
+      // poller that never got to record anything was in a log nobody can read.
+      history: {
+        file: HISTORY_FILE,
+        writable: HISTORY_WRITABLE,
+        // A DATA_DIR under server/ means nothing set it and this is the
+        // container filesystem, which a deploy wipes.
+        onContainerFs: DATA_DIR.includes("/server"),
+        atBoot: HISTORY_AT_BOOT,
+        now: history.length,
+        newestEndedAt: history.reduce((m, h) => Math.max(m, h.endedAt ?? 0), 0) || null,
+      },
       rpcHost: (() => { try { return new URL(RPC).host; } catch { return null; } })(),
       // The faucet spends the payer, so its remaining allowance is worth being
       // able to read without guessing from the outside.
