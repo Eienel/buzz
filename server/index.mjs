@@ -321,10 +321,22 @@ async function poll(){
       .sort((a,b) => Number(BigInt(b.gameId) - BigInt(a.gameId)))
       .slice(0, RECORD_PER_POLL);
     const need = [...new Set([...onBoard, ...toRecord])];
-    for(const g of need){
-      const [cs, ps] = await Promise.all([fetchKind("circle", g.pubkey), fetchKind("player", g.pubkey)]);
-      for(const {account} of cs) circles.push(decodeCircle(account.data));
-      for(const {account} of ps) players.push(decodePlayer(account.data));
+    // In parallel, in bounded batches.
+    //
+    // One game at a time turned a single 813ms request into eleven sequential
+    // ones, and each can be retried on a 429. That pushed the first poll past
+    // the sixty seconds Railway gives a healthcheck and the deploy was marked
+    // failed with the code perfectly fine. Four at a time is quick without
+    // being the thing that trips the rate limit it was written to avoid.
+    const DETAIL_CONCURRENCY = Number(process.env.DETAIL_CONCURRENCY ?? 4);
+    for(let i = 0; i < need.length; i += DETAIL_CONCURRENCY){
+      const batch = need.slice(i, i + DETAIL_CONCURRENCY);
+      const got = await Promise.all(batch.map((g) => Promise.all([
+        fetchKind("circle", g.pubkey), fetchKind("player", g.pubkey)])));
+      for(const [cs, ps] of got){
+        for(const {account} of cs) circles.push(decodeCircle(account.data));
+        for(const {account} of ps) players.push(decodePlayer(account.data));
+      }
     }
     for(const g of games) g.combs = circles.filter(c=>c.game===g.pubkey).sort((a,b)=>a.id-b.id);
     // Who is actually playing each game, with the name and the record the
@@ -1591,8 +1603,26 @@ createServer(async (req,res)=>{
     return res.end(JSON.stringify(body));
   }
   if(p === "/healthz"){
-    res.writeHead(snapshot.ok?200:503,{ "content-type":"text/plain" });
-    return res.end(snapshot.ok ? "ok" : "rpc: "+snapshot.error);
+    // Live, not ready.
+    //
+    // This answered 503 until the first poll had succeeded, which is a
+    // readiness check wearing a healthcheck's name. A deploy gets sixty
+    // seconds here, a cold start has to reach devnet before it can answer,
+    // and a slow or rate-limited first read then fails the deploy with
+    // nothing wrong with the build. Worse, once running, one bad RPC minute
+    // would take the whole site out of rotation, including the pages that do
+    // not need the chain at all.
+    //
+    // So the process being up is the health, and staleness is reported in the
+    // body where it can be read. 503 is kept for the case it was meant for: we
+    // have been up long enough to have polled several times and the chain is
+    // still unreachable.
+    const age = Date.now() - (snapshot.updatedAt || 0);
+    const settled = process.uptime() > 120;
+    const stale = !snapshot.ok && settled && age > 120_000;
+    res.writeHead(stale ? 503 : 200, { "content-type":"text/plain" });
+    return res.end(snapshot.ok ? "ok"
+      : `starting: ${snapshot.error ?? "no snapshot yet"} (up ${Math.round(process.uptime())}s)`);
   }
 
   // Where this process is actually keeping state, and whether it found
