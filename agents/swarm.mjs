@@ -284,10 +284,37 @@ async function findScheduledLobby() {
     const r = await fetch(`${ARENA_URL}/api/state`, { signal: AbortSignal.timeout(4000) });
     if (!r.ok) return null;
     const known = new Set(ASSETS.map((a) => a.mint.toBase58()));
-    const open = (await r.json()).live?.filter((g) =>
-      g.status === 0 && known.has(g.stakeMint) && (g.players ?? 0) === 0) ?? [];
-    // Oldest first: a lobby that has been waiting is the one to fill.
-    open.sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
+    const live = (await r.json()).live ?? [];
+    const lobbies = live.filter((g) => g.status === 0 && known.has(g.stakeMint));
+
+    // A lobby with a guest in it is the one to fill, and it used to be the one
+    // lobby this refused.
+    //
+    // The filter was `players === 0`, which is right for its original purpose:
+    // a lobby that already has seats in it has been adopted by another swarm,
+    // and piling in would double the field. But a ClawPump agent or a person
+    // joining through the arena page is also "players > 0", and to them the
+    // rule reads: the moment you sit down, the house stops filling your game.
+    // A game needs MIN_COMBS combs to start, so a guest joining alone waits
+    // out the program's full hour and the lobby aborts with them still in it.
+    //
+    // So guests are counted separately from seats. A lobby with a guest and
+    // too few combs to start is taken first, whatever else is waiting.
+    const short = (g) => (g.aliveCircles ?? 0) < MIN_COMBS;
+    const rescue = lobbies.filter((g) => (g.guests ?? 0) > 0 && short(g));
+    if (rescue.length) {
+      // Longest-waiting guest first: they have been sitting there the longest.
+      rescue.sort((a, b) => Number(a.gameId) - Number(b.gameId));
+      return rescue[0];
+    }
+
+    // Otherwise the old rule: an untouched lobby, oldest first. The sort key
+    // changed, because the old one was `createdAt`, which /api/state does not
+    // return: every lobby scored 0 and "oldest first" was really "whatever
+    // order the poller happened to build". The game id encodes the slot it
+    // was opened for, so it is the creation time we actually have.
+    const open = lobbies.filter((g) => (g.players ?? 0) === 0);
+    open.sort((a, b) => Number(a.gameId) - Number(b.gameId));
     return open[0] ?? null;
   } catch { return null; }
 }

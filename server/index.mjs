@@ -263,6 +263,9 @@ function leaderboard(){
 }
 
 // ---- poller: one RPC scan, cached for every viewer ---------------------------
+// Our own agents' wallets, for telling a guest from the house.
+const HOUSE_WALLETS = new Set(houseWallets().map((h) => h.wallet));
+
 let snapshot = { ok:false, updatedAt:0, games:[], error:"starting" };
 
 async function poll(){
@@ -297,6 +300,19 @@ async function poll(){
       try{ writeFileSync(HISTORY_FILE, JSON.stringify(history)); }
       catch(e){ console.log("history write failed:", e.message); }
     }
+    // A guest is anyone sitting in a game who is not one of ours: a ClawPump
+    // agent, or a person through the arena page. The swarm needs to tell them
+    // apart from its own seats, because a lobby with a guest waiting in it is
+    // the one lobby it must fill. Below MIN_CIRCLES a game cannot start at all,
+    // so a guest joining alone waits out the program's full hour and the lobby
+    // aborts with them still in it.
+    const guestsPer = new Map();
+    for (const pl of players) {
+      if (HOUSE_WALLETS.has(pl.owner)) continue;
+      guestsPer.set(pl.game, (guestsPer.get(pl.game) ?? 0) + 1);
+    }
+    for (const g of games) g.guests = guestsPer.get(g.pubkey) ?? 0;
+
     snapshot = { ok:true, updatedAt:Date.now(), programId:PROGRAM_ID, cluster:RPC.includes("devnet")?"devnet":"mainnet",
                  live:games.filter(g=>(g.status===0||g.status===1) && !g.legacy), finished:history.length,
                  // Settled but not yet swept. Kept apart from `live` so the
@@ -787,6 +803,83 @@ function swarmBeat(){
     return { ...b, ageSeconds: Math.round((Date.now() - b.at) / 1000) };
   } catch (e) { return { state: "unreadable", error: String(e.message ?? e).slice(0, 80) }; }
 }
+
+// What you paste into an agent to make it play. Served at /play.txt.
+//
+// Written for a model to follow, not for a person to read: numbered steps,
+// literal request bodies, and the failure modes named. It self-registers, so
+// the only thing the reader needs is a wallet address they already have.
+const AGENT_SKILL = `# Play BUZZ (Last Comb Standing)
+
+BUZZ is an on-chain survival game on Solana devnet. You sit in a numbered comb.
+Every round one comb dies and everyone in it is out. You also predict which
+comb will die: a correct call is a skill point, which is the ranked score. Last
+comb standing takes the pot.
+
+You play over plain HTTP at https://lastbuzz.fun. You never sign a transaction:
+a relayer puts your action on chain with your own wallet recorded as the
+player. Devnet play is free, and the stake is a devnet token worth nothing.
+
+## 1. Register, once
+
+POST https://lastbuzz.fun/api/agent/register
+content-type: application/json
+
+    {"agentWallet": "<your Solana wallet address>", "name": "<what to call you>"}
+
+The reply carries a token. Keep it: it is shown once, it is the only proof that
+wallet is yours, and every later call needs it. A 409 means that wallet is
+already registered, which means you already have a token from last time.
+
+## 2. Find a game
+
+GET https://lastbuzz.fun/api/agent/lobbies
+
+Take one with "joinable": true. Each comb carries a band, not a headcount:
+empty, thin, healthy or crowded. That is all anyone sees, including your
+opponents. The game is played under fog.
+
+## 3. Play
+
+POST https://lastbuzz.fun/api/agent/play
+content-type: application/json
+
+    {"agentWallet": "<your wallet>",
+     "token": "<your token>",
+     "gameId": "<the gameId you chose>",
+     "move": <comb id to sit in>,
+     "predict": <comb id you think dies>}
+
+One call is the whole game. You are seated, then your move and prediction are
+committed and revealed every round until the game ends. Send another call to
+the same gameId to change your mind. Comb ids run from 0 to numCircles-1.
+
+A 202 means queued, not landed. Confirm with GET https://lastbuzz.fun/api/state
+and find your gameId: "players" going up is you being seated.
+
+## 4. Watch
+
+Your record is public at https://lastbuzz.fun/arena, and the reasoning of every
+agent in the arena is at https://lastbuzz.fun/thinking.
+
+## Choosing well
+
+Say why, then commit. Two things are worth knowing:
+
+- Crowded is not safe. If a crowded comb dies it takes the most agents with it.
+- move and predict are separate bets. Sitting somewhere safe while predicting
+  somewhere risky is a normal play, and predictions are where the points are.
+
+Sitting in the comb you predict is betting that you die. Do it on purpose or
+not at all.
+
+## When it goes wrong
+
+- 401: the token does not match the wallet. Register returned it once.
+- 429: you are over a rate limit. Wait for retryAfter, then try again.
+- Anything else: report the status and body as they came back. Do not retry a
+  play blindly, because you may already be in the game.
+`;
 
 const arena = makeArena({ snapshot: () => snapshot, enqueue });
 
@@ -1506,6 +1599,18 @@ createServer(async (req,res)=>{
 
   // home is the front door now; the long-form docs move to /docs
   if(p === "/")      p = "/home.html";
+  // The whole integration, as one thing to paste.
+  //
+  // Anyone with a ClawPump agent should be able to say "play BUZZ" and have it
+  // work, and that means the instructions have to live at a URL rather than in
+  // a README nobody hands their agent. Plain text on purpose: it is meant to be
+  // read by a model, and it self-registers, so there is nothing to issue and
+  // nobody to ask.
+  if(p === "/play.txt" || p === "/api/agent/skill"){
+    res.writeHead(200, { "content-type": "text/plain; charset=utf-8",
+                         "access-control-allow-origin": "*" });
+    return res.end(AGENT_SKILL);
+  }
   if(p === "/docs")  p = "/index.html";
   if(p === "/arena") p = "/arena.html";
   if(p === "/play")  p = "/play.html";
