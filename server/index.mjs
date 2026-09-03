@@ -398,11 +398,42 @@ async function poll(){
     scheduler?.once(snapshot);
     book?.once(snapshot);
     pollRelayer().then(pollFuel).then(pollFloat);
+    pollFails = 0;
   }catch(e){
+    pollFails++;
     snapshot = { ...snapshot, ok:false, error:String(e.message).slice(0,120), updatedAt:Date.now() };
   }
 }
-poll(); setInterval(poll, POLL_MS);
+
+/**
+ * Poll on a clock that gives way when the RPC is refusing.
+ *
+ * A fixed ten second interval is right when reads are being served and exactly
+ * wrong when they are not: the endpoint says no, and the answer is to ask again
+ * in ten seconds, and again, which is how a rate limit becomes a permanent one.
+ * Today that came to a head when the paid endpoint answered "max usage reached"
+ * for the month and everything fell through to public devnet, which cannot
+ * serve this arena at any interval.
+ *
+ * So consecutive failures double the wait, up to a ceiling, and one success
+ * puts it straight back. The board goes stale while the RPC is out, which it
+ * was going to do anyway, but the arena stops making it worse and recovers on
+ * its own the moment reads come back.
+ */
+let pollFails = 0;
+const POLL_MAX_MS = Number(process.env.POLL_MAX_MS ?? 5 * 60_000);
+function nextPollDelay(){
+  if (!pollFails) return POLL_MS;
+  return Math.min(POLL_MS * 2 ** Math.min(pollFails, 8), POLL_MAX_MS);
+}
+(async function pollLoop(){
+  for(;;){
+    await poll();
+    const wait = nextPollDelay();
+    if (pollFails === 1) console.log(`[poll] backing off: ${snapshot.error}`);
+    await new Promise((r) => setTimeout(r, wait));
+  }
+})();
 
 /**
  * Crank on its own clock, without paying for a whole-program scan.
