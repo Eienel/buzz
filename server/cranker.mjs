@@ -24,7 +24,7 @@ const STRANDED_AFTER = Number(process.env.STRANDED_AFTER ?? 120);
 // Mirrors MIN_CIRCLES in lib.rs: below this, start_game refuses.
 const MIN_CIRCLES = 4;          // mirrors LOBBY_TIMEOUT_SECONDS in lib.rs
 
-export function makeCranker({ program, payer, starter }) {
+export function makeCranker({ program, payer, starter, onDeath }) {
   const PID = program.programId;
   const warnedAuth = new Set();
   const pda = (...s) => PublicKey.findProgramAddressSync(s, PID)[0];
@@ -147,6 +147,16 @@ export function makeCranker({ program, payer, starter }) {
             await program.methods.executeDeath(g.doomed)
               .accountsPartial({ game, circle: combPda(game, g.doomed), cranker: payer.publicKey }).rpc();
             log(`game ${g.gameId}: comb ${g.doomed} died`);
+            // Grade this round's predictions.
+            //
+            // The swarm reports its own deaths to /api/agent/resolved, but only
+            // the swarm did, and either party can crank. Every round the server
+            // won the race left its predictions ungraded forever: the thinking
+            // page showed what the models said and never whether they were
+            // right, which is the half that costs something to admit. Measured
+            // before this went in: 106 of 143 answered calls carried a
+            // prediction that was never scored.
+            try { onDeath?.(g.gameId, g.instance, g.doomed); } catch {}
           } else {
             await program.methods.advanceInstance()
               .accountsPartial({ game, cranker: payer.publicKey }).rpc();

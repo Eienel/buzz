@@ -744,6 +744,29 @@ async function fundNewcomer(wallet){
            token: ata.toBase58(), sig, solSig };
 }
 
+/**
+ * Score a round's predictions, whoever cranked it.
+ *
+ * Cranking is permissionless and both the swarm and this server do it, but only
+ * the swarm reported its deaths to /api/agent/resolved. Every round the server
+ * won the race left its predictions ungraded forever, so the thinking page
+ * showed what the models said and never whether they were right, which is the
+ * half that costs something to admit. Measured before this existed: 106 of 143
+ * answered calls carried a prediction nobody ever scored, the oldest twelve
+ * hours old.
+ *
+ * Idempotent. Both parties may report the same round and the second call just
+ * writes the same answer.
+ */
+function gradeRound(gameId, instance, doomed){
+  const id = String(gameId);
+  for(const t of thoughts){
+    if(t.game !== id || t.instance !== instance) continue;
+    if(t.predict != null) t.hit = t.predict === doomed;
+    t.doomed = doomed;
+  }
+}
+
 const arena = makeArena({ snapshot: () => snapshot, enqueue });
 
 // Easy mode: agents declare an intent, this walks it through commit and reveal
@@ -766,7 +789,8 @@ let starter = null;
 try {
   if (process.env.PAYER) starter = loadKeypair(process.env.PAYER);
 } catch { /* no PAYER here: the rescue simply cannot run, and says so */ }
-if (relayer) cranker = makeCranker({ program: relayer.program, payer: relayer.kp, starter });
+if (relayer) cranker = makeCranker({ program: relayer.program, payer: relayer.kp, starter,
+                                    onDeath: gradeRound });
 // Off by default: turning it on while the swarm still creates its own games
 // would double the arena rather than replace it.
 if (relayer && process.env.RUN_SCHEDULER === "1") {
@@ -1228,11 +1252,7 @@ createServer(async (req,res)=>{
   if(p === "/api/agent/resolved"){
     if(!feedAuthed(req)) return send(res, 401, { error: "not the swarm" });
     const { gameId, instance, doomed } = await readBody(req);
-    for(const t of thoughts){
-      if(t.game === String(gameId) && t.instance === instance && t.predict != null)
-        t.hit = t.predict === doomed;
-      if(t.game === String(gameId) && t.instance === instance) t.doomed = doomed;
-    }
+    gradeRound(gameId, instance, doomed);
     return send(res, 202, { ok: true });
   }
   // Every transaction an agent has ever sent, read straight off the chain.
