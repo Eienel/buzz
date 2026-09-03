@@ -11,8 +11,17 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Keypair } from "@solana/web3.js";
-import { registerAgent, agentName } from "../server/arena-api.mjs";
+
+// The registry persists to DATA_DIR/agents.json, and DATA_DIR falls back to
+// server/ when unset, so importing this module from a test wrote registration
+// tokens into the working tree. Set before the import, because keypair.mjs
+// reads the variable once at module load.
+process.env.DATA_DIR = mkdtempSync(join(tmpdir(), "buzz-names-"));
+const { registerAgent, agentName } = await import("../server/arena-api.mjs");
 
 const fresh = () => Keypair.generate().publicKey.toBase58();
 const nameOf = (raw) => {

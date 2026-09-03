@@ -15,8 +15,15 @@ id.json
 Thumbs.db
 history.json
 
-# local run artefact: the feed writes here when DATA_DIR is unset
+# Local run artefacts: DATA_DIR falls back to server/ when unset, so anything
+# running from a checkout without it drops its state here. agents.json holds
+# registration tokens, so this is not only tidiness.
 server/thoughts.jsonl
+server/resolved.jsonl
+server/agents.json
+server/grades.json
+server/faucet.json
+server/swarm.json
 
 # scratch scripts used to measure things against a live chain
 *.tmp.mjs
