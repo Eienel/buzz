@@ -47,6 +47,11 @@ const USDC_DEFAULT = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"; // devnet U
 // degrades the arena instead of breaking it. See server/rpc.mjs.
 const BOOTED_AT = Date.now();
 const connection = makeConnection(RPC, { label: "rpc" });
+const RPC_HOST = (() => { try { return new URL(RPC).host; } catch { return null; } })();
+// Whether the program exists on the chain RPC points at. Declared here so the
+// API handler and the check below share it regardless of which runs first.
+// null until the check has answered; false is a misconfiguration, not a lull.
+let programPresent = null;
 // A 429 from inside the RPC client arrives as an unhandled rejection, and
 // node kills the process on those. It took the whole arena down repeatedly.
 surviveRateLimits("rpc");
@@ -1725,7 +1730,10 @@ createServer(async (req,res)=>{
         now: history.length,
         newestEndedAt: history.reduce((m, h) => Math.max(m, h.endedAt ?? 0), 0) || null,
       },
-      rpcHost: (() => { try { return new URL(RPC).host; } catch { return null; } })(),
+      rpcHost: RPC_HOST,
+      // false means the program is not on this chain, so an empty board is a
+      // misconfiguration rather than a quiet night. null means not checked yet.
+      programOnThisChain: programPresent,
       // The faucet spends the payer, so its remaining allowance is worth being
       // able to read without guessing from the outside.
       faucet: starter ? {
@@ -1785,6 +1793,39 @@ createServer(async (req,res)=>{
     res.writeHead(500,{ "content-type":"text/plain" }); res.end("read error");
   }
 }).listen(PORT, ()=>console.log(`buzz server on :${PORT} (rpc ${RPC}, poll ${POLL_MS}ms)`));
+
+/**
+ * Is the program actually on the chain we are pointed at?
+ *
+ * An RPC for the wrong cluster does not fail. It answers, cheerfully, that
+ * there are no games, because on that chain there is no program either. The
+ * board reads "ok" with an empty arena, which is indistinguishable from a quiet
+ * night, and this is exactly how it went: an Alchemy key pointed at
+ * solana-mainnet answered every read, reported cluster mainnet, zero live
+ * games, no error, while the program has only ever been deployed to devnet.
+ *
+ * So the one thing that separates the two is checked, once, and said loudly.
+ * It never blocks startup: a read that fails is not proof of anything, and the
+ * pages that do not need the chain should keep serving either way.
+ */
+(async function checkProgram(){
+  for(let i = 0; i < 5; i++){
+    try {
+      const info = await connection.getAccountInfo(PID);
+      programPresent = !!info?.executable;
+      if (programPresent) console.log(`[chain] program ${PROGRAM_ID} found on ${RPC_HOST}`);
+      else console.log(`[chain] WRONG CLUSTER: program ${PROGRAM_ID} does not exist on ` +
+                       `${RPC_HOST}. Every read will look like an empty arena. ` +
+                       `Point RPC at the cluster the program is deployed to.`);
+      return;
+    } catch (e) {
+      // A refused read says nothing about the cluster, so try again rather
+      // than accusing a working endpoint of being the wrong one.
+      await new Promise((r) => setTimeout(r, 3000 * (i + 1)));
+    }
+  }
+  console.log("[chain] could not read the program account to check the cluster");
+})();
 
 // ---- the reaper: settle and close what the swarm abandoned -------------------
 //
