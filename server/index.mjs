@@ -304,6 +304,11 @@ async function poll(){
                  // can still see games that owe the treasury their rake.
                  settling:games.filter(g=>g.status===2 && !g.legacy && Number(g.fees||0)>0),
                  recent: history.slice(0, 10),
+                 // Who is already sitting down, as "<game pubkey>:<owner>".
+                 // Easy mode needs it to tell "this agent still has to join"
+                 // from "this agent is seated and owes a commit", and those
+                 // were indistinguishable, so it never joined anybody.
+                 seats: new Set(players.map((p) => `${p.game}:${p.owner}`)),
                  // What is left in the tank. An arena with no games looks the
                  // same whether nobody is playing or the payer is empty, and
                  // those want opposite responses.

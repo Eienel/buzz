@@ -69,9 +69,39 @@ export function makeAutoplay({ enqueue, gamePdaFor }) {
     for (const [k, p] of plans) {
       const g = live.get(String(p.gameId));
       if (!g) { plans.delete(k); continue; }        // game gone: nothing to do
-      const instance = g.instance;
-      if (!instance) continue;                      // still in the lobby
       const game = gamePdaFor(p.gameId);
+
+      // Sit down first.
+      //
+      // This is the whole of easy mode's promise ("commit, reveal and timing
+      // are handled") and it was the one step missing: tick committed and
+      // revealed for a seat the caller never had. A lobby has instance 0, the
+      // loop returned right here on `!instance`, and by the time the game
+      // started the agent had never joined, so every later commit was for a
+      // player account that does not exist. /api/agent/play answered
+      // {"accepted":true} and nothing ever happened. Reproduced against the
+      // live arena with the ClawPump agent's own wallet: accepted, queue 0,
+      // seated 0, game started without it.
+      //
+      // The move is the comb to sit in, because that is what a move means
+      // before there is a seat to move from. join creates the comb or joins
+      // the existing one, so a first mover opens it and the rest fill it.
+      const seated = snapshot.seats?.has(`${game}:${p.agentWallet}`) ?? false;
+      if (!seated) {
+        // Only in the lobby: joining a running game is what the program
+        // refuses anyway, and retrying it every tick would queue junk.
+        if (g.status === 0 && !p.joinQueued) {
+          p.joinQueued = true;
+          enqueue({ kind: "join", agentWallet: p.agentWallet, gameId: p.gameId,
+                    combId: p.move ?? 0 });
+        }
+        continue;                                   // nothing to commit yet
+      }
+      // Seated now, so a later game for the same agent gets its own join.
+      p.joinQueued = false;
+
+      const instance = g.instance;
+      if (!instance) continue;                      // seated, waiting for the start
 
       // phase 0 commit, 1 reveal, 2 resolving, 3 scoring
       if (g.phase === 0 && p.committedFor !== instance) {
