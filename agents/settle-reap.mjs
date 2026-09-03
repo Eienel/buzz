@@ -112,10 +112,6 @@ async function batch(label, ixs, signers = []) {
 const before = await connection.getBalance(payer.publicKey);
 log("reading the backlog…");
 const games = await decodeAll("game");
-await sleep(PAUSE);
-const players = await decodeAll("player");
-await sleep(PAUSE);
-const circles = await decodeAll("circle");
 
 // Aborted lobbies count too. They never ran, so nobody thinks of them as a
 // backlog, but there are hundreds of them and each one holds a Game, its combs
@@ -130,19 +126,81 @@ const DO_ABORTED = process.env.ABORTED === "1";
 const settling = games.filter((g) =>
   g.data.status.settling || (DO_ABORTED && g.data.status.aborted));
 const aborted = settling.filter((g) => g.data.status.aborted).length;
-log(`${games.length} games, ${settling.length - aborted} in Settling, ${aborted} aborted, ` +
-    `${players.length} players, ${circles.length} circles`);
+log(`${games.length} games, ${settling.length - aborted} in Settling, ${aborted} aborted`);
 
 // Newest first: the recent backlog is the part somebody might still claim.
 settling.sort((a, b) => Number(b.data.gameId) - Number(a.data.gameId));
 const work = LIMIT ? settling.slice(0, LIMIT) : settling;
 log(`working ${work.length} games\n`);
 
-let settled = 0, closed = 0, skippedForeign = 0;
+// Players and combs are read for the games in hand, not scanned off the whole
+// program.
+//
+// This used to be two getProgramAccounts calls that pulled every player and
+// every comb the program has ever held, filtered in memory to the game being
+// worked. That is a fixed cost paid once per pass no matter how few games the
+// pass clears, and it grows with the backlog, so the fuller the pile got the
+// less of it each pass could afford to move. Measured before this change:
+// 11,768 accounts on the program, roughly 6,200 players and 4,700 combs, read
+// in full every ten minutes to settle at most 60 games.
+//
+// Both are PDAs, so neither needs a search. A comb is ["circle", game, id] for
+// id below num_circles, and a player is ["player", game, owner], and the only
+// players this can settle are the house wallets it holds keys for: a foreign
+// player is skipped either way. So the addresses are derived and fetched in
+// batches of 100, and the cost is now per game worked rather than per account
+// in existence.
+//
+// The one thing lost is the skippedForeign count, which was read off players
+// this never had any business touching. A game still holding one refuses
+// close_game with PlayersRemain, which `step` already swallows quietly, so the
+// behaviour is the same and only the tally is gone.
+const HOUSE = houseWallets();
+const playerKeys = new Map();      // game pubkey -> [{ pubkey, owner, name }]
+const combKeys = new Map();        // game pubkey -> [{ pubkey, id }]
+const wanted = [];
+for (const { pubkey: gamePda, data: g } of work) {
+  const ps = HOUSE.map(({ name }) => {
+    const owner = agentKey(name).publicKey;
+    return { pubkey: pda(Buffer.from("player"), gamePda.toBuffer(), owner.toBuffer()), owner, name };
+  });
+  const cs = Array.from({ length: g.numCircles }, (_, id) => ({
+    pubkey: pda(Buffer.from("circle"), gamePda.toBuffer(), Buffer.from([id])), id }));
+  playerKeys.set(gamePda.toBase58(), ps);
+  combKeys.set(gamePda.toBase58(), cs);
+  wanted.push(...ps.map((x) => x.pubkey), ...cs.map((x) => x.pubkey));
+}
+
+const accounts = new Map();
+for (let i = 0; i < wanted.length; i += 100) {
+  const slice = wanted.slice(i, i + 100);
+  const got = await connection.getMultipleAccountsInfo(slice);
+  for (let j = 0; j < slice.length; j++) if (got[j]) accounts.set(slice[j].toBase58(), got[j]);
+  await sleep(PAUSE);
+}
+log(`read ${accounts.size} live accounts across ${work.length} games ` +
+    `(${wanted.length} addresses derived, no program scan)\n`);
+
+/** Decode one derived address, or null: an old layout is not ours to settle. */
+const decodeAt = (name, pubkey) => {
+  const acc = accounts.get(pubkey.toBase58());
+  if (!acc) return null;
+  try { return program.coder.accounts.decode(name, acc.data); } catch { return null; }
+};
+
+let settled = 0, closed = 0;
 
 for (const [n, { pubkey: gamePda, data: g }] of work.entries()) {
-  const mine = players.filter((p) => p.data.game.equals(gamePda));
-  const combs = circles.filter((c) => c.data.game.equals(gamePda));
+  const mine = [];
+  for (const { pubkey, name } of playerKeys.get(gamePda.toBase58())) {
+    const data = decodeAt("player", pubkey);
+    if (data) mine.push({ pubkey, data, name });
+  }
+  const combs = [];
+  for (const { pubkey } of combKeys.get(gamePda.toBase58())) {
+    const data = decodeAt("circle", pubkey);
+    if (data) combs.push({ pubkey, data });
+  }
   const winner = combs.find((c) => c.data.alive)?.data.circleId ?? null;
   const mint = g.stakeMint;
   const mintAcc = await connection.getAccountInfo(mint);
@@ -154,9 +212,7 @@ for (const [n, { pubkey: gamePda, data: g }] of work.entries()) {
 
   const abortedGame = !!g.status.aborted;
   const closeIxs = [];
-  for (const { pubkey: P, data: p } of mine) {
-    const name = nameOf.get(p.owner.toBase58());
-    if (!name) { skippedForeign++; continue; }         // not ours to claim for
+  for (const { pubkey: P, data: p, name } of mine) {
     const kp = agentKey(name);
     const ownerToken = getAssociatedTokenAddressSync(mint, kp.publicKey, false, tokenProgram);
     const base = { game: gamePda, vault, player: P, owner: kp.publicKey, actor: kp.publicKey,
@@ -244,35 +300,60 @@ for (const [n, { pubkey: gamePda, data: g }] of work.entries()) {
 // Rent from players and circles lands in the agent wallets, not here. Sweep it
 // back with the payer as fee payer, so no agent needs a balance of its own.
 //
-// SWEEP=0 leaves them alone. The swarm funds an agent before it plays and
-// sweeps it afterwards, so a sweep that lands in the middle of a live game
-// takes the lamports that agent was about to spend on its own accounts. Fine
-// for a one-off reap of a dead backlog, not fine on a timer next to a running
-// arena, which is why the periodic reaper turns it off.
-let swept = 0;
+// Down to a floor, not to zero, and this is the whole difference between the
+// reaper paying for itself and quietly draining the arena.
+//
+// A sweep to zero next to a running arena takes the lamports an agent was
+// funded with and is about to spend on its own accounts, so the periodic
+// reaper ran with SWEEP=0 instead. That does not avoid the problem, it moves
+// it: close_player and close_circle pay rent to the account's owner, which is
+// the agent, while the fees come off the payer here. Measured on a 25 game
+// pass: 137 players settled, 237 accounts closed, payer 1.8867 -> 1.7040 SOL,
+// a net loss of 0.1827 every ten minutes. Meanwhile 4.3565 SOL had piled up
+// across 39 agent wallets, and the payer was heading for the floor below which
+// the swarm stops playing at all.
+//
+// So the sweep is back on and it leaves each agent a float instead. The swarm
+// funds an agent with FUND (0.012 SOL) before a game; twice that stays behind,
+// which covers a game already in flight and its claims, and everything above it
+// comes home. SWEEP=0 still turns the whole thing off for a one-off reap where
+// the arena is stopped anyway.
+const FUND = 12_000_000;                             // mirrors FUND in swarm.mjs
+const FLOOR = Number(process.env.SWEEP_FLOOR_SOL ?? 0.024) * LAMPORTS_PER_SOL;
+// Below this the transfer costs more in fees than it moves.
+const WORTH_IT = Number(process.env.SWEEP_MIN_SOL ?? 0.001) * LAMPORTS_PER_SOL;
+let swept = 0, left = 0;
 if (process.env.SWEEP === "0") log("\nleaving the agent wallets alone (SWEEP=0)");
 else {
-log("\nsweeping the agent wallets…");
+log(`\nsweeping the agent wallets down to ${(FLOOR / LAMPORTS_PER_SOL).toFixed(3)} SOL…`);
 const { Transaction } = await import("@solana/web3.js");
-for (const { wallet, name } of houseWallets()) {
+const HOUSE = houseWallets();
+const keys = HOUSE.map(({ name }) => agentKey(name).publicKey);
+// One read for all of them rather than 39 round trips, the same reason the
+// players and combs above are batched.
+const infos = [];
+for (let i = 0; i < keys.length; i += 100) infos.push(...await connection.getMultipleAccountsInfo(keys.slice(i, i + 100)));
+for (const [i, { name }] of HOUSE.entries()) {
+  const bal = infos[i]?.lamports ?? 0;
+  const take = bal - FLOOR;
+  left += Math.min(bal, FLOOR);
+  if (take < WORTH_IT) continue;
   const kp = agentKey(name);
-  const bal = await connection.getBalance(kp.publicKey);
-  if (bal <= 0) continue;
   try {
     const tx = new Transaction().add(SystemProgram.transfer({
-      fromPubkey: kp.publicKey, toPubkey: payer.publicKey, lamports: bal }));
+      fromPubkey: kp.publicKey, toPubkey: payer.publicKey, lamports: take }));
     tx.feePayer = payer.publicKey;
     await program.provider.sendAndConfirm(tx, [kp]);
-    swept += bal;
-    log(`  ${name}: ${(bal / LAMPORTS_PER_SOL).toFixed(4)} SOL`);
+    swept += take;
+    log(`  ${name}: ${(take / LAMPORTS_PER_SOL).toFixed(4)} SOL`);
   } catch (e) { log(`  sweep ${name}: ${String(e.message).slice(0, 60)}`); }
   await sleep(PAUSE);
 }
+log(`  left ${(left / LAMPORTS_PER_SOL).toFixed(4)} SOL as float across ${HOUSE.length} wallets`);
 }
 
 const after = await connection.getBalance(payer.publicKey);
 log(`\nsettled ${settled} players, closed ${closed} accounts`);
-if (skippedForeign) log(`left ${skippedForeign} players alone: not our wallets to claim for`);
 log(`swept ${(swept / LAMPORTS_PER_SOL).toFixed(4)} SOL from agent wallets`);
 log(`payer ${(before / LAMPORTS_PER_SOL).toFixed(4)} -> ${(after / LAMPORTS_PER_SOL).toFixed(4)} SOL ` +
     `(net ${((after - before) / LAMPORTS_PER_SOL).toFixed(4)})`);
