@@ -771,6 +771,18 @@ function gradeRound(gameId, instance, doomed){
   }
 }
 
+/** The swarm's heartbeat, or why there isn't one. Never throws. */
+const SWARM_BEAT = join(DATA_DIR, "swarm.json");
+function swarmBeat(){
+  try {
+    if (!existsSync(SWARM_BEAT)) return { state: "no heartbeat yet" };
+    const b = JSON.parse(readFileSync(SWARM_BEAT, "utf8"));
+    // The age is the useful half. A loop that last moved eleven minutes ago is
+    // wedged whatever its last state said it was doing.
+    return { ...b, ageSeconds: Math.round((Date.now() - b.at) / 1000) };
+  } catch (e) { return { state: "unreadable", error: String(e.message ?? e).slice(0, 80) }; }
+}
+
 const arena = makeArena({ snapshot: () => snapshot, enqueue });
 
 // Easy mode: agents declare an intent, this walks it through commit and reveal
@@ -1448,6 +1460,10 @@ createServer(async (req,res)=>{
         market: process.env.RUN_MARKET !== "0",
         reaper: process.env.RUN_REAPER === "1",
       },
+      // What the swarm says it is doing, from the file it writes each turn of
+      // its loop. `running.swarm` only says a child was spawned, which stayed
+      // true through 25 minutes of a hung swarm and an empty arena.
+      swarm: swarmBeat(),
       rpcHost: (() => { try { return new URL(RPC).host; } catch { return null; } })(),
       // The faucet spends the payer, so its remaining allowance is worth being
       // able to read without guessing from the outside.
@@ -1536,10 +1552,16 @@ if (process.env.RUN_REAPER === "1") {
     if (running) return;
     running = true;
     try {
-      // SWEEP=0: the swarm funds its agents before a game and sweeps them
-      // after, so pulling their balances mid-game would take the lamports they
-      // are about to spend. The rent still comes back, one game later.
-      await run("settle-reap.mjs", { LIMIT: String(NEWEST), SWEEP: "0", ABORTED: "1" });
+      // The sweep is on, down to a float rather than to zero.
+      //
+      // It used to run with SWEEP=0 so a mid-game agent never lost the lamports
+      // it was funded with. That made every pass a net loss: the closes pay
+      // rent to the agent that owns the account while the fees come off the
+      // payer, so the payer fell 0.18 SOL a pass while 4.36 SOL piled up across
+      // 39 agent wallets it never took back. settle-reap now leaves each agent
+      // twice its funding and sweeps the rest, which covers a game in flight
+      // and still brings the rent home.
+      await run("settle-reap.mjs", { LIMIT: String(NEWEST), ABORTED: "1" });
       await run("reap-market.mjs", { LIMIT: String(NEWEST) });
     } finally { running = false; }
   };

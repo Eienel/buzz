@@ -15,11 +15,12 @@ import { makeConnection, surviveRateLimits } from "../server/rpc.mjs";
 import { getOrCreateAssociatedTokenAccount, mintTo, getAssociatedTokenAddressSync } from "@solana/spl-token";
 import jsSha3 from "js-sha3";
 const { keccak_256 } = jsSha3;
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { decide, reasoningEnabled, modelFor, personaFor } from "./reason.mjs";
 import * as feed from "./feed.mjs";
 import { makeBudget, totalPointsOf } from "./budget.mjs";
-import { loadKeypair } from "../server/keypair.mjs";
+import { loadKeypair, DATA_DIR } from "../server/keypair.mjs";
+import { join } from "node:path";
 
 const { AnchorProvider, Program, Wallet, BN } = anchorPkg;
 
@@ -328,6 +329,32 @@ function withDeadline(promise, ms, what) {
   ]);
 }
 
+/**
+ * Say what the swarm is doing, somewhere outside the swarm.
+ *
+ * The arena spent 25 minutes today with every lobby at zero players and no
+ * inference calls at all, and there was no way to tell a hung swarm from a
+ * slow one without a log viewer: the supervisor only restarts a process that
+ * exits, and this one was alive the whole time. `running.swarm` on /api/version
+ * says a child was spawned, which is a different fact and the one that was
+ * already true.
+ *
+ * So each turn of the loop writes what it is doing to the volume the thoughts
+ * already use, and the server serves it. Best effort in both directions: a
+ * write that fails must never cost a game a round, and a stale file is itself
+ * the answer, because the timestamp says how long ago the loop last moved.
+ */
+const BEAT = join(DATA_DIR, "swarm.json");
+let beatErr = null;
+function beat(state, extra = {}) {
+  try {
+    writeFileSync(BEAT, JSON.stringify({ at: Date.now(), state, pid: process.pid,
+                                         bootedAt: BOOTED, ...extra }));
+  } catch (e) { beatErr = String(e.message ?? e).slice(0, 80); }
+}
+const BOOTED = Date.now();
+beat("booting");
+
 // Last time anything finished. If nothing does for long enough the process is
 // wedged in a way it cannot see, and the only honest move is to die so the
 // supervisor can restart it.
@@ -340,6 +367,7 @@ const STALL_EXIT_MS = Number(process.env.STALL_EXIT_MS ?? GAME_DEADLINE_MS + 300
 setInterval(() => {
   if (Date.now() - lastProgress < STALL_EXIT_MS) return;
   log(`no game finished in ${Math.round(STALL_EXIT_MS / 60000)}m, exiting so the supervisor restarts`);
+  beat("stalled, exiting", { stalledMs: Date.now() - lastProgress });
   process.exit(1);
 }, 30_000).unref();
 
@@ -830,15 +858,25 @@ const launch = (n) => {
   return task;
 };
 
+const since = () => Math.round((Date.now() - lastProgress) / 1000);
 while (N_GAMES === 0 || started < N_GAMES) {
   while (inflight.size < MAX_CONCURRENT && (N_GAMES === 0 || started < N_GAMES)) {
     // Checked before every game, not once at boot. A game started on an empty
     // payer cannot be settled, and an unsettled game strands its rent for good.
-    if (!(await fuelled())) break;
+    beat("checking fuel", { started, inflight: inflight.size, sinceProgressSeconds: since() });
+    if (!(await fuelled())) { beat("unfuelled", { started, inflight: inflight.size }); break; }
     launch(started++);
+    beat("launched", { started, inflight: inflight.size, sinceProgressSeconds: since() });
     if (inflight.size < MAX_CONCURRENT) await sleep(STAGGER_MS);
   }
-  if (!inflight.size && !(await fuelled())) { await sleep(30_000); continue; }
+  // Nothing running and no fuel is the one state that waits forever without
+  // saying so: fuelled() returns false for a read it could not make as well as
+  // for a wallet that is genuinely empty, and both look like silence.
+  if (!inflight.size && !(await fuelled())) {
+    beat("idle, no fuel", { started, sinceProgressSeconds: since() });
+    await sleep(30_000); continue;
+  }
+  beat("playing", { started, inflight: inflight.size, sinceProgressSeconds: since() });
   // Promise.race on an empty set never settles, and node exits 13 on an
   // unsettled top-level await. That is reachable: if every game fails fast the
   // set drains before we get here.
