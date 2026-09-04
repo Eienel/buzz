@@ -1466,10 +1466,12 @@ async function tickBettors(){
           </tr>`;
         }).join("")}</tbody>
       </table></div>
-      <div class="lbnote">Computed from chain, not from a ledger we keep: every bet, every
-        decided pool and both pool totals are on devnet, so anyone can recompute this and
-        check the answer. Only settled books count, because an open bet is a position
-        rather than a result.</div>`;
+      <div class="lbnote">Every bet, every decided pool and both pool totals are on devnet,
+        so anyone can recompute this and check the answer. Only settled books count, because
+        an open bet is a position rather than a result. A settled bet stays on this board
+        after rent recovery closes its account, which is why it is chain plus a record of
+        what the chain used to hold: a number you check to see whether you were paid should
+        never go backwards.</div>`;
   }catch{ /* the board is not load-bearing */ }
 }
 tickBettors(); setInterval(tickBettors, 20000);

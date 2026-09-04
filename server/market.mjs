@@ -11,6 +11,9 @@
 
 import anchorPkg from "@coral-xyz/anchor";
 import { PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { DATA_DIR } from "./keypair.mjs";
 import { getAssociatedTokenAddressSync,
          createAssociatedTokenAccountIdempotentInstruction } from "@solana/spl-token";
 
@@ -26,6 +29,26 @@ const log = (...a) => console.log(new Date().toISOString().slice(11, 19), "[book
  * see the board and still early enough that most of the field is alive.
  */
 const LOCK_AFTER = Number(process.env.MARKET_LOCK_AFTER ?? 2);
+
+/**
+ * Settled bets, remembered past the life of their accounts.
+ *
+ * Keyed by the Bet account's own address, so a row cannot be counted twice
+ * while the chain still holds it, and cannot be lost once it does not. Kept on
+ * the same volume as the game history for the same reason: the chain is the
+ * archive of what happened, this is a window on what it used to say.
+ */
+const LEDGER = join(DATA_DIR, "bets.json");
+function loadLedger() {
+  try {
+    if (!existsSync(LEDGER)) return new Map();
+    return new Map(Object.entries(JSON.parse(readFileSync(LEDGER, "utf8"))));
+  } catch { return new Map(); }
+}
+function saveLedger(m) {
+  try { writeFileSync(LEDGER, JSON.stringify(Object.fromEntries(m))); }
+  catch (e) { log("ledger write failed:", String(e.message ?? e).slice(0, 80)); }
+}
 
 export function makeMarket({ program, payer, connection }) {
   const PID = program.programId;
@@ -333,6 +356,21 @@ export function makeMarket({ program, payer, connection }) {
      * it would rank people on positions rather than on outcomes.
      */
     async bettors() {
+      // Settled bets are remembered, because the reaper deletes them.
+      //
+      // This was computed purely from live accounts, which is the honest way to
+      // do it right up until rent recovery closes a claimed Bet and its
+      // TargetPool. Then a bettor's own record shrinks under them: watched
+      // live, one bettor went from 3 bets, 33% hit rate, 50 staked to 2 bets,
+      // 0%, 40 staked within minutes, because the winning one had been reaped.
+      // A number somebody checks to see whether they were paid must never go
+      // backwards.
+      //
+      // So every settled bet is written down the first time it is seen, keyed
+      // by its own account, and the answer is chain plus ledger. Anyone can
+      // still recompute the chain half; the ledger only holds rows the chain
+      // used to hold and no longer does.
+      const seenBets = loadLedger();
       const load = async (name) => {
         const raw = await connection.getProgramAccounts(PID, {
           filters: [{ memcmp: { offset: 0, bytes: program.coder.accounts.memcmp(name).bytes } }],
@@ -369,6 +407,21 @@ export function makeMarket({ program, payer, connection }) {
         r.bets += 1; r.hits += pool.won ? 1 : 0;
         r.staked += stake; r.returned += payout;
         by.set(k, r);
+        graded += 1;
+        seenBets.set(b.pubkey.toBase58(),
+          { bettor: k, stake, payout, won: !!pool.won, at: seenBets.get(b.pubkey.toBase58())?.at ?? Date.now() });
+      }
+      saveLedger(seenBets);
+      // Anything the ledger holds that the chain no longer does. Counted once:
+      // the key is the bet's own account, so a row cannot be double counted
+      // while it is still on chain.
+      const onChain = new Set(bets.map((b) => b.pubkey.toBase58()));
+      for (const [key, row] of seenBets) {
+        if (onChain.has(key)) continue;
+        const r = by.get(row.bettor) ?? { bettor: row.bettor, bets: 0, hits: 0, staked: 0, returned: 0 };
+        r.bets += 1; r.hits += row.won ? 1 : 0;
+        r.staked += row.stake; r.returned += row.payout;
+        by.set(row.bettor, r);
         graded += 1;
       }
       const bettors = [...by.values()].map((r) => ({
