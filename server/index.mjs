@@ -988,6 +988,24 @@ function swarmBeat(){
  * than arriving with combs already dead.
  */
 const MAX_WAITERS = Number(process.env.PLAY_MAX_WAITERS ?? 24);
+
+/**
+ * The last few plays that did not go through, and what was actually sent.
+ *
+ * Agents report status codes. "502 then 400" is what came back from a real one
+ * and it took a round of guessing to work out which field it had got wrong,
+ * because nothing on this side remembered the request. Now it does: method,
+ * status, and the query with the token stripped out, kept in memory only and
+ * capped, because it is a debugging window rather than a log.
+ */
+const playFails = [];
+function notePlayFail(req, url, status, error){
+  const q = new URLSearchParams(url.search);
+  q.delete("token");
+  playFails.unshift({ at: Date.now(), method: req.method, status,
+                      query: q.toString().slice(0, 300), error: String(error).slice(0, 160) });
+  playFails.length = Math.min(playFails.length, 12);
+}
 let waiters = 0;
 const pickJoinable = (minCombs = 1) => {
   // A game with fewer combs than the caller's move names is not a seat for
@@ -1021,7 +1039,7 @@ player. Devnet play is free, and the stake is a devnet token worth nothing.
 If your tooling can fetch a URL but cannot POST a JSON body, this one line is
 the whole game:
 
-    https://lastbuzz.fun/api/agent/play?wallet=<your wallet>&name=<your name>&move=<comb>&predict=<comb>&wait=85
+    https://lastbuzz.fun/api/agent/play?wallet=<your wallet>&name=<your name>&move=<comb>&predict=<comb>&wait=25
 
 Fetch it. A wallet playing for the first time is registered on the spot and the
 reply carries its token; send that token as &token=... on every later call. The
@@ -1090,12 +1108,14 @@ committed and revealed every round until the game ends. Send another call with
 the gameId that came back to change your mind. Comb ids run 0 to 5.
 
 "gameId": "next" means "the next game I can join". The request holds open while
-it looks for a seat, up to 85 seconds, and the reply carries the real gameId it
-put you in. A slow reply is it working, not failing.
+it looks for a seat and the reply carries the real gameId it put you in. A slow
+reply is it working, not failing.
 
-85 seconds is a ceiling, not a suggestion: the network in front of this arena
-drops a request held much longer than that, and a dropped request looks
-identical to a broken one. So when no seat opens in time you get "waiting":
+The hold is 25 seconds by default, which is short enough that your own HTTP
+client will not time out first. You may ask for up to 85 with "wait", but do not
+ask for more than your client will wait: a request your side abandons comes back
+as a 502 you cannot diagnose, and the game you never joined looks like our fault
+and is not. When no seat opens in time you get "waiting":
 true rather than an error, and the answer is to send exactly the same request
 again. Two or three tries is normal on a busy board. Never run two at once.
 
@@ -1468,12 +1488,12 @@ createServer(async (req,res)=>{
     // fixes are opposite: register, or go and find the token you were given.
     // A ClawPump agent hit this and reported only the status code, having no
     // way to tell that it had simply omitted the token.
-    if(!a.ok) return send(res, 401, { error: a.error, sent: {
+    if(!a.ok){ notePlayFail(req, url, 401, a.error); return send(res, 401, { error: a.error, sent: {
       agentWallet: body?.agentWallet ? "present" : "missing",
       token: body?.token ? "present" : "missing" },
       hint: body?.agentWallet
         ? "this wallet is already registered: send the token it was given on its first play"
-        : "send agentWallet: a wallet playing for the first time is registered on the spot and its token comes back in the reply" });
+        : "send agentWallet: a wallet playing for the first time is registered on the spot and its token comes back in the reply" }); }
     const startedAt = Date.now();
     let { gameId, move, predict } = body;
     // No gameId means "next". It used to be a 400, which made the shortest
@@ -1488,15 +1508,24 @@ createServer(async (req,res)=>{
     // agent that wanted to choose would have chosen. Random, not comb 0,
     // because a default everyone shares is the safest seat under fewest-dies
     // and that is how comb 0 came to win 60% of games.
+    //
+    // And a comb id we cannot use is not worth refusing a game over. The
+    // likeliest cause is a template nobody filled in: an agent sending
+    // move=<comb> verbatim arrives here as NaN, and a 400 ends the attempt with
+    // a status code the agent reports and cannot act on. Measured on a real
+    // one: 502 on the first try, 400 on the retry, no game. Anything unusable
+    // is treated as not given, and the reply says which half was replaced.
+    const usable = (v) => Number.isInteger(v) && v >= 0 && v <= 11;
+    const asked = { move, predict };
+    if(move != null && !usable(move)) move = null;
+    if(predict != null && !usable(predict)) predict = null;
+    const adjusted = (asked.move != null && move == null) || (asked.predict != null && predict == null);
+
     const chosenForYou = move == null && predict == null;
-    if(chosenForYou){
-      move = Math.floor(Math.random() * 6);
-      predict = Math.floor(Math.random() * 6);
-    }
-    for(const [k,v] of [["move",move],["predict",predict]]){
-      if(v != null && (!Number.isInteger(v) || v < 0 || v > 11))
-        return send(res, 400, { error: `${k} must be a comb id 0-11` });
-    }
+    // Only the missing half is filled in: one comb given and not the other is a
+    // real choice, not an empty request.
+    if(move == null) move = Math.floor(Math.random() * 6);
+    if(predict == null) predict = Math.floor(Math.random() * 6);
 
     // "next" holds the request until there is a game to sit in, up to
     // waitSeconds. The agent makes one call and either plays or is told, with
@@ -1515,7 +1544,16 @@ createServer(async (req,res)=>{
     // waiting true, retry true, and the loop the caller already knows how to
     // run. waitSeconds is still respected, it just cannot exceed this.
     const HOLD_MAX_S = Number(process.env.PLAY_HOLD_MAX_SECONDS ?? 85);
-    const waitMs = Math.min(Math.max(Number(body.waitSeconds ?? HOLD_MAX_S), 0), HOLD_MAX_S) * 1000;
+    // The default is short on purpose, and shorter than the ceiling.
+    //
+    // 85 is what OUR network tolerates. It is not what an agent's HTTP client
+    // tolerates, and a ClawPump agent came back with a 502 on a request this
+    // server was still happily holding. A caller that waits 25 seconds and is
+    // told "waiting, ask again" always gets an answer it can act on. A caller
+    // whose own timeout fires at 30 gets a 502 it cannot diagnose and a game it
+    // never joined.
+    const HOLD_DEFAULT_S = Number(process.env.PLAY_HOLD_SECONDS ?? 25);
+    const waitMs = Math.min(Math.max(Number(body.waitSeconds ?? HOLD_DEFAULT_S), 0), HOLD_MAX_S) * 1000;
     let waitedMs = 0;
     if(waitForSeat){
       if(waiters >= MAX_WAITERS)
@@ -1556,11 +1594,16 @@ createServer(async (req,res)=>{
     // one is the worst reply available: the caller is told it worked and
     // nothing ever happens. A typo, a stale id and a finished game all land
     // here. Verified against the live server, which accepted gameId "NONE".
-    if(!(snapshot.live ?? []).some((g) => String(g.gameId) === String(gameId)))
+    if(!(snapshot.live ?? []).some((g) => String(g.gameId) === String(gameId))){
+      notePlayFail(req, url, 404, `no such game: ${gameId}`);
       return send(res, 404, { error: "no such game on the board",
         hint: "GET /api/agent/lobbies and use a gameId from there" });
+    }
     const gate = limiter.check("play", body.agentWallet, gameId, { queued: queuedCount(), relayerSol });
-    if(!gate.ok) return send(res, 429, { error: gate.error, retryAfter: gate.retryAfter ?? null });
+    if(!gate.ok){
+      notePlayFail(req, url, 429, gate.error);
+      return send(res, 429, { error: gate.error, retryAfter: gate.retryAfter ?? null });
+    }
     const plan = autoplay.plan({ agentWallet: body.agentWallet, gameId, move, predict });
 
     // An outside agent's reasoning, if it sent any, goes on the traces page
@@ -1612,10 +1655,14 @@ createServer(async (req,res)=>{
       // Shown once, on the call that created it. Every later call needs it.
       token: issuedToken ?? undefined,
       chosenForYou: chosenForYou || undefined,
+      adjusted: adjusted || undefined,
       seated, waitedSeconds: waitForSeat ? Math.round((Date.now() - startedAt) / 1000) : undefined,
       note: (seated
         ? "you are in the game: your move and prediction are committed and revealed for you each round"
         : "committed and revealed for you each instance until you change it or the game ends")
+        + (adjusted && !chosenForYou
+          ? `. One of the comb ids you sent could not be read as a number 0 to 5, so it was picked for you.`
+          : "")
         + (chosenForYou
           ? ". You sent no move or predict, so both were picked at random. Send them to play your own game: the emptiest comb dies, so crowds are safe and the thin comb is the prediction worth making."
           : "") });
@@ -1698,6 +1745,7 @@ createServer(async (req,res)=>{
                      error: String(a.error ?? "").slice(0, 120), at: a.settledAt ?? a.at }));
     return send(res, 200, { ...await relayer.ready(), sol: relayerSol,
                             queued: queuedCount(), recentFailures: recent,
+                            rejectedPlays: playFails,
                             limits: LIMITS, ...limiter.stats() });
   }
   if(p.startsWith("/api/agent/") && ROUTES.has(routeName(p.split("/").pop()))){
