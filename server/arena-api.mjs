@@ -131,6 +131,29 @@ export function registerAgent({ agentWallet, name }) {
     note: "store this token, it is shown once and cannot be recovered" } };
 }
 
+/**
+ * Hand a wallet a fresh token, for a wallet that has nothing to protect yet.
+ *
+ * The auto-registering play call is not idempotent on its own: the first
+ * request registers the wallet, and if anything retries it (an agent's HTTP
+ * client, a proxy timing out a held request, a person pressing the button
+ * twice) the retry arrives with no token against a wallet that now has one,
+ * and the answer is 401 for a wallet that has never played. Reproduced against
+ * the live arena: a held request retried at 14 seconds locked out a wallet
+ * created 14 seconds earlier.
+ *
+ * So a token is re-issued while the wallet's record is empty. What the token
+ * protects is a record, and a wallet with no games has none. The caller checks
+ * that, not this.
+ */
+export function reissueToken(agentWallet) {
+  const a = agents.get(agentWallet);
+  if (!a) return null;
+  a.token = randomToken();
+  persistAgents();
+  return a.token;
+}
+
 export function authed(body) {
   const a = agents.get(body?.agentWallet);
   if (!a) return { ok: false, error: "wallet not registered: call register first" };

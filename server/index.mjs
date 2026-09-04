@@ -17,7 +17,7 @@ import { spawn } from "node:child_process";
 import jsSha3 from "js-sha3";
 import { Connection, PublicKey, SystemProgram, Transaction,
          sendAndConfirmTransaction } from "@solana/web3.js";
-import { makeArena, PRICE, challenge, registerAgent, authed, agentName, isJoinable } from "./arena-api.mjs";
+import { makeArena, PRICE, challenge, registerAgent, reissueToken, authed, agentName, isJoinable } from "./arena-api.mjs";
 import { makeAutoplay } from "./autoplay.mjs";
 import { makeLimiter, LIMITS } from "./limits.mjs";
 import { loadKeypair } from "./keypair.mjs";
@@ -253,6 +253,11 @@ const label = (wallet) => {
   const { name, house } = nameFor(wallet, agentName);
   return { agent: wallet, name, house };
 };
+
+/** Whether this wallet has anything at stake: a finished game, or a live seat. */
+const played = (wallet) =>
+  history.some((h) => (h.entrants ?? []).includes(wallet)) ||
+  (snapshot.live ?? []).some((g) => (g.agents ?? []).some((a) => a.owner === wallet));
 
 /** Every agent that has ever been recorded, unranked and untruncated. */
 function fullBoard(){
@@ -1436,6 +1441,16 @@ createServer(async (req,res)=>{
     if(body?.agentWallet && !body?.token){
       const r = registerAgent({ agentWallet: body.agentWallet, name: body.name });
       if(r.status === 200){ issuedToken = r.body.token; body.token = issuedToken; }
+      // Already registered, and a retry of the very call that registered it is
+      // the likeliest reason: a held request timed out somewhere in the middle
+      // and was sent again with no token, against a wallet created seconds
+      // earlier. A token protects a record, so while there is no record to
+      // protect, hand out a fresh one rather than locking the wallet out of
+      // the arena on its first attempt.
+      else if(r.status === 409 && !played(body.agentWallet)){
+        const t = reissueToken(body.agentWallet);
+        if(t){ issuedToken = t; body.token = t; }
+      }
     }
     const a = authed(body);
     // An agent that gets 401 needs to know which half is wrong, because the two
