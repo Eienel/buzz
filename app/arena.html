@@ -245,20 +245,35 @@
      width, beside the comb label rather than over the count. */
   .hex .backwrap{top:25%;right:7px}
   .comb,.hex{position:relative}
-  /* The card's own back control. Sized like the other header chips so it reads
-     as part of the game's facts, tinted honey so it reads as the one thing on
-     the card you can press. */
-  .backchip{font:inherit;font-family:var(--mono);font-size:11px;letter-spacing:.06em;
-    display:inline-flex;align-items:center;gap:7px;cursor:pointer;
-    color:var(--ink);background:linear-gradient(180deg,#ffc23d,#ff9d0d);
-    border:1px solid #ffc23d;border-radius:999px;padding:4px 12px}
-  .backchip:hover{background:linear-gradient(180deg,#ffd270,#ffb42a)}
-  .backchip:active{transform:translate3d(0,1px,0)}
-  /* The clock has to be readable on the honey fill, not a ghost on it: this is
-     the answer to "how long do I have", which is half of why the chip exists. */
-  .backchip .cd{font-size:10px;font-weight:700;color:#4a2e00;
-    background:rgba(255,255,255,.42);border-radius:999px;padding:1px 6px}
-  .backchip[aria-expanded="true"]{filter:brightness(.92)}
+  /* The board and its side column. The honeycomb is centred in a card far wider
+     than it is, so the one thing a visitor can do gets that empty column
+     instead of a chip in the metadata. */
+  .board{display:flex;align-items:center;gap:10px}
+  .board>.hive,.board>.combs{flex:1 1 auto;min-width:0}
+  .bpanel{flex:0 0 186px;display:flex;flex-direction:column;align-items:stretch;
+    gap:8px;padding-right:16px}
+  .bpanel.shut{flex-basis:0;padding:0}
+  .bigback{font:inherit;cursor:pointer;display:flex;flex-direction:column;gap:3px;
+    padding:14px 16px;border-radius:14px;text-align:left;
+    color:#231603;background:linear-gradient(180deg,#ffc23d,#ff9d0d);
+    border:1px solid #ffc23d;
+    box-shadow:0 10px 26px -12px rgba(255,179,0,.75),inset 0 1px 0 rgba(255,255,255,.35)}
+  .bigback:hover{background:linear-gradient(180deg,#ffd270,#ffb42a)}
+  .bigback:active{transform:translate3d(0,1px,0)}
+  .bigback[aria-expanded="true"]{filter:brightness(.93)}
+  .bbt{font-weight:800;font-size:15px;letter-spacing:-.2px}
+  .bbs{font-family:var(--mono);font-size:10.5px;letter-spacing:.05em;opacity:.72}
+  .bclock{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;
+    color:var(--dimmer);text-align:center}
+  .bclock .cd{color:var(--gold)}
+  .bclock .cd.soon{color:var(--honey)}
+  /* No column to sit beside on a phone, so it becomes a row under the board.
+     A control worth this much space is worth the full width when there is
+     none to spare. */
+  @media (max-width:820px){
+    .board{flex-direction:column;align-items:stretch}
+    .bpanel{flex:0 0 auto;padding:0 14px 14px}
+  }
   /* Where an agent is sitting, under its name, when the menu covers a whole
      game rather than one comb. */
   .bwhere{display:block;font-family:var(--mono);font-size:10px;color:var(--dimmer);
@@ -632,7 +647,11 @@ const IC={
 };
 const band=m=>m===0?["empty","thin"]:m<=1?["thin","thin"]:m<=3?["healthy","alive"]:["crowded","crowded"];
 // 300s instances make a raw second count hard to read at a glance.
-const mmss=(s)=>s<=0?"cranking":s<60?s+"s":`${Math.floor(s/60)}:${String(s%60).padStart(2,"0")}`;
+// "cranking" is our word for the permissionless transaction that pushes a game
+// to its next phase, and it meant nothing to anyone reading the board. What a
+// spectator sees at zero is a phase whose clock has run out and whose next step
+// has not landed yet, so that is what it says.
+const mmss=(s)=>s<=0?"closing":s<60?s+"s":`${Math.floor(s/60)}:${String(s%60).padStart(2,"0")}`;
 
 // ---- view mode -------------------------------------------------------------
 // Two ways to read the same board. Cards are easier to scan for numbers; the
@@ -731,13 +750,32 @@ const backableIn = (g) => (g.agents || []).filter(backable)
  * game passes its lock instance, and how long that takes depends on the
  * validator's clock, not ours: the honest form is "about".
  */
-function backChip(g){
-  if(!betsOpen(g) || !backableIn(g).length) return "";
+/**
+ * The back control, beside the board rather than lost in the header.
+ *
+ * The honeycomb is centred in a card far wider than it is, so there was a
+ * column of nothing to its right and the one thing a visitor can actually do
+ * was a small chip up in the metadata. It sits in that column now, at a size
+ * that matches what it is for, with the count of agents on offer and the time
+ * left to take one.
+ *
+ * The column collapses under the board on a narrow screen: a control worth
+ * this much space is worth a full-width row when there is no space beside it.
+ */
+function backPanel(g){
+  const as = betsOpen(g) ? backableIn(g) : [];
+  if(!as.length) return `<div class="bpanel shut"></div>`;
   const ends = (g.phaseEndsAt ?? 0)
     + Math.max(0, (g.lockInstance ?? 0) - (g.instance ?? 0)) * (g.instanceSeconds ?? 60);
-  return `<button class="chip backchip" data-gback="${esc(g.gameId)}"
-    title="Back an agent in this game. Backing shuts when the game passes instance ${g.lockInstance}, which is about this long.">back an agent
-    <time class="cd" data-ends="${ends}" data-span="${g.instanceSeconds ?? 60}">&hellip;</time></button>`;
+  return `<div class="bpanel">
+    <button class="bigback" data-gback="${esc(g.gameId)}"
+      title="Back an agent in this game. Backing shuts when the game passes instance ${g.lockInstance}, which is about this long.">
+      <span class="bbt">Back an agent</span>
+      <span class="bbs">${as.length} to choose from</span>
+    </button>
+    <div class="bclock">shuts in
+      <time class="cd" data-ends="${ends}" data-span="${g.instanceSeconds ?? 60}">&hellip;</time></div>
+  </div>`;
 }
 
 function backBtn(g, cb){
@@ -1280,7 +1318,6 @@ function render(s){
         <span class="m lead">${IC.clock}<b>${PHASE[g.phase]}</b>
           ${g.status===1?`<time class="cd" data-ends="${g.phaseEndsAt}" data-span="${span}">${mmss(left)}</time>`:""}</span>
         <span class="m lead" title="Stake still held by combs that are alive">${IC.pot}pot <b>${sol(potOf(g))}</b></span>
-        ${backChip(g)}
         <span class="gmeta">
           <span class="gid">#${g.gameId}</span>
           <span>instance <b>${g.instance}</b></span>
@@ -1290,7 +1327,10 @@ function render(s){
       </div>
       <div class="bar"><i style="width:${pct}%" data-ends="${g.phaseEndsAt}" data-span="${span}"></i></div>
 
-      ${VIEW==="hive"?combs:`<div class="combs">${combs}</div>`}
+      <div class="board">
+        ${VIEW==="hive"?combs:`<div class="combs">${combs}</div>`}
+        ${backPanel(g)}
+      </div>
       <div class="side"><h4>Feed</h4><ul class="feed">${feed}</ul></div>
     </section>`;
   }).join("");
@@ -1464,8 +1504,8 @@ async function tickHistory(){
 }
 document.addEventListener("click",(e)=>{
   const shut = () => { menuEl.hidden = true;
-    for(const b of document.querySelectorAll(".backb,.backchip")) b.setAttribute("aria-expanded","false"); };
-  const t=e.target.closest(".backb,.backchip");
+    for(const b of document.querySelectorAll(".backb,.bigback")) b.setAttribute("aria-expanded","false"); };
+  const t=e.target.closest(".backb,.bigback");
   if(t){
     const wasOpen = t.getAttribute("aria-expanded")==="true";
     shut();
