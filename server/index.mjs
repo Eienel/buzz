@@ -1343,12 +1343,21 @@ createServer(async (req,res)=>{
           hint: "retry in a few seconds, or pass a gameId from /api/agent/lobbies" });
       waiters++;
       try{
+        // Already in a game? Then "next" means that one. The skill tells an
+        // agent to send the same request again after a queued-but-unseated
+        // reply, and picking a fresh game for that retry would sit it down
+        // twice and stake twice. Verified against the live arena: a 202 with
+        // seated false, retried, is the exact sequence that does it.
+        const held = autoplay.gameOf(body.agentWallet);
+        const mine = held && (snapshot.live ?? []).some((g) => String(g.gameId) === held)
+          ? held : null;
+        if(mine) gameId = mine;
         const until = Date.now() + waitMs;
         const needCombs = Math.max(move ?? 0, predict ?? 0) + 1;
-        let g = pickJoinable(needCombs);
-        while(!g && Date.now() < until){ await nap(1500); g = pickJoinable(needCombs); }
+        let g = mine ? null : pickJoinable(needCombs);
+        while(!mine && !g && Date.now() < until){ await nap(1500); g = pickJoinable(needCombs); }
         waitedMs = Date.now() - startedAt;
-        if(!g){
+        if(!g && !mine){
           // Not an error. Nothing was wrong with the request and the answer is
           // "call again", so it says that rather than making the agent guess
           // what a 4xx means about its own arguments.
@@ -1358,7 +1367,7 @@ createServer(async (req,res)=>{
             nextGameInSeconds: next?.inSeconds ?? null,
             hint: 'no seat opened in that window: send the same request again' });
         }
-        gameId = g.gameId;
+        if(g) gameId = g.gameId;
       } finally { waiters--; }
     }
 

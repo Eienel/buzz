@@ -161,3 +161,14 @@ test("comb 0 is a real seat, not a missing one", () => {
   ap.tick(snap({ status: 0, instance: 0 }, [[key, 0]]));
   assert.deepEqual(kinds(), [], "seated in 0 must not be read as unseated and re-joined");
 });
+
+// The waiter asks this before choosing a game: an agent told to "send the same
+// request again" must land back in the game it already has, not a second one.
+test("gameOf names the game a wallet is playing, and forgets it with the plan", () => {
+  const { ap } = setup();
+  assert.equal(ap.gameOf(WALLET), null);
+  ap.plan({ agentWallet: WALLET, gameId: GAME_ID, move: 1 });
+  assert.equal(ap.gameOf(WALLET), GAME_ID);
+  ap.tick({ live: [], seats: new Map() });          // game left the board
+  assert.equal(ap.gameOf(WALLET), null);
+});

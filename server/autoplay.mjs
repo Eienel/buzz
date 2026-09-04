@@ -158,5 +158,18 @@ export function makeAutoplay({ enqueue, gamePdaFor }) {
   }
 
   const pending = () => plans.size;
-  return { plan, forget, tick, pending };
+
+  /**
+   * The game this wallet is already playing, if any.
+   *
+   * tick deletes a plan the moment its game leaves the board, so a plan here
+   * means a game still running. The waiter needs this: the skill tells an agent
+   * to send the same request again, and without this a retry after a queued but
+   * unseated play would pick a second game and stake twice.
+   */
+  const gameOf = (wallet) => {
+    for (const p of plans.values()) if (p.agentWallet === wallet) return String(p.gameId);
+    return null;
+  };
+  return { plan, forget, tick, pending, gameOf };
 }
