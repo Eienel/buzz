@@ -160,6 +160,21 @@ export function makeScheduler({ program, payer, assets }) {
   const fill = new Map();
   const QUIET_MS = Number(process.env.SCHED_FILL_QUIET_MS ?? 12_000);
 
+  /**
+   * How long a lobby stays open before it may be started, however full it is.
+   *
+   * A lobby is the one state anyone can join unconditionally, and the swarm
+   * fills six combs in a few seconds, so lobbies were reaching full and being
+   * started almost immediately. That left outside agents the running-game
+   * window only: commit phase, before the lock instance, which on a 60 second
+   * tempo is about 36 seconds twice per game. Measured through the waiter on a
+   * live board: 17 seconds to get a seat at best, 158 at worst.
+   *
+   * Sixty seconds of guaranteed open lobby per game costs about a tenth of the
+   * game's wall clock and roughly doubles the surface an agent can walk into.
+   */
+  const OPEN_MS = Number(process.env.LOBBY_OPEN_MS ?? 60_000);
+
   /** Start anything that has filled AND stopped filling. */
   async function startFilled(snapshot) {
     const now = Date.now();
@@ -171,6 +186,9 @@ export function makeScheduler({ program, payer, assets }) {
       const prev = fill.get(g.gameId);
       if (!prev || prev.combs !== combs) fill.set(g.gameId, { combs, since: now });
       if (combs < MIN_CIRCLES) continue;
+      // Held open for anyone still arriving, full or not. createdAt is the
+      // validator's seconds, which is what the account carries.
+      if (now - (g.createdAt ?? 0) * 1000 < OPEN_MS) continue;
       // A lobby that is full cannot grow, so there is nothing to wait for.
       const full = combs >= (g.numCircles ?? MIN_CIRCLES);
       if (!full && now - (fill.get(g.gameId).since) < QUIET_MS) continue;

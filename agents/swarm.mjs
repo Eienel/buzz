@@ -80,6 +80,10 @@ const MAX_CONCURRENT = Number(process.env.MAX_CONCURRENT ?? 3);
 // scheduler's together. Four is what the arena page renders, so at four
 // everything running is visible at once. Same default on the server side.
 const BOARD_MAX = Number(process.env.BOARD_MAX ?? 4);
+// How long a lobby this swarm opened stays joinable before it is started.
+// Matches LOBBY_OPEN_MS in the server scheduler: both sides of the board
+// should give an arriving agent the same window.
+const LOBBY_OPEN_MS = Number(process.env.LOBBY_OPEN_MS ?? 60_000);
 // Long enough to break lockstep, not so long the board takes forever to fill.
 // At 25 seconds three games launched together also ENDED together, and the
 // board went from three to zero inside a minute before refilling: the slots
@@ -367,7 +371,7 @@ async function boardHasRoom() {
 }
 
 /** Wait for whoever opened the lobby to start it, rather than racing them. */
-async function waitForRunning(gamePda, gid, ms = 90_000) {
+async function waitForRunning(gamePda, gid, ms = 180_000) {
   const until = Date.now() + ms;
   while (Date.now() < until) {
     const g = await program.account.game.fetch(gamePda);
@@ -391,9 +395,10 @@ async function waitForRunning(gamePda, gid, ms = 90_000) {
 // exactly how the arena ended up with twelve stranded lobbies and nothing
 // running for half an hour.
 //
-// Five instances at the slowest tempo, doubled, plus room to settle.
+// Five instances at the slowest tempo, doubled, plus room to settle, plus the
+// minute the lobby is deliberately held open before any of that starts.
 const GAME_DEADLINE_MS = Number(process.env.GAME_DEADLINE_MS
-  ?? (Math.max(...TEMPOS) * 5 * 2 + 300) * 1000);
+  ?? (Math.max(...TEMPOS) * 5 * 2 + 300) * 1000 + LOBBY_OPEN_MS);
 
 function withDeadline(promise, ms, what) {
   let t;
@@ -563,6 +568,7 @@ async function playGame(gameNo) {
   // the ephemeral agent wallets' balances (their keypairs live only in memory).
   try {
   // lobby: keeper (payer) creates the game; agents create/join circles 0..5
+  let lobbyOpenedAt = Date.now();
   if (!adopted) {
     await program.methods.createGame(gid, 6, tempo, false).accountsPartial({
       config: configPda, stakeMint: asset.mint, allowed: allowedPda, game: gamePda, vault: vaultPda,
@@ -616,6 +622,18 @@ async function playGame(gameNo) {
   // The scheduler starts what it opened. Racing it is harmless (the loser gets
   // WrongPhase) but pointless, so only start a game we opened ourselves.
   if (!adopted) {
+    // Hold the lobby open for anyone still coming.
+    //
+    // Nine agents fill six combs in a few seconds, so a swarm lobby used to
+    // exist for about as long as it took to fill and an outside agent had to
+    // hit that window exactly. A lobby is the one state anyone can join
+    // unconditionally, so it is worth a minute of the game's wall clock. Same
+    // number the server scheduler holds its own lobbies for.
+    const held = LOBBY_OPEN_MS - (Date.now() - lobbyOpenedAt);
+    if (held > 0) {
+      log(`game ${gid}: lobby open another ${Math.round(held / 1000)}s for late joiners`);
+      await sleep(held);
+    }
     await program.methods.startGame().accountsPartial({ game: gamePda, authority: payer.publicKey }).rpc();
     log(`game ${gid}: started (${taken.size} circles)`);
   } else {
