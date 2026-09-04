@@ -111,13 +111,14 @@ export function makeScheduler({ program, payer, assets }) {
   let busy = false;
 
   async function openSlot(t, asset, nowMs, waiting, onBoard) {
-    if (onBoard >= BOARD_MAX) {
-      // Not queued, same as backpressure: a slot missed because the board was
-      // full is a slot that should stay missed. The next one is minutes away
-      // and by then a game will have ended.
-      tried.add(`${asset.name}:${new BN(String(slotFor(nowMs, t.every) + t.tempo)).toString()}`);
-      return;
-    }
+    // Held, not skipped, and deliberately not marked tried.
+    //
+    // Backpressure below burns the slot because a backlog means the swarm is
+    // behind and backfilling makes it worse. A full board is the opposite
+    // problem: the arena is busy right now and will not be in a few minutes,
+    // and slots are eight minutes apart, so burning one leaves a hole. The
+    // first tick after a game ends opens this slot late instead.
+    if (onBoard >= BOARD_MAX) return;
     if (waiting >= MAX_OPEN) {
       // Mark the slot tried anyway: it is past, and a later tick finding the
       // backlog drained should open the CURRENT slot, not backfill this one.

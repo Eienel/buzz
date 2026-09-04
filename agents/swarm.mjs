@@ -80,7 +80,14 @@ const MAX_CONCURRENT = Number(process.env.MAX_CONCURRENT ?? 3);
 // scheduler's together. Four is what the arena page renders, so at four
 // everything running is visible at once. Same default on the server side.
 const BOARD_MAX = Number(process.env.BOARD_MAX ?? 4);
-const STAGGER_MS = Number(process.env.STAGGER_SECONDS ?? 25) * 1000;
+// Long enough to break lockstep, not so long the board takes forever to fill.
+// At 25 seconds three games launched together also ENDED together, and the
+// board went from three to zero inside a minute before refilling: the slots
+// stay in phase because every one of them relaunches the moment the last
+// finished. Games are two or ten minutes depending on the tempo they draw, so
+// a minute and a quarter of separation plus that spread keeps the endings
+// apart. Filling an empty board still takes under three minutes.
+const STAGGER_MS = Number(process.env.STAGGER_SECONDS ?? 75) * 1000;
 // Tempos a game may be dealt. A fast lobby and a slow one running side by side
 // is the point: spectators always have something resolving, and agents have to
 // handle both a 60 second and a 5 minute think.
