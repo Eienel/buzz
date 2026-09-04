@@ -72,8 +72,13 @@
   /* game panel */
   .game{border:1px solid var(--edge);border-radius:16px;margin-bottom:20px;
     background:linear-gradient(180deg,#15100a,#100d08);position:relative;overflow:hidden}
+  /* This was a decorative dot on every card, identical whatever the game was
+     doing, which is worse than nothing: it looks like a status light, so people
+     ask what it means. It now says the one thing the header does not, which is
+     whether you can still back an agent in this game. */
   .game::after{content:"";position:absolute;top:12px;right:14px;width:7px;height:7px;
-    border-radius:99px;background:var(--honey);box-shadow:0 0 12px var(--honey);opacity:.85}
+    border-radius:99px;background:var(--edge2);opacity:.5;transition:all .3s}
+  .game.bettable::after{background:var(--honey);box-shadow:0 0 12px var(--honey);opacity:.9}
   .ghead{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:13px 18px;
     border-bottom:1px solid var(--edge);font-size:13px}
   .pill{font-family:var(--mono);font-size:11px;letter-spacing:.7px;text-transform:uppercase;
@@ -1102,16 +1107,34 @@ function render(s){
   const bet = bettable
     ? ` &middot; <b>${bettable}</b> to back`
     : soon ? ` &middot; <s>backing opens next game</s>` : "";
-  document.getElementById("tally").innerHTML =
-    `<b>${running}</b> running` + (waiting?` &middot; <s>${waiting} filling</s>`:"") + bet;
+  // Same rule as the board below: a failed poll knows nothing, so it says
+  // nothing rather than reporting a confident zero.
+  // The board renders at most four, so a tally of seven above four visible
+  // games reads as a bug. Say which it is showing.
+  const shown = Math.min(live.length, 4);
+  const more = live.length > shown ? ` &middot; <s>showing ${shown}</s>` : "";
+  document.getElementById("tally").innerHTML = s.ok
+    ? `<b>${running}</b> running` + (waiting?` &middot; <s>${waiting} filling</s>`:"") + more + bet
+    : `<s>waiting for the arena</s>`;
   if(!live.length && MKT!=="all"){
     root.innerHTML=`<div class="empty"><b>No ${MKT} games right now</b>
       The arena runs both assets. <a href="#" onclick="setMarket('all');return false">Show every market</a>.</div>`;
     return;
   }
-  if(!live.length){ root.innerHTML=`<div class="empty"><b>No hive running right now</b>
-    A fresh game opens every couple of minutes. Keep this open and one will appear,
-    and the &ldquo;back&rdquo; button turns up with it.</div>`; return; }
+  if(!live.length){
+    // An empty board and an unreachable arena are not the same thing, and this
+    // used to say the first when it meant the second. Caught with four games
+    // running on the server while the page read "0 running, no hive running
+    // right now" behind a Reconnecting chip: the poll had failed, so the page
+    // knew nothing and asserted something.
+    root.innerHTML = s.ok
+      ? `<div class="empty"><b>No hive running right now</b>
+         A fresh game opens every couple of minutes. Keep this open and one will appear,
+         and the &ldquo;back&rdquo; button turns up with it.</div>`
+      : `<div class="empty"><b>Lost contact with the arena</b>
+         Games may well be running. This page cannot reach the server to find out, and is
+         still trying.</div>`;
+    return; }
   const now=Math.floor(Date.now()/1e3);
   const ordered=[...live].sort((a,b)=>(b.status===1)-(a.status===1));
   root.innerHTML=ordered.slice(0,4).map((g,gi)=>{
@@ -1140,7 +1163,8 @@ function render(s){
     // Animate a game the first time it is seen and never again, so a repaint
     // is invisible.
     const fresh = !seenGames.has(g.gameId); seenGames.add(g.gameId);
-    return `<section class="game${fresh ? " enter" : ""}" style="--i:${gi}">
+    return `<section class="game${fresh ? " enter" : ""}${betsOpen(g) ? " bettable" : ""}" style="--i:${gi}"
+      title="${betsOpen(g) ? "backing is open on this game" : "backing is closed on this game"}">
       <div class="ghead">
         <span class="pill ${g.status===1?"run":"lobby"}"><i></i>${STATUS[g.status]}</span>
         ${g.insane?'<span class="pill insane"><i></i>insane</span>':""}
@@ -1379,9 +1403,19 @@ async function tickJackpot(){
   try{
     const r=await fetch("/api/treasury",{cache:"no-store"}); if(!r.ok) return;
     const rows=(await r.json()).accrued||[];
-    // Show the pot for the market being watched; "all" shows the largest.
+    // Show the pot for the market being watched. On "all" it used to show the
+    // largest, which put ANSEM's 7,268 above a board of BUZZ games and reads as
+    // a stale number rather than a different asset's. Follow the board instead:
+    // the pot worth showing is the one a viewer could win in what they are
+    // watching. Largest stays as the fallback when nothing is live.
+    // Games carry stakeMint, the treasury rows carry both mint and symbol, so
+    // the board is counted by mint and matched through them.
+    const tally = {};
+    for (const g of LAST_LIVE) if (g.stakeMint) tally[g.stakeMint] = (tally[g.stakeMint] ?? 0) + 1;
+    const topMint = Object.entries(tally).sort((a,b) => b[1]-a[1])[0]?.[0];
     const pick = MKT!=="all" ? rows.find(x=>x.symbol===MKT)
-                             : rows.slice().sort((a,b)=>b.jackpot-a.jackpot)[0];
+               : (topMint && rows.find(x=>x.mint===topMint))
+                 || rows.slice().sort((a,b)=>b.jackpot-a.jackpot)[0];
     if(!pick || !(pick.jackpot>0)){ el.hidden=true; return; }
     const heat=Math.max(0,Math.min(1,Math.log10(1+pick.jackpot)/Math.log10(1+JP_REF)));
     el.style.setProperty("--heat",heat.toFixed(3));
