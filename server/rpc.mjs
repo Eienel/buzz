@@ -95,3 +95,32 @@ export function surviveRateLimits(label = "rpc") {
   process.on("unhandledRejection", handle);
   process.on("uncaughtException", handle);
 }
+
+/**
+ * The useful part of a transaction error, without another round trip.
+ *
+ * web3.js buries the cause. A SendTransactionError built without an `action`
+ * renders its whole message as "Unknown action 'undefined'", which is what the
+ * swarm's failure log was full of, while `transactionMessage` on the same
+ * object said "Blockhash not found". The program logs are already there too,
+ * as `transactionLogs`.
+ *
+ * So this reads what the error is already carrying rather than calling
+ * getLogs(), which fetches the transaction again: another RPC call per
+ * failure, on a budget measured in compute units, and nothing at all for a
+ * simulation error because there is no signature to fetch by.
+ *
+ * Anchor's errors are handled by the same two fields, and its `logs` array is
+ * checked as well since AnchorError puts them there instead.
+ */
+export function explainTxError(e) {
+  const message = e?.transactionMessage ?? e?.message ?? String(e);
+  const logs = Array.isArray(e?.transactionLogs) ? e.transactionLogs
+             : Array.isArray(e?.logs) ? e.logs
+             : null;
+  if (!logs?.length) return String(message);
+  // The lines that say why, not the whole program trace. A reveal that failed
+  // on a constraint puts the reason in one line and the call stack in twelve.
+  const why = logs.filter((l) => /error|failed|panicked|insufficient|constraint/i.test(l));
+  return `${message} :: ${(why.length ? why : logs.slice(-2)).join(" | ")}`;
+}

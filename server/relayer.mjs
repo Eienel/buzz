@@ -18,6 +18,7 @@
 // of every join, and a stale one would misprice seats silently.
 
 import anchorPkg from "@coral-xyz/anchor";
+import { explainTxError } from "./rpc.mjs";
 import { PublicKey, SystemProgram } from "@solana/web3.js";
 import { getOrCreateAssociatedTokenAccount, getAssociatedTokenAddressSync,
          createAssociatedTokenAccountIdempotent } from "@solana/spl-token";
@@ -284,7 +285,10 @@ export function startDrain(relayer, actions, intervalMs = 1500) {
           a.settledAt = Date.now();
           log(`${a.kind} for ${String(a.agentWallet).slice(0, 8)} -> ${a.result.sig ?? "ok"}`);
         } catch (e) {
-          a.error = String(e.message ?? e).slice(0, 200);
+          // The wrapper message hides the cause: a SendTransactionError built
+          // without an action reads "Unknown action 'undefined'" while the
+          // reason sits on the same object.
+          a.error = explainTxError(e).slice(0, 300);
           a.tries = (a.tries ?? 0) + 1;
           // A rate limit used to lose the action outright, and on this arena
           // that is the common case rather than the rare one: the ClawPump

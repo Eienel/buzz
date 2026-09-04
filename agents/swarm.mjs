@@ -11,7 +11,7 @@
 import anchorPkg from "@coral-xyz/anchor";
 import { Connection, Keypair, PublicKey, SystemProgram, LAMPORTS_PER_SOL,
          SYSVAR_SLOT_HASHES_PUBKEY, Transaction, sendAndConfirmTransaction } from "@solana/web3.js";
-import { makeConnection, surviveRateLimits } from "../server/rpc.mjs";
+import { makeConnection, surviveRateLimits, explainTxError } from "../server/rpc.mjs";
 import { getOrCreateAssociatedTokenAccount, mintTo, getAssociatedTokenAddressSync } from "@solana/spl-token";
 import jsSha3 from "js-sha3";
 const { keccak_256 } = jsSha3;
@@ -386,7 +386,7 @@ let beatErr = null;
 // throw, and typeof does not save you from that.
 const failures = [];
 const noteFailure = (n, e) => {
-  failures.unshift({ game: n, at: Date.now(), error: String(e?.message ?? e).slice(0, 160) });
+  failures.unshift({ game: n, at: Date.now(), error: explainTxError(e).slice(0, 300) });
   failures.length = Math.min(failures.length, 5);
 };
 function beat(state, extra = {}) {
@@ -897,7 +897,7 @@ let started = 0;
 const launch = (n) => {
   const task = (async () => {
     try { await withDeadline(playGame(n), GAME_DEADLINE_MS, `game ${n}`); }
-    catch (e) { log(`game failed: ${e.message?.slice(0, 200)}`); noteFailure(n, e); }
+    catch (e) { log(`game failed: ${explainTxError(e).slice(0, 200)}`); noteFailure(n, e); }
   })().finally(() => { inflight.delete(task); lastProgress = Date.now(); });
   inflight.add(task);
   return task;
