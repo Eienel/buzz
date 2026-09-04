@@ -338,12 +338,24 @@ async function poll(){
     // decided, or under four players, and all three are answerable from the
     // game account alone, so the ones that cannot produce a record never cost
     // a request.
+    // An empty lobby has nothing to read.
+    //
+    // Both counts come off the game account we already have, so a lobby with
+    // no players and no combs is provably holding no Player and no Circle
+    // accounts, and asking for them costs two getProgramAccounts a poll to be
+    // told so. With one such lobby on the board that is 17,280 calls and
+    // 345,600 compute units a day, spent to learn nothing.
+    //
+    // Deliberately both conditions. A game can hold combs whose players have
+    // been reaped, and it can hold players before the first comb is opened,
+    // and either one is still worth reading.
     const onBoard = games.filter((g) => (g.status===0 || g.status===1) && !g.legacy);
+    const worthReading = (g) => (g.players ?? 0) > 0 || (g.aliveCircles ?? 0) > 0;
     const toRecord = games
       .filter((g) => !recorded.has(g.gameId) && DECIDED.has(g.status) && (g.players ?? 0) >= 4)
       .sort((a,b) => Number(BigInt(b.gameId) - BigInt(a.gameId)))
       .slice(0, RECORD_PER_POLL);
-    const need = [...new Set([...onBoard, ...toRecord])];
+    const need = [...new Set([...onBoard.filter(worthReading), ...toRecord])];
     // In parallel, in bounded batches.
     //
     // One game at a time turned a single 813ms request into eleven sequential
