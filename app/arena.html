@@ -1339,7 +1339,22 @@ function render(s){
 // The poll is every 2.5s, so a countdown rendered only on poll jumps. These
 // elements carry their own deadline, so the clock can run locally between
 // fetches without asking the chain anything.
+// When the last poll actually landed. The board carries no timestamp of its own,
+// so without this a frozen page and a live one look identical. Declared above
+// tickClocks rather than beside tick: a const read from a function that runs
+// first is a temporal dead zone, and this codebase has paid for that once
+// already in the swarm.
+let lastOkAt = 0;
+
 function tickClocks(){
+  // Say when the board is old, rather than showing a frozen one as Live. The
+  // poll is every 2.5s, so anything past about twelve seconds is a stall, not
+  // jitter, and it clears itself on the next successful tick.
+  const conn = document.getElementById("conn");
+  if(conn && !document.hidden && lastOkAt && Date.now() - lastOkAt > 12_000
+     && !conn.classList.contains("down")){
+    conn.innerHTML = "<i></i>Catching up";
+  }
   const now=Math.floor(Date.now()/1e3);
   for(const el of document.querySelectorAll("time.cd")){
     const left=Math.max(0,+el.dataset.ends-now);
@@ -1358,7 +1373,28 @@ function tickClocks(){
 }
 setInterval(tickClocks,1000);
 
-async function tick(){ try{ render(await fetchState()); }catch{ render({ok:false,live:[]}); } }
+async function tick(){
+  try{ render(await fetchState()); lastOkAt = Date.now(); }
+  catch{ render({ok:false,live:[]}); }
+}
+
+/**
+ * Poll again the moment the tab comes back.
+ *
+ * A hidden tab has its timers throttled to about once a minute, and after a
+ * few minutes Chrome can freeze them outright. So a board left open in a
+ * background tab is stale when you return to it, and the only way anyone found
+ * to fix that was a hard refresh, which is the page asking to be restarted
+ * rather than doing its job.
+ *
+ * Three events because they are not the same event: visibilitychange fires on
+ * a tab switch, focus on a window switch, and pageshow when the browser
+ * restores the page from its back-forward cache, where no timer ran at all.
+ */
+const wake = () => { if(!document.hidden) tick(); };
+document.addEventListener("visibilitychange", wake);   // fires at the document
+addEventListener("focus", wake);
+addEventListener("pageshow", wake);
 document.getElementById("mkt").addEventListener("click",e=>{
   const m=e.target.dataset&&e.target.dataset.m; if(m) setMarket(m);
 });
