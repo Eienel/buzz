@@ -44,7 +44,11 @@ const MIN_CIRCLES = 4;
 // above POD_MIN_TEMPO, so a 24s game has none, and an agent nobody can back is
 // a game nobody can bet on. Two thirds of the account growth, none of the
 // convertible surface. Dropping it makes every game on the board backable.
-const TEMPOS = (process.env.SCHED_TEMPOS ?? "60:240")
+// One every eight minutes, which is about how long a 60 second game actually
+// lives. At four minutes the scheduler was opening a second game before the
+// first had finished, so its own games stacked two deep before the swarm's
+// three were counted.
+const TEMPOS = (process.env.SCHED_TEMPOS ?? "60:480")
   .split(",").map((s) => {
     const [tempo, every] = s.split(":").map(Number);
     return { tempo, every };

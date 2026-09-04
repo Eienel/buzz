@@ -645,8 +645,16 @@ const BET_MAX = 100;
  * open yet" over a Back button that answered 400, which is the page promising
  * something the program forbids.
  */
+// The chain closes the book at the halfway lock: place_bet requires
+// `g.instance <= m.lock_instance`, and lock_instance is ((combs-1)/2).max(1),
+// so on a six comb game betting is open for instances 0, 1 and 2 and shut from
+// 3. This checked the status and the field but not the lock, so the board went
+// on offering a back button after the chain had stopped accepting one, and the
+// click died in the relayer with BettingClosed.
 const betsOpen = (g) =>
-  MARKET_LIVE && g.status === 1 && (g.aliveCircles ?? 0) >= MIN_COMBS_TO_BACK;
+  MARKET_LIVE && g.status === 1 &&
+  (g.aliveCircles ?? 0) >= MIN_COMBS_TO_BACK &&
+  (g.lockInstance == null || (g.instance ?? 0) <= g.lockInstance);
 
 /**
  * The agents in one comb that can actually be backed, best skill-per-game first.

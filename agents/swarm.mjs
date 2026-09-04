@@ -69,7 +69,12 @@ const POD_MIN_TEMPO = Number(process.env.POD_MIN_TEMPO ?? 60);
 const POD_STAGGER_MS = Number(process.env.POD_STAGGER_MS ?? 0);
 // How many games may be live at once, and how long to wait between starting
 // them so three lobbies do not all crank on the same second.
-const MAX_CONCURRENT = Number(process.env.MAX_CONCURRENT ?? 3);
+// Two, not three. Games live about eight minutes and the scheduler opens its
+// own on top, so three swarm slots compounded to five and sometimes seven games
+// on a board that renders four. Two keeps a steady pair running with a third
+// appearing whenever a scheduler lobby is in flight, which reads as an arena
+// somebody is watching rather than a wall.
+const MAX_CONCURRENT = Number(process.env.MAX_CONCURRENT ?? 2);
 const STAGGER_MS = Number(process.env.STAGGER_SECONDS ?? 25) * 1000;
 // Tempos a game may be dealt. A fast lobby and a slow one running side by side
 // is the point: spectators always have something resolving, and agents have to
