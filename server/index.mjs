@@ -254,7 +254,8 @@ const label = (wallet) => {
   return { agent: wallet, name, house };
 };
 
-function leaderboard(){
+/** Every agent that has ever been recorded, unranked and untruncated. */
+function fullBoard(){
   const board = new Map();
   const bump = (k, f) => {
     const e = board.get(k) ?? { agent: k, games: 0, wins: 0, points: 0, ranked: 0, rWins: 0, rPoints: 0 };
@@ -281,8 +282,30 @@ function leaderboard(){
       // comparable. This is the column that ranks reasoning against heuristics.
       ppg: e.ranked ? e.rPoints / e.ranked : null,
     }))
-    .sort((a, b) => b.points - a.points || b.wins - a.wins)   // skill first: it is what the season pays on
-    .slice(0, 20);
+    .sort((a, b) => b.points - a.points || b.wins - a.wins);  // skill first: it is what the season pays on
+}
+
+/**
+ * The board as shown: the top twenty, plus every visiting agent.
+ *
+ * A guest's first game earns no points, so sorting by points and cutting at
+ * twenty made every outside agent invisible exactly when its owner was
+ * watching for it. Somebody points their agent at the arena, it plays a real
+ * game on chain, and the board does not know it exists. The house agents have
+ * hundreds of games to climb with; a visitor has one, and the whole reason it
+ * is here is to be seen.
+ *
+ * They are appended rather than mixed in, so nobody's rank is inflated: a
+ * visiting row carries its true position in `rank`, which can be well past
+ * twenty.
+ */
+function leaderboard(){
+  const all = fullBoard();
+  const ranked = all.map((e, i) => ({ ...e, rank: i + 1 }));
+  const top = ranked.slice(0, 20);
+  const shown = new Set(top.map((e) => e.agent));
+  const guests = ranked.filter((e) => !e.house && !shown.has(e.agent));
+  return [...top, ...guests];
 }
 
 // ---- poller: one RPC scan, cached for every viewer ---------------------------
@@ -1376,6 +1399,7 @@ createServer(async (req,res)=>{
       gameId: q.gameId ?? q.game ?? null,
       move: num(q.move), predict: num(q.predict),
       waitSeconds: num(q.waitSeconds ?? q.wait),
+      why: q.why ?? null, model: q.model ?? null,
     };
 
     // First play registers you. The token comes back in the reply and is
@@ -1474,6 +1498,22 @@ createServer(async (req,res)=>{
     if(!gate.ok) return send(res, 429, { error: gate.error, retryAfter: gate.retryAfter ?? null });
     const plan = autoplay.plan({ agentWallet: body.agentWallet, gameId, move, predict });
 
+    // An outside agent's reasoning, if it sent any, goes on the traces page
+    // beside the house swarm's. Optional and free-text: the arena cannot check
+    // whether a stated reason is the real one, for our agents either, so this
+    // is a quote and is shown as one. Without it a visiting agent plays a real
+    // game and the one page built to show thinking has nothing of its own to
+    // show, which is the wrong shape for the pitch and for the visitor.
+    const why = String(body.why ?? "").trim().slice(0, 400);
+    if(why){
+      const g = (snapshot.live ?? []).find((x) => String(x.gameId) === String(gameId));
+      absorb({ game: String(gameId), instance: g?.instance ?? 0,
+               agent: agentName(body.agentWallet)
+                 ?? `${body.agentWallet.slice(0, 4)}…${body.agentWallet.slice(-4)}`,
+               model: body.model ? String(body.model).slice(0, 40) : "visiting agent",
+               comb: move, move, predict, why, at: Date.now() });
+    }
+
     // Wait for the seat to actually exist before answering, when the caller
     // asked to wait at all. 202 means queued, and an agent that reads it as
     // "I am in the game" is the failure this whole surface keeps hitting: the
@@ -1503,6 +1543,61 @@ createServer(async (req,res)=>{
         + (chosenForYou
           ? ". You sent no move or predict, so both were picked at random. Send them to play your own game: the emptiest comb dies, so crowds are safe and the thin comb is the prediction worth making."
           : "") });
+  }
+  /**
+   * Where one wallet stands: is it in a game, did the last one go its way.
+   *
+   * The gap this closes: easy mode plays the whole game for you, which is the
+   * point, but it also means an agent has nothing to report after it acts. A
+   * ClawPump agent came back with "action plan completed" and neither it nor
+   * its owner could say whether it was on the board, let alone whether it won.
+   * The chain knew, /api/state knew, and answering from either meant matching
+   * a wallet against a nested array, which is not a thing to ask a model to do
+   * mid-conversation. So: one URL, one wallet, a sentence's worth of answer.
+   */
+  if(p === "/api/agent/me"){
+    const wallet = url.searchParams.get("wallet") ?? url.searchParams.get("agentWallet")
+      ?? (req.method === "POST" ? (await readBody(req)).agentWallet : null);
+    if(!wallet) return send(res, 400, { error: "wallet is required",
+      hint: "GET /api/agent/me?wallet=<your Solana address>" });
+
+    let now = null;
+    for(const g of snapshot.live ?? []){
+      const seat = (g.agents ?? []).find((a) => a.owner === wallet);
+      if(!seat) continue;
+      const comb = (g.combs ?? []).find((c) => c.id === seat.comb);
+      now = { gameId: g.gameId, comb: seat.comb,
+              // A dead comb is out of the game, which is the one fact an agent
+              // most needs and the one the raw board makes you derive.
+              alive: comb ? !!comb.alive : null,
+              round: g.instance, phase: ["commit","reveal","resolving","scoring"][g.phase] ?? null,
+              players: g.players, combsLeft: g.aliveCircles,
+              status: g.status === 0 ? "lobby" : "running" };
+      break;
+    }
+
+    const played = history.filter((h) => (h.entrants ?? []).includes(wallet));
+    const last = played[0] ? {
+      gameId: played[0].gameId, endedAt: played[0].endedAt,
+      winningComb: played[0].winningComb,
+      won: (played[0].survivors ?? []).includes(wallet),
+      points: (played[0].topSkill ?? []).find((t) => t.agent === wallet)?.points ?? 0,
+    } : null;
+
+    const rec = fullBoard().find((e) => e.agent === wallet) ?? null;
+    const rank = rec ? fullBoard().findIndex((e) => e.agent === wallet) + 1 : null;
+    return send(res, 200, {
+      wallet, name: agentName(wallet) ?? null,
+      playing: !!now, now, last,
+      record: rec ? { games: rec.games, wins: rec.wins, points: rec.points,
+                      winRate: rec.winRate, ppg: rec.ppg, rank } : null,
+      arena: "https://lastbuzz.fun/arena",
+      note: now
+        ? (now.alive === false
+            ? "your comb is dead: you are out of this game, and the next call can enter another"
+            : "you are in a game right now, and your move and prediction are played for you each round")
+        : "not in a game: play again with /api/agent/play?wallet=" + encodeURIComponent(wallet),
+    });
   }
   if(p === "/api/agent/relayer"){
     if(!relayer) return send(res, 503, { error: "no relayer configured" });
