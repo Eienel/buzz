@@ -76,6 +76,10 @@ const POD_STAGGER_MS = Number(process.env.POD_STAGGER_MS ?? 0);
 // The seven-game wall that started this came from the fast scheduler tempo,
 // not from this number, and SCHED_TEMPOS fixed that.
 const MAX_CONCURRENT = Number(process.env.MAX_CONCURRENT ?? 3);
+// The ceiling on the whole board, this swarm's games and the server
+// scheduler's together. Four is what the arena page renders, so at four
+// everything running is visible at once. Same default on the server side.
+const BOARD_MAX = Number(process.env.BOARD_MAX ?? 4);
 const STAGGER_MS = Number(process.env.STAGGER_SECONDS ?? 25) * 1000;
 // Tempos a game may be dealt. A fast lobby and a slow one running side by side
 // is the point: spectators always have something resolving, and agents have to
@@ -324,6 +328,35 @@ async function findScheduledLobby() {
     open.sort((a, b) => Number(a.gameId) - Number(b.gameId));
     return open[0] ?? null;
   } catch { return null; }
+}
+
+/**
+ * Whether the board can take another game.
+ *
+ * MAX_CONCURRENT bounds this process alone, and the server's scheduler opens
+ * games too, so two producers each obeying their own limit still added up to
+ * six on an arena page that renders four. The cap that matters is the one on
+ * the board, so both sides read the same number off the same feed.
+ *
+ * Adoption is the exception: taking over a lobby that is already there does
+ * not add a card, it fills one. So a full board with an adoptable lobby on it
+ * is still room to play.
+ *
+ * Fails open. A swarm that cannot reach the arena should keep playing on its
+ * own limit rather than stopping, which is the same call findScheduledLobby
+ * makes one function up.
+ */
+async function boardHasRoom() {
+  try {
+    const r = await fetch(`${ARENA_URL}/api/state`, { signal: AbortSignal.timeout(4000) });
+    if (!r.ok) return true;
+    const live = (await r.json()).live ?? [];
+    const known = new Set(ASSETS.map((a) => a.mint.toBase58()));
+    const adoptable = live.some((g) => g.status === 0 && known.has(g.stakeMint) &&
+      ((g.players ?? 0) === 0 || ((g.guests ?? 0) > 0 && (g.aliveCircles ?? 0) < MIN_COMBS)));
+    if (adoptable) return true;
+    return live.length < BOARD_MAX;
+  } catch { return true; }
 }
 
 /** Wait for whoever opened the lobby to start it, rather than racing them. */
@@ -925,6 +958,10 @@ while (N_GAMES === 0 || started < N_GAMES) {
     // payer cannot be settled, and an unsettled game strands its rent for good.
     beat("checking fuel", { started, inflight: inflight.size, sinceProgressSeconds: since() });
     if (!(await fuelled())) { beat("unfuelled", { started, inflight: inflight.size }); break; }
+    if (!(await boardHasRoom())) {
+      beat("board full", { started, inflight: inflight.size, sinceProgressSeconds: since() });
+      break;
+    }
     launch(started++);
     beat("launched", { started, inflight: inflight.size, sinceProgressSeconds: since() });
     if (inflight.size < MAX_CONCURRENT) await sleep(STAGGER_MS);

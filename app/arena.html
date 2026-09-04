@@ -651,8 +651,14 @@ const BET_MAX = 100;
 // 3. This checked the status and the field but not the lock, so the board went
 // on offering a back button after the chain had stopped accepting one, and the
 // click died in the relayer with BettingClosed.
+// And only once the book account exists. The panel used to open on hope, hold
+// its buttons disabled under "Waiting for the book", and find out by fetching.
+// A control that is offered and then refuses is worse than one that is not
+// there yet: the server already knows which games have a market, so the button
+// only appears when a click will work. `book` is undefined on an older payload,
+// and undefined must not hide every button, so only an explicit false shuts it.
 const betsOpen = (g) =>
-  MARKET_LIVE && g.status === 1 &&
+  MARKET_LIVE && g.status === 1 && g.book !== false &&
   (g.aliveCircles ?? 0) >= MIN_COMBS_TO_BACK &&
   (g.lockInstance == null || (g.instance ?? 0) <= g.lockInstance);
 
@@ -823,13 +829,19 @@ async function paintOdds(){
   }catch{ /* the panel still works without the odds */ }
 }
 
-/** Both actions wait on the book existing; neither can work without it. */
+/** Both actions need the book to exist; neither can work without it. */
 function setReady(ready){
   const go = veil.querySelector(".betgo"), alt = veil.querySelector(".betalt");
   if(!go || !alt) return;
   if(go.dataset.busy === "1") return;          // mid-bet, leave the labels alone
   go.disabled = !ready; alt.disabled = !ready;
-  go.textContent = ready ? "Back" : "Waiting for the book";
+  // The label stays "Back" either way. It reads as the button it is, and the
+  // disabled case is now the rare one: the board filters on the book existing,
+  // so this only fires when a game closed its book while the panel was open.
+  go.textContent = "Back";
+  // Only ever writes, never clears: a repaint every few seconds must not wipe
+  // the error from a stake somebody just tried.
+  if(!ready) betError("The book on this game is not open. Nothing was staked.");
 }
 
 /**
@@ -886,7 +898,10 @@ function openBetPanel(target, name, game){
       <a href="/docs#backing" target="_blank" rel="noopener">How it works</a></div>
   </div>`;
   veil.hidden = false;
-  setReady(false);
+  // Ready on open. The board only renders this button for a game the server
+  // has already told us carries a book, so the stake box is live before the
+  // odds arrive and the first thing on screen is not a disabled button.
+  setReady(true);
   paintOdds();
   veil.querySelector("input")?.focus();
 }

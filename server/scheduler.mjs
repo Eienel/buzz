@@ -84,6 +84,17 @@ const MAX_OPEN = Number(process.env.SCHED_MAX_OPEN ?? 2);
  */
 const FRESH_MS = Number(process.env.SCHED_BACKLOG_FRESH_MS ?? 15 * 60_000);
 
+/**
+ * How many games may be on the board at once, counting everybody's.
+ *
+ * MAX_OPEN above only counts unfilled lobbies of one tempo, so it never saw
+ * the swarm's running games and the two producers could add up to six on a
+ * board that renders four. This is the ceiling the arena page can actually
+ * show: at four, everything running is visible at once, which is the point of
+ * a spectator board. The swarm holds to the same number from its side.
+ */
+const BOARD_MAX = Number(process.env.BOARD_MAX ?? 4);
+
 export function makeScheduler({ program, payer, assets }) {
   const PID = program.programId;
   const pda = (...seeds) => PublicKey.findProgramAddressSync(seeds, PID)[0];
@@ -99,7 +110,14 @@ export function makeScheduler({ program, payer, assets }) {
   const tried = new Set();
   let busy = false;
 
-  async function openSlot(t, asset, nowMs, waiting) {
+  async function openSlot(t, asset, nowMs, waiting, onBoard) {
+    if (onBoard >= BOARD_MAX) {
+      // Not queued, same as backpressure: a slot missed because the board was
+      // full is a slot that should stay missed. The next one is minutes away
+      // and by then a game will have ended.
+      tried.add(`${asset.name}:${new BN(String(slotFor(nowMs, t.every) + t.tempo)).toString()}`);
+      return;
+    }
     if (waiting >= MAX_OPEN) {
       // Mark the slot tried anyway: it is past, and a later tick finding the
       // backlog drained should open the CURRENT slot, not backfill this one.
@@ -187,6 +205,10 @@ export function makeScheduler({ program, payer, assets }) {
         // Unfilled lobbies per tempo, from the snapshot the poller just took.
         // A lobby with MIN_CIRCLES combs is not backlog: it is about to start.
         const waiting = new Map();
+        // Everything on the board: lobbies filling and games running, whoever
+        // opened them.
+        const onBoard = (snapshot?.live ?? []).filter(
+          (g) => g.status === 1 || (g.status === 0 && now - (g.createdAt ?? 0) * 1000 <= FRESH_MS)).length;
         for (const g of snapshot?.live ?? []) {
           if (g.status !== 0) continue;
           if ((g.aliveCircles ?? 0) >= MIN_CIRCLES) continue;
@@ -198,7 +220,7 @@ export function makeScheduler({ program, payer, assets }) {
           // the others ride along less often rather than half the arena being
           // unranked at the moment ranked play became the reason to show up.
           const asset = assets[0];
-          await openSlot(t, asset, now, waiting.get(t.tempo) ?? 0);
+          await openSlot(t, asset, now, waiting.get(t.tempo) ?? 0, onBoard);
         }
         await startFilled(snapshot);
       } catch (e) {

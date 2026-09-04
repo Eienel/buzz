@@ -308,6 +308,18 @@ export function makeMarket({ program, payer, connection }) {
     marketPdaFor: (gameId) => marketPda(gamePda(gameId)).toBase58(),
 
     /**
+     * Whether a book is known to exist on this game, from the set the ticker
+     * already keeps. No RPC: `watching` is set either by opening the book or
+     * by finding the account already there, so a true here means the page can
+     * offer a bet that will build.
+     *
+     * The board needs this because the panel used to open on hope and then sit
+     * on "Waiting for the book" while it found out, which is the page asking
+     * somebody to wait for an answer it could have had before they clicked.
+     */
+    isOpen: (gameId) => watching.has(String(gameId)),
+
+    /**
      * Who is reading the agents best, computed from chain.
      *
      * Deliberately not from a ledger we keep. A prize decided by a number only

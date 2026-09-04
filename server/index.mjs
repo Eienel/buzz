@@ -407,6 +407,13 @@ async function poll(){
     }
     for (const g of games) g.guests = guestsPer.get(g.pubkey) ?? 0;
 
+    // Whether the board may offer a Back button on this game. Free: the book
+    // ticker already knows which games it holds a market on, and the flag is
+    // one tick behind, which errs the right way. Without it the page could
+    // only find out by opening the panel and asking, so every first click on
+    // a fresh game met "Waiting for the book".
+    for (const g of games) g.book = book ? book.isOpen(g.gameId) : false;
+
     snapshot = { ok:true, updatedAt:Date.now(), programId:PROGRAM_ID, cluster:RPC.includes("devnet")?"devnet":"mainnet",
                  live:games.filter(g=>(g.status===0||g.status===1) && !g.legacy), finished:history.length,
                  // Settled but not yet swept. Kept apart from `live` so the
