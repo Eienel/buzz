@@ -18,6 +18,7 @@ import jsSha3 from "js-sha3";
 const { keccak_256 } = jsSha3;
 import { readFileSync, writeFileSync } from "node:fs";
 import { decide, reasoningEnabled, modelFor, personaFor } from "./reason.mjs";
+import { dealSeats } from "./seating.mjs";
 import * as feed from "./feed.mjs";
 import { makeBudget, totalPointsOf } from "./budget.mjs";
 import { loadKeypair, DATA_DIR } from "../server/keypair.mjs";
@@ -165,10 +166,28 @@ const statsPda = (owner) => pda(Buffer.from("agent"), owner.toBuffer());
 
 // ----- strategies: given fog (prev-instance member counts of alive circles),
 // return { move: circleId|null, predict: circleId } -------------------------
+// Ties are broken by coin toss, not by comb id.
+//
+// Object.entries hands integer-like keys back in ascending order and V8's sort
+// is stable, so "the most crowded comb" silently meant "the lowest-numbered of
+// the most crowded combs" and "the thinnest" meant the highest-numbered. Every
+// herd agent in every game therefore walked to the same comb, and the whole
+// swarm's behaviour had a direction built into it that nobody chose. Shuffling
+// first costs nothing and makes the sort answer the question it looks like it
+// is answering.
+const shuffled = (fog) => {
+  const a = Object.entries(fog).map(([id, m]) => ({ id: +id, m }));
+  for (let k = a.length - 1; k > 0; k--) {
+    const j = Math.floor(Math.random() * (k + 1));
+    [a[k], a[j]] = [a[j], a[k]];
+  }
+  return a;
+};
+
 const strategies = {
   // herd: go where it's crowded (safe from "fewest dies"), predict the thinnest
   herd(fog, self) {
-    const alive = Object.entries(fog).map(([id, m]) => ({ id: +id, m }));
+    const alive = shuffled(fog);
     alive.sort((a, b) => b.m - a.m);
     const target = alive[0].id;
     const thin = alive[alive.length - 1].id;
@@ -176,7 +195,7 @@ const strategies = {
   },
   // contrarian: assume the herd moves, so yesterday's thin circle refills; stay put more
   contrarian(fog, self) {
-    const alive = Object.entries(fog).map(([id, m]) => ({ id: +id, m }));
+    const alive = shuffled(fog);
     alive.sort((a, b) => a.m - b.m);
     const predict = alive[1] ? alive[1].id : alive[0].id; // second-thinnest dies once herd flees
     return { move: null, predict };
@@ -533,11 +552,28 @@ async function playGame(gameNo) {
           });
         }
         : strategies[stratNames[i % stratNames.length]],
-      // one agent per comb for the first MIN_COMBS, so the comb floor is met by
-      // construction rather than by luck; the rest spread over the six
-      circle: i < MIN_COMBS ? i : i % 6, dead: false,
+      // Dealt below, after the whole roster exists, because who doubles up
+      // with whom has to be shuffled per game rather than fixed by index.
+      circle: 0, dead: false,
     };
   });
+  // Deal the seats.
+  //
+  // This was `i < MIN_COMBS ? i : i % 6`, which put every extra agent in the
+  // lowest combs: with nine agents, combs 0, 1 and 2 opened with two members
+  // and 3, 4 and 5 with one, every single game. The program kills the comb with
+  // the FEWEST members, so the thin half was doomed from the deal, and the herd
+  // strategy then piled into whatever crowded comb had the lowest id. Measured
+  // over the last 200 recorded games: comb 0 won 60% of them, comb 1 28%, and
+  // comb 5 never won once. That is not a game, it is a seating chart.
+  //
+  // One agent per comb first, so the comb floor is met by construction rather
+  // than by luck, then the rest onto a shuffled deck so the doubles land
+  // somewhere different each time.
+  {
+    const seats = dealSeats(agents.length, 6);
+    agents.forEach((a, i) => { a.circle = seats[i]; });
+  }
   log(`game ${gid}: ${asset.name}, ${tempo}s instances, ${N_AGENTS} heuristic` +
       `${podsThisGame ? ` + ${podsThisGame} reasoning (${[...new Set(agents.filter((a) => a.pod).map((a) => a.model))].join(", ")})` : ""} agents…`);
   // What each reasoning agent may spend on thinking this game, bought with the

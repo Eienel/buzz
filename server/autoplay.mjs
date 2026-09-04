@@ -98,8 +98,14 @@ export function makeAutoplay({ enqueue, gamePdaFor }) {
         // minute into a game was accepted, queued, and never sat down.
         if (isJoinable(g) && !p.joinQueued) {
           p.joinQueued = true;
+          // Comb 0 is not a neutral default. An agent that sent only a
+          // prediction was seated in comb 0 every time, which is one of the
+          // reasons comb 0 won 60% of the last 200 games: the program kills
+          // the comb with the fewest members, so a comb everybody defaults
+          // into is the safest seat on the board. Random when unstated.
+          const seat = p.move ?? Math.floor(Math.random() * (g.numCircles ?? 6));
           enqueue({ kind: "join", agentWallet: p.agentWallet, gameId: p.gameId,
-                    combId: p.move ?? 0 });
+                    combId: seat });
         }
         continue;                                   // nothing to commit yet
       }
