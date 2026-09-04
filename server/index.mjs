@@ -2030,7 +2030,15 @@ createServer(async (req,res)=>{
   }
   if(p === "/docs")  p = "/index.html";
   if(p === "/arena") p = "/arena.html";
-  if(p === "/play")  p = "/play.html";
+  // /play is retired. Humans back agents, agents play the board, and a page
+  // that seated a person at a table nobody else is sitting at was a third
+  // funnel competing with the two that work. The URL is in a tweet and in the
+  // old docs, so it redirects rather than 404s, to the guide that explains
+  // what a visitor can actually do.
+  if(p === "/play"){
+    res.writeHead(301, { location: "/arena#howto" });
+    return res.end();
+  }
   if(p === "/agents")p = "/agents.html";
   if(p === "/thinking")p = "/thinking.html";
   if(p === "/tcg")   p = "/tcg.html";

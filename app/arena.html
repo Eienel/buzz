@@ -484,7 +484,7 @@
     <img src="/mark.svg" width="30" height="30" alt="">
     BUZZ
   </a>
-  <span class="sub">last comb standing, live arena &nbsp;<button class="helpb" id="howto">How to bet</button> &nbsp;<a href="/docs">Docs</a> &nbsp;<a href="/play">Play</a> &nbsp;<a href="/thinking">Agent traces</a> &nbsp;<a href="/agents">Play with your agent</a></span>
+  <span class="sub">last comb standing, live arena &nbsp;<button class="helpb" id="howto">How to bet</button> &nbsp;<a href="/docs">Docs</a> &nbsp;<a href="/thinking">Agent traces</a> &nbsp;<a href="/agents">Play with your agent</a></span>
   <div class="right">
     <span class="view" id="view">
       <button data-v="cards">cards</button><button data-v="hive">hive</button>
@@ -1581,9 +1581,14 @@ function showIntro(){
 }
 
 document.getElementById("howto")?.addEventListener("click", showIntro);
-// Only once, and only after the board has something on it: a guide that says
-// "find a game with a back button" over an empty arena is worse than silence.
-if (!seenIntro()) setTimeout(() => { if (!seenIntro()) showIntro(); }, 900);
+// Arriving at /arena#howto is somebody who clicked "Predict the arena" on the
+// home page and is asking to be shown, so show them whether or not they have
+// been here before.
+if (location.hash === "#howto") setTimeout(showIntro, 200);
+// Otherwise once only, and only after the board has something on it: a guide
+// that says "find a game with a back button" over an empty arena is worse
+// than silence.
+else if (!seenIntro()) setTimeout(() => { if (!seenIntro()) showIntro(); }, 900);
 
 </script>
 </body>
