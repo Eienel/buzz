@@ -28,7 +28,7 @@ import { nameFor, houseWallets } from "./names.mjs";
 import { verifyPayment } from "./x402.mjs";
 import { loadRelayer, startDrain } from "./relayer.mjs";
 import { DATA_DIR } from "./keypair.mjs";
-import { makeConnection, surviveRateLimits } from "./rpc.mjs";
+import { makeConnection, surviveRateLimits, rpcStats, rpcTotal, rpcComputeUnits } from "./rpc.mjs";
 
 const { keccak_256 } = jsSha3;
 
@@ -1715,6 +1715,12 @@ createServer(async (req,res)=>{
       // its loop. `running.swarm` only says a child was spawned, which stayed
       // true through 25 minutes of a hung swarm and an empty arena.
       swarm: swarmBeat(),
+      // Where the compute units actually go, counted rather than estimated.
+      // The swarm is its own process, so its calls are on its heartbeat above,
+      // not in this total.
+      rpc: { calls: rpcTotal(), computeUnits: rpcComputeUnits(),
+             perHour: Math.round(rpcComputeUnits() / Math.max(process.uptime() / 3600, 0.01)),
+             byMethod: rpcStats() },
       // Where the results live, and whether they are actually landing there.
       //
       // The board showed nothing newer than 88 hours while games had finished

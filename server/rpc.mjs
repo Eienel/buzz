@@ -20,6 +20,31 @@ import { Connection } from "@solana/web3.js";
 
 const LIMITED = /429|Too Many Requests|max usage reached|rate limit/i;
 
+/**
+ * Every RPC method this process has called, and how often.
+ *
+ * Alchemy bills per call, not per byte, so the only way to know where the
+ * budget goes is to count calls by method. Estimating it produced 42.5M CU a
+ * day against a measured 7.5M, which is the kind of wrong that leads to
+ * optimising the wrong loop: the poller looked like the problem and the
+ * phase-wait loop turned out to already sleep on the chain's own clock.
+ *
+ * Counting only. Nothing here changes what is called or when.
+ */
+const rpcCalls = new Map();
+export const rpcStats = () =>
+  Object.fromEntries([...rpcCalls.entries()].sort((a, b) => b[1] - a[1]));
+export const rpcTotal = () => [...rpcCalls.values()].reduce((a, b) => a + b, 0);
+
+// Alchemy's Solana price list, so the counts can be turned into a bill without
+// a spreadsheet. Anything unlisted is assumed 20, which is the common case.
+const CU = { getAccountInfo: 10, getBalance: 10, getMultipleAccountsInfo: 20,
+             getProgramAccounts: 20, sendTransaction: 20, getLatestBlockhash: 20,
+             getSignatureStatuses: 20, simulateTransaction: 20, getTokenSupply: 20,
+             getTransaction: 20, getSignaturesForAddress: 20, getSlot: 10 };
+export const rpcComputeUnits = () =>
+  [...rpcCalls.entries()].reduce((n, [m, c]) => n + c * (CU[m] ?? 20), 0);
+
 export function makeConnection(rpc, opts = {}) {
   const fallbackUrl = opts.fallback ?? process.env.RPC_FALLBACK ?? "https://api.devnet.solana.com";
   const cooldown = Number(opts.cooldownMs ?? process.env.RPC_COOLDOWN_MS ?? 10 * 60_000);
@@ -39,6 +64,7 @@ export function makeConnection(rpc, opts = {}) {
       const v = Reflect.get(live, prop, live);
       if (typeof v !== "function") return v;
       return function (...args) {
+        if (typeof prop === "string") rpcCalls.set(prop, (rpcCalls.get(prop) ?? 0) + 1);
         const out = v.apply(live, args);
         // Only the primary's rejections bench anything, and only a promise
         // carries the answer that would tell us.

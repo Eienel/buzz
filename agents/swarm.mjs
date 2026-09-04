@@ -11,7 +11,8 @@
 import anchorPkg from "@coral-xyz/anchor";
 import { Connection, Keypair, PublicKey, SystemProgram, LAMPORTS_PER_SOL,
          SYSVAR_SLOT_HASHES_PUBKEY, Transaction, sendAndConfirmTransaction } from "@solana/web3.js";
-import { makeConnection, surviveRateLimits, explainTxError } from "../server/rpc.mjs";
+import { makeConnection, surviveRateLimits, explainTxError,
+         rpcStats, rpcTotal, rpcComputeUnits } from "../server/rpc.mjs";
 import { getOrCreateAssociatedTokenAccount, mintTo, getAssociatedTokenAddressSync } from "@solana/spl-token";
 import jsSha3 from "js-sha3";
 const { keccak_256 } = jsSha3;
@@ -394,6 +395,14 @@ function beat(state, extra = {}) {
     writeFileSync(BEAT, JSON.stringify({ at: Date.now(), state, pid: process.pid,
                                          bootedAt: BOOTED,
                                          recentFailures: failures,
+                                         // The swarm sends most of the arena's
+                                         // transactions, so this is where the
+                                         // compute units mostly are.
+                                         rpc: { calls: rpcTotal(),
+                                                computeUnits: rpcComputeUnits(),
+                                                perHour: Math.round(rpcComputeUnits() /
+                                                  Math.max((Date.now() - BOOTED) / 3600000, 0.01)),
+                                                byMethod: rpcStats() },
                                          ...extra }));
   } catch (e) { beatErr = String(e.message ?? e).slice(0, 80); }
 }
