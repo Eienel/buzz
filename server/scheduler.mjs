@@ -125,10 +125,26 @@ export function makeScheduler({ program, payer, assets }) {
       tried.add(`${asset.name}:${new BN(String(slotFor(nowMs, t.every) + t.tempo)).toString()}`);
       return;
     }
+    // An empty board does not wait for the clock.
+    //
+    // Slots are eight minutes apart, and a slot missed while the board was
+    // full is deliberately not backfilled. Both are right while games are
+    // running and both are wrong when there are none: every deploy restarts
+    // this process, so the board goes to zero, and the schedule can then leave
+    // the arena reading "no hive running right now" for most of eight minutes,
+    // which is the one state no visitor should ever see.
+    //
+    // The rescue takes its own id off the current minute rather than the slot.
+    // Reusing the slot id would rebuild the PDA of a game that may already have
+    // been created and finished, and the chain would refuse it for the rest of
+    // the slot while the board stayed empty.
+    const rescue = onBoard === 0;
     const slot = slotFor(nowMs, t.every);
     // The id encodes the slot and the tempo, so it is the same number in every
     // process that computes it, and still a plausible millisecond timestamp.
-    const gid = new BN(String(slot + t.tempo));
+    const gid = rescue
+      ? new BN(String(Math.floor(nowMs / 60_000) * 60_000 + t.tempo))
+      : new BN(String(slot + t.tempo));
     const key = `${asset.name}:${gid.toString()}`;
     if (tried.has(key)) return;
     tried.add(key);

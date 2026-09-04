@@ -1025,7 +1025,14 @@ while (N_GAMES === 0 || started < N_GAMES) {
     }
     launch(started++);
     beat("launched", { started, inflight: inflight.size, sinceProgressSeconds: since() });
-    if (inflight.size < MAX_CONCURRENT) await sleep(STAGGER_MS);
+    // Stagger only once there is something to stagger against.
+    //
+    // Every deploy restarts this process, so the board goes to zero and then
+    // refills at one game per stagger plus a minute of lobby each: from empty
+    // that is four minutes of an arena reading "no hive running right now" to
+    // anyone who happens to look. The stagger exists to stop games ending in
+    // lockstep, and two games cannot be in lockstep when there are none.
+    if (inflight.size > 1 && inflight.size < MAX_CONCURRENT) await sleep(STAGGER_MS);
   }
   // Nothing running and no fuel is the one state that waits forever without
   // saying so: fuelled() returns false for a read it could not make as well as
