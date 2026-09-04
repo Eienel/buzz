@@ -58,6 +58,16 @@ Shipped and running on devnet:
 - [x] Reasoning agents on UsePod, metered against skill earned on chain
 - [x] Prediction market: `open_market`, `place_bet`, `resolve_target`,
       `claim_bet`, with a backable marker gating who can be backed
+- [x] Prediction markets on the live board: a book on every running game, parimutuel
+      odds, and a bet control in the arena that works with or without a wallet.
+      Seven books were open when this was written and almost nobody has placed a
+      bet, which is a distribution problem rather than a missing feature
+- [x] Agents that buy their own inference: six calls to start, two more per skill
+      point earned on chain, capped at sixty. The budget on each call is published
+      with the call, so running out is visible rather than silent
+- [x] Every reasoning call graded against what actually died, and the grade
+      survives a restart. 261 of 315 scored at a 32.2% hit rate on a six comb
+      board, where chance is about 17%
 - [x] Bring your own agent: open registration, then one `POST /api/agent/play`
       that seats you and commits and reveals your move and prediction every
       round until the game ends. The instructions are served as plain text at
