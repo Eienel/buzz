@@ -245,6 +245,24 @@
      width, beside the comb label rather than over the count. */
   .hex .backwrap{top:25%;right:7px}
   .comb,.hex{position:relative}
+  /* The card's own back control. Sized like the other header chips so it reads
+     as part of the game's facts, tinted honey so it reads as the one thing on
+     the card you can press. */
+  .backchip{font:inherit;font-family:var(--mono);font-size:11px;letter-spacing:.06em;
+    display:inline-flex;align-items:center;gap:7px;cursor:pointer;
+    color:var(--ink);background:linear-gradient(180deg,#ffc23d,#ff9d0d);
+    border:1px solid #ffc23d;border-radius:999px;padding:4px 12px}
+  .backchip:hover{background:linear-gradient(180deg,#ffd270,#ffb42a)}
+  .backchip:active{transform:translate3d(0,1px,0)}
+  /* The clock has to be readable on the honey fill, not a ghost on it: this is
+     the answer to "how long do I have", which is half of why the chip exists. */
+  .backchip .cd{font-size:10px;font-weight:700;color:#4a2e00;
+    background:rgba(255,255,255,.42);border-radius:999px;padding:1px 6px}
+  .backchip[aria-expanded="true"]{filter:brightness(.92)}
+  /* Where an agent is sitting, under its name, when the menu covers a whole
+     game rather than one comb. */
+  .bwhere{display:block;font-family:var(--mono);font-size:10px;color:var(--dimmer);
+    letter-spacing:.04em;margin-top:2px}
   .backb{font:inherit;font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;
     padding:3px 9px;border-radius:99px;cursor:pointer;color:var(--dim);
     background:rgba(10,8,6,.72);border:1px solid var(--edge2);
@@ -681,6 +699,47 @@ const agentsIn = (g, combId) =>
  * The control that hangs off a comb. Nothing when the book is shut or the comb
  * is empty: an affordance that cannot be used is worse than none.
  */
+/**
+ * The pot: stake still held by combs that are alive.
+ *
+ * This showed `leftover`, which is the program's undistributed remainder and
+ * is zero for the whole of a healthy game. A card reading "pot 0.00" beside
+ * "volume 80.00" and three combs holding 19.50, 19.50 and 39.00 is the page
+ * contradicting itself in one line. What a viewer means by the pot is what is
+ * still on the table, so that is what it adds up.
+ */
+const potOf = (g) => (g.combs ?? []).reduce(
+  (n, c) => n + (c.alive ? Number(c.stake || 0) : 0), 0);
+
+/** Every agent in this game anyone may back, with the comb it is sitting in. */
+const backableIn = (g) => (g.agents || []).filter(backable)
+  .map((a) => ({ ...a, aliveComb: (g.combs ?? []).find((c) => c.id === a.comb)?.alive !== false }))
+  .filter((a) => a.aliveComb);
+
+/**
+ * One control per game, in the header, rather than only the small ones hiding
+ * on individual combs.
+ *
+ * The per-comb buttons only appear on combs that hold a backable agent, which
+ * on a six comb board is often one or two of them, and they are inside the
+ * honeycomb where nobody is looking for a control. So the card carries its own:
+ * it lists every agent in the game with the comb it is currently in, and it
+ * says how long backing stays open, because "why is there no button" and "how
+ * long do I have" were the same question asked twice.
+ *
+ * The deadline is an estimate and is labelled as one. Backing shuts when the
+ * game passes its lock instance, and how long that takes depends on the
+ * validator's clock, not ours: the honest form is "about".
+ */
+function backChip(g){
+  if(!betsOpen(g) || !backableIn(g).length) return "";
+  const ends = (g.phaseEndsAt ?? 0)
+    + Math.max(0, (g.lockInstance ?? 0) - (g.instance ?? 0)) * (g.instanceSeconds ?? 60);
+  return `<button class="chip backchip" data-gback="${esc(g.gameId)}"
+    title="Back an agent in this game. Backing shuts when the game passes instance ${g.lockInstance}, which is about this long.">back an agent
+    <time class="cd" data-ends="${ends}" data-span="${g.instanceSeconds ?? 60}">&hellip;</time></button>`;
+}
+
 function backBtn(g, cb){
   if(!betsOpen(g) || !cb.alive) return "";
   const n = agentsIn(g, cb.id).length;
@@ -697,18 +756,30 @@ menuEl.className = "backmenu"; menuEl.hidden = true;
 document.body.appendChild(menuEl);
 
 function openBackMenu(btn){
-  const g = (LAST_LIVE || []).find((x) => String(x.gameId) === btn.dataset.g);
-  const cb = Number(btn.dataset.c);
-  const as = g ? agentsIn(g, cb) : [];
+  // Two callers: a comb's own button, which offers that comb's agents, and the
+  // card's, which offers the whole game and has to say where each one is
+  // sitting, because "which comb is it in" is the first thing anyone asks
+  // before backing a name they do not know.
+  const whole = btn.dataset.gback != null;
+  const g = (LAST_LIVE || []).find((x) => String(x.gameId) === (btn.dataset.gback ?? btn.dataset.g));
+  if(!g) return;
+  const cb = whole ? null : Number(btn.dataset.c);
+  const as = whole ? backableIn(g) : agentsIn(g, cb);
   if(!as.length) return;
-  menuEl.innerHTML = `<div class="bmh">comb ${cb} &middot; ${as.length} agent${as.length===1?"":"s"}</div>` +
+  const bandOf = (id) => {
+    const c = (g.combs ?? []).find((x) => x.id === id);
+    return c ? band(c.members)[0] : "";
+  };
+  menuEl.innerHTML = `<div class="bmh">${whole
+      ? `game ${esc(String(g.gameId).slice(-6))} &middot; ${as.length} agent${as.length===1?"":"s"} to back`
+      : `comb ${cb} &middot; ${as.length} agent${as.length===1?"":"s"}`}</div>` +
     as.map((a) => {
       const ranked = a.ranked > 0;
       // esc on both: the name is whatever a stranger typed at registration,
       // and the attribute is the worse of the two, because one quote ends it.
       const who = esc(a.name || short(a.owner));
       return `<button class="bopt" data-back="${esc(a.owner)}" data-name="${who}" data-game="${esc(g.gameId)}">
-        <span class="bn">${who}</span>
+        <span class="bn">${who}${whole ? ` <span class="bwhere">comb ${esc(a.comb)} &middot; ${esc(bandOf(a.comb))}</span>` : ""}</span>
         <span class="brec">${ranked ? `${Math.round(a.winRate*100)}% &middot; ${a.ppg.toFixed(2)}/g` : "no record"}</span>
       </button>`;
     }).join("");
@@ -1208,7 +1279,8 @@ function render(s){
         ${g.insane?'<span class="pill insane"><i></i>insane</span>':""}
         <span class="m lead">${IC.clock}<b>${PHASE[g.phase]}</b>
           ${g.status===1?`<time class="cd" data-ends="${g.phaseEndsAt}" data-span="${span}">${mmss(left)}</time>`:""}</span>
-        <span class="m lead">${IC.pot}pot <b>${sol(g.leftover)}</b></span>
+        <span class="m lead" title="Stake still held by combs that are alive">${IC.pot}pot <b>${sol(potOf(g))}</b></span>
+        ${backChip(g)}
         <span class="gmeta">
           <span class="gid">#${g.gameId}</span>
           <span>instance <b>${g.instance}</b></span>
@@ -1392,8 +1464,8 @@ async function tickHistory(){
 }
 document.addEventListener("click",(e)=>{
   const shut = () => { menuEl.hidden = true;
-    for(const b of document.querySelectorAll(".backb")) b.setAttribute("aria-expanded","false"); };
-  const t=e.target.closest(".backb");
+    for(const b of document.querySelectorAll(".backb,.backchip")) b.setAttribute("aria-expanded","false"); };
+  const t=e.target.closest(".backb,.backchip");
   if(t){
     const wasOpen = t.getAttribute("aria-expanded")==="true";
     shut();
