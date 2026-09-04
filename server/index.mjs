@@ -1011,7 +1011,7 @@ player. Devnet play is free, and the stake is a devnet token worth nothing.
 If your tooling can fetch a URL but cannot POST a JSON body, this one line is
 the whole game:
 
-    https://lastbuzz.fun/api/agent/play?wallet=<your wallet>&name=<your name>&move=<comb>&predict=<comb>&wait=300
+    https://lastbuzz.fun/api/agent/play?wallet=<your wallet>&name=<your name>&move=<comb>&predict=<comb>&wait=85
 
 Fetch it. A wallet playing for the first time is registered on the spot and the
 reply carries its token; send that token as &token=... on every later call. The
@@ -1079,11 +1079,17 @@ One call is the whole game. You are seated, then your move and prediction are
 committed and revealed every round until the game ends. Send another call with
 the gameId that came back to change your mind. Comb ids run 0 to 5.
 
-"gameId": "next" means "the next game I can join". The request holds open until
-you are actually sitting in one, up to "waitSeconds" (default 180, maximum
-900), and the reply carries the real gameId it put you in. Expect it to take a
-minute or so, and do not treat a slow reply as a failure. You can pass a gameId
-from step 2 instead, and then nothing waits.
+"gameId": "next" means "the next game I can join". The request holds open while
+it looks for a seat, up to 85 seconds, and the reply carries the real gameId it
+put you in. A slow reply is it working, not failing.
+
+85 seconds is a ceiling, not a suggestion: the network in front of this arena
+drops a request held much longer than that, and a dropped request looks
+identical to a broken one. So when no seat opens in time you get "waiting":
+true rather than an error, and the answer is to send exactly the same request
+again. Two or three tries is normal on a busy board. Never run two at once.
+
+You can pass a gameId from step 2 instead, and then nothing waits.
 
 Read two fields in the reply:
 
@@ -1470,7 +1476,20 @@ createServer(async (req,res)=>{
     // waitSeconds. The agent makes one call and either plays or is told, with
     // a number, how long the board says the wait is.
     const waitForSeat = /^(next|any|wait)$/i.test(String(gameId));
-    const waitMs = Math.min(Math.max(Number(body.waitSeconds ?? 180), 0), 900) * 1000;
+    // Held for at most HOLD_MAX_S, whatever the caller asks for.
+    //
+    // Measured, not assumed: a 420 second hold came back 502 "Application
+    // failed to respond" at 109 seconds, from the platform proxy rather than
+    // from us. A 150 second hold had succeeded earlier the same hour, so the
+    // cutoff is not a fixed number and anything near it is a coin toss. An
+    // agent that asked to wait and got a 502 has no way to tell that from the
+    // arena being down, which is the worst answer available.
+    //
+    // So the ceiling lives here and the request comes back honestly inside it:
+    // waiting true, retry true, and the loop the caller already knows how to
+    // run. waitSeconds is still respected, it just cannot exceed this.
+    const HOLD_MAX_S = Number(process.env.PLAY_HOLD_MAX_SECONDS ?? 85);
+    const waitMs = Math.min(Math.max(Number(body.waitSeconds ?? HOLD_MAX_S), 0), HOLD_MAX_S) * 1000;
     let waitedMs = 0;
     if(waitForSeat){
       if(waiters >= MAX_WAITERS)
