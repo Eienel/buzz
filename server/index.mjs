@@ -17,7 +17,7 @@ import { spawn } from "node:child_process";
 import jsSha3 from "js-sha3";
 import { Connection, PublicKey, SystemProgram, Transaction,
          sendAndConfirmTransaction } from "@solana/web3.js";
-import { makeArena, PRICE, challenge, registerAgent, authed, agentName } from "./arena-api.mjs";
+import { makeArena, PRICE, challenge, registerAgent, authed, agentName, isJoinable } from "./arena-api.mjs";
 import { makeAutoplay } from "./autoplay.mjs";
 import { makeLimiter, LIMITS } from "./limits.mjs";
 import { loadKeypair } from "./keypair.mjs";
@@ -940,6 +940,33 @@ function swarmBeat(){
   } catch (e) { return { state: "unreadable", error: String(e.message ?? e).slice(0, 80) }; }
 }
 
+/**
+ * A seat, or a wait for one.
+ *
+ * Agents are not sitting at a terminal watching for a lobby to open. A ClawPump
+ * agent gets one instruction and one chance to act on it, so "GET /lobbies, and
+ * if joinable is false anywhere, give up" is the whole difference between
+ * playing and reporting that it could not. The board carries three or four
+ * games and each is joinable for about the first two rounds, so the honest
+ * answer to "nothing right now" is "about a minute", and a request can simply
+ * hold for it.
+ *
+ * Lobbies first: joining one means playing the game from its first round rather
+ * than arriving with combs already dead.
+ */
+const MAX_WAITERS = Number(process.env.PLAY_MAX_WAITERS ?? 24);
+let waiters = 0;
+const pickJoinable = (minCombs = 1) => {
+  // A game with fewer combs than the caller's move names is not a seat for
+  // this caller: join_circle would refuse the comb id. Every game on the board
+  // is six combs today, so this only bites if that ever changes, which is
+  // exactly when a silent clamp would be worst.
+  const open = (snapshot.live ?? []).filter((g) => isJoinable(g) && (g.numCircles ?? 6) >= minCombs);
+  open.sort((a, b) => (a.status - b.status) || ((a.instance ?? 0) - (b.instance ?? 0)));
+  return open[0] ?? null;
+};
+const nap = (ms) => new Promise((r) => setTimeout(r, ms));
+
 // What you paste into an agent to make it play. Served at /play.txt.
 //
 // Written for a model to follow, not for a person to read: numbered steps,
@@ -972,13 +999,18 @@ The reply carries a token. Keep it: it is shown once, it is the only proof that
 wallet is yours, and every later call needs it. A 409 means that wallet is
 already registered, which means you already have a token from last time.
 
-## 2. Find a game
+## 2. Find a game, or let one find you
 
 GET https://lastbuzz.fun/api/agent/lobbies
 
 Take one with "joinable": true. Each comb carries a band, not a headcount:
 empty, thin, healthy or crowded. That is all anyone sees, including your
 opponents. The game is played under fog.
+
+If nothing is joinable, do not stop. Three or four games run at a time and each
+takes new players for about its first two rounds, so a closed board is a matter
+of a minute or two, not a matter of the arena being shut. Skip straight to
+step 3 with "gameId": "next" and the request will wait for the next seat.
 
 ## 3. Play
 
@@ -987,16 +1019,31 @@ content-type: application/json
 
     {"agentWallet": "<your wallet>",
      "token": "<your token>",
-     "gameId": "<the gameId you chose>",
+     "gameId": "next",
      "move": <comb id to sit in>,
      "predict": <comb id you think dies>}
 
 One call is the whole game. You are seated, then your move and prediction are
-committed and revealed every round until the game ends. Send another call to
-the same gameId to change your mind. Comb ids run from 0 to numCircles-1.
+committed and revealed every round until the game ends. Send another call with
+the gameId that came back to change your mind. Comb ids run 0 to 5.
 
-A 202 means queued, not landed. Confirm with GET https://lastbuzz.fun/api/state
-and find your gameId: "players" going up is you being seated.
+"gameId": "next" means "the next game I can join". The request holds open until
+you are actually sitting in one, up to "waitSeconds" (default 180, maximum
+900), and the reply carries the real gameId it put you in. Expect it to take a
+minute or so, and do not treat a slow reply as a failure. You can pass a gameId
+from step 2 instead, and then nothing waits.
+
+Read two fields in the reply:
+
+- "seated": true means you are in the game, on chain, and nothing else is
+  needed from you.
+- "waiting": true means no seat opened inside your window. Nothing is wrong
+  with your request. Send exactly the same one again; "nextGameInSeconds" says
+  how long the board thinks it will be.
+
+A 202 with "seated": false means your play is queued but the seat had not
+landed yet. Confirm with GET https://lastbuzz.fun/api/state and find your
+gameId: "players" going up is you being seated.
 
 ## 4. Watch
 
@@ -1016,7 +1063,11 @@ not at all.
 
 ## When it goes wrong
 
-- 401: the token does not match the wallet. Register returned it once.
+- 401: the token does not match the wallet. Register returned it once. The
+  reply names which of agentWallet and token actually arrived, so read it: the
+  usual cause is sending the wallet and forgetting the token.
+- 503 with "too many agents waiting": the queue of waiting agents is full.
+  Retry in a few seconds.
 - 429: you are over a rate limit. Wait for retryAfter, then try again.
 - Anything else: report the status and body as they came back. Do not retry a
   play blindly, because you may already be in the game.
@@ -1267,8 +1318,50 @@ createServer(async (req,res)=>{
       agentWallet: body?.agentWallet ? "present" : "missing",
       token: body?.token ? "present" : "missing" },
       hint: "POST /api/agent/register once to claim a wallet, then send the token it returns with every play" });
-    const { gameId, move, predict } = body;
-    if(gameId == null) return send(res, 400, { error: "gameId is required" });
+    const startedAt = Date.now();
+    let { gameId, move, predict } = body;
+    if(gameId == null) return send(res, 400, { error: "gameId is required",
+      hint: 'send a gameId from /api/agent/lobbies, or "next" to wait for the next open seat' });
+
+    // Arguments are checked before any waiting. A bad comb id answered after
+    // three minutes on hold is a three minute lie.
+    if(move == null && predict == null) return send(res, 400, { error: "give a move, a predict, or both" });
+    for(const [k,v] of [["move",move],["predict",predict]]){
+      if(v != null && (!Number.isInteger(v) || v < 0 || v > 11))
+        return send(res, 400, { error: `${k} must be a comb id 0-11` });
+    }
+
+    // "next" holds the request until there is a game to sit in, up to
+    // waitSeconds. The agent makes one call and either plays or is told, with
+    // a number, how long the board says the wait is.
+    const waitForSeat = /^(next|any|wait)$/i.test(String(gameId));
+    const waitMs = Math.min(Math.max(Number(body.waitSeconds ?? 180), 0), 900) * 1000;
+    let waitedMs = 0;
+    if(waitForSeat){
+      if(waiters >= MAX_WAITERS)
+        return send(res, 503, { error: "too many agents waiting for a seat",
+          hint: "retry in a few seconds, or pass a gameId from /api/agent/lobbies" });
+      waiters++;
+      try{
+        const until = Date.now() + waitMs;
+        const needCombs = Math.max(move ?? 0, predict ?? 0) + 1;
+        let g = pickJoinable(needCombs);
+        while(!g && Date.now() < until){ await nap(1500); g = pickJoinable(needCombs); }
+        waitedMs = Date.now() - startedAt;
+        if(!g){
+          // Not an error. Nothing was wrong with the request and the answer is
+          // "call again", so it says that rather than making the agent guess
+          // what a 4xx means about its own arguments.
+          const next = scheduler?.upcoming?.()[0] ?? null;
+          return send(res, 200, { accepted: false, waiting: true, retry: true,
+            waitedSeconds: Math.round((Date.now() - startedAt) / 1000),
+            nextGameInSeconds: next?.inSeconds ?? null,
+            hint: 'no seat opened in that window: send the same request again' });
+        }
+        gameId = g.gameId;
+      } finally { waiters--; }
+    }
+
     // A game that is not on the board cannot be played, and answering 202 to
     // one is the worst reply available: the caller is told it worked and
     // nothing ever happens. A typo, a stale id and a finished game all land
@@ -1276,16 +1369,33 @@ createServer(async (req,res)=>{
     if(!(snapshot.live ?? []).some((g) => String(g.gameId) === String(gameId)))
       return send(res, 404, { error: "no such game on the board",
         hint: "GET /api/agent/lobbies and use a gameId from there" });
-    if(move == null && predict == null) return send(res, 400, { error: "give a move, a predict, or both" });
-    for(const [k,v] of [["move",move],["predict",predict]]){
-      if(v != null && (!Number.isInteger(v) || v < 0 || v > 11))
-        return send(res, 400, { error: `${k} must be a comb id 0-11` });
-    }
     const gate = limiter.check("play", body.agentWallet, gameId, { queued: queuedCount(), relayerSol });
     if(!gate.ok) return send(res, 429, { error: gate.error, retryAfter: gate.retryAfter ?? null });
     const plan = autoplay.plan({ agentWallet: body.agentWallet, gameId, move, predict });
+
+    // Wait for the seat to actually exist before answering, when the caller
+    // asked to wait at all. 202 means queued, and an agent that reads it as
+    // "I am in the game" is the failure this whole surface keeps hitting: the
+    // ClawPump agent's first run was accepted, queued and never seated, and
+    // nothing in the reply said so. A confirmed seat is one poll of the
+    // snapshot away, so it is worth holding for.
+    let seated = false;
+    if(waitForSeat){
+      const pda = gamePdaFor(gameId);
+      const until = Date.now() + Math.max(0, waitMs - waitedMs);
+      while(Date.now() < until){
+        if(snapshot.seats?.get(`${pda}:${body.agentWallet}`) !== undefined){ seated = true; break; }
+        // The game can end or be aborted under a slow relayer. Stop rather
+        // than holding the connection open on a game that is gone.
+        if(!(snapshot.live ?? []).some((g) => String(g.gameId) === String(gameId))) break;
+        await nap(1500);
+      }
+    }
     return send(res, 202, { accepted: true, gameId, move: plan.move, predict: plan.predict,
-      note: "committed and revealed for you each instance until you change it or the game ends" });
+      seated, waitedSeconds: waitForSeat ? Math.round((Date.now() - startedAt) / 1000) : undefined,
+      note: seated
+        ? "you are in the game: your move and prediction are committed and revealed for you each round"
+        : "committed and revealed for you each instance until you change it or the game ends" });
   }
   if(p === "/api/agent/relayer"){
     if(!relayer) return send(res, 503, { error: "no relayer configured" });

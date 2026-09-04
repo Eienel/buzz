@@ -21,6 +21,25 @@ import { DATA_DIR } from "./keypair.mjs";
 // A join relayed with only a second or two left loses the race to the crank.
 const JOIN_MARGIN_SECONDS = 3;
 
+/**
+ * Whether the program would accept a join on this game right now.
+ *
+ * Must match join_circle exactly, or we advertise seats the program will
+ * refuse: Lobby always, otherwise Running AND in Commit AND before the lock
+ * instance AND still inside the phase window, with a margin so a seat does not
+ * close while the relayer is still queuing the transaction.
+ *
+ * Exported because three places were deciding this and only one of them was
+ * right. The lobby listing said a running game in commit was joinable, easy
+ * mode would only ever join a lobby, and the skill told agents to trust the
+ * listing. An agent that took a running game at its word was accepted, queued,
+ * and never seated.
+ */
+export const isJoinable = (g) =>
+  g.status === 0 ||
+  (g.status === 1 && g.phase === 0 && g.instance < g.lockInstance &&
+   Math.floor(Date.now() / 1000) + JOIN_MARGIN_SECONDS < g.phaseEndsAt);
+
 const PRICE = {
   join:    Number(process.env.PRICE_JOIN    ?? 0.10), // USD, becomes the stake
   move:    Number(process.env.PRICE_MOVE    ?? 0.00), // free: moves should not be taxed
@@ -150,17 +169,7 @@ export function makeArena({ snapshot, enqueue }) {
               band: c.members === 0 ? "empty" : c.members <= 1 ? "thin"
                   : c.members <= 3 ? "healthy" : "crowded",
             })),
-            // Must match join_circle exactly, or we advertise seats the program
-            // will refuse: Lobby always, otherwise Running AND in Commit AND
-            // before the lock instance AND still inside the phase window. A
-            // margin keeps us from promising a seat that closes while the
-            // relayer is still queuing the transaction.
-            joinable:
-              g.status === 0 ||
-              (g.status === 1 &&
-                g.phase === 0 &&
-                g.instance < g.lockInstance &&
-                Math.floor(Date.now() / 1000) + JOIN_MARGIN_SECONDS < g.phaseEndsAt),
+            joinable: isJoinable(g),
           })),
         },
       };

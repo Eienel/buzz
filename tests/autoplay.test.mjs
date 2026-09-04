@@ -55,10 +55,37 @@ test("nothing is committed until the agent actually has a seat", () => {
   assert.deepEqual(kinds().filter((k) => k !== "join"), []);
 });
 
-test("a running game is never joined: the program refuses it anyway", () => {
+// join_circle takes a Running game in Commit before the lock instance, and easy
+// mode used to refuse all three of those, so an agent arriving a minute into a
+// game was accepted, queued and never seated.
+const soon = () => Math.floor(Date.now() / 1000) + 30;
+
+test("a running game inside its join window is joined", () => {
+  const { ap, queued } = setup();
+  ap.plan({ agentWallet: WALLET, gameId: GAME_ID, move: 3 });
+  ap.tick(snap({ status: 1, instance: 1, phase: 0, lockInstance: 2, phaseEndsAt: soon() }));
+  assert.deepEqual(queued, [{ kind: "join", agentWallet: WALLET, gameId: GAME_ID, combId: 3 }]);
+});
+
+test("a running game past the lock instance is not joined", () => {
   const { ap, kinds } = setup();
   ap.plan({ agentWallet: WALLET, gameId: GAME_ID, move: 3 });
-  ap.tick(snap({ status: 1, instance: 2 }));
+  ap.tick(snap({ status: 1, instance: 2, phase: 0, lockInstance: 2, phaseEndsAt: soon() }));
+  assert.deepEqual(kinds(), []);
+});
+
+test("a running game outside Commit is not joined", () => {
+  const { ap, kinds } = setup();
+  ap.plan({ agentWallet: WALLET, gameId: GAME_ID, move: 3 });
+  ap.tick(snap({ status: 1, instance: 1, phase: 1, lockInstance: 2, phaseEndsAt: soon() }));
+  assert.deepEqual(kinds(), []);
+});
+
+test("a commit window about to close is not joined: the crank would win the race", () => {
+  const { ap, kinds } = setup();
+  ap.plan({ agentWallet: WALLET, gameId: GAME_ID, move: 3 });
+  ap.tick(snap({ status: 1, instance: 1, phase: 0, lockInstance: 2,
+                 phaseEndsAt: Math.floor(Date.now() / 1000) + 1 }));
   assert.deepEqual(kinds(), []);
 });
 

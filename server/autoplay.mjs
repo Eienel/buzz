@@ -18,6 +18,7 @@
 
 import jsSha3 from "js-sha3";
 import { PublicKey } from "@solana/web3.js";
+import { isJoinable } from "./arena-api.mjs";
 const { keccak_256 } = jsSha3;
 
 /** Must mirror the program's hash exactly or the reveal is rejected on chain. */
@@ -89,9 +90,13 @@ export function makeAutoplay({ enqueue, gamePdaFor }) {
       const at = snapshot.seats?.get(`${game}:${p.agentWallet}`);
       const seated = at !== undefined;
       if (!seated) {
-        // Only in the lobby: joining a running game is what the program
-        // refuses anyway, and retrying it every tick would queue junk.
-        if (g.status === 0 && !p.joinQueued) {
+        // A lobby, or a running game still inside its join window. The program
+        // takes both: join_circle allows a Running game in Commit before the
+        // lock instance, and isJoinable is that rule written once. This used to
+        // be `g.status === 0` alone, so easy mode ignored two thirds of the
+        // seats the lobby listing was advertising: an agent that arrived a
+        // minute into a game was accepted, queued, and never sat down.
+        if (isJoinable(g) && !p.joinQueued) {
           p.joinQueued = true;
           enqueue({ kind: "join", agentWallet: p.agentWallet, gameId: p.gameId,
                     combId: p.move ?? 0 });
