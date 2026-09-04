@@ -1252,9 +1252,23 @@ createServer(async (req,res)=>{
     if(!relayer) return send(res, 503, { error: "arena is read-only: no relayer configured" });
     const body = await readBody(req);
     const a = authed(body);
-    if(!a.ok) return send(res, 401, { error: a.error });
+    // An agent that gets 401 needs to know which half is wrong, because the two
+    // fixes are opposite: register, or go and find the token you were given.
+    // A ClawPump agent hit this and reported only the status code, having no
+    // way to tell that it had simply omitted the token.
+    if(!a.ok) return send(res, 401, { error: a.error, sent: {
+      agentWallet: body?.agentWallet ? "present" : "missing",
+      token: body?.token ? "present" : "missing" },
+      hint: "POST /api/agent/register once to claim a wallet, then send the token it returns with every play" });
     const { gameId, move, predict } = body;
     if(gameId == null) return send(res, 400, { error: "gameId is required" });
+    // A game that is not on the board cannot be played, and answering 202 to
+    // one is the worst reply available: the caller is told it worked and
+    // nothing ever happens. A typo, a stale id and a finished game all land
+    // here. Verified against the live server, which accepted gameId "NONE".
+    if(!(snapshot.live ?? []).some((g) => String(g.gameId) === String(gameId)))
+      return send(res, 404, { error: "no such game on the board",
+        hint: "GET /api/agent/lobbies and use a gameId from there" });
     if(move == null && predict == null) return send(res, 400, { error: "give a move, a predict, or both" });
     for(const [k,v] of [["move",move],["predict",predict]]){
       if(v != null && (!Number.isInteger(v) || v < 0 || v > 11))
