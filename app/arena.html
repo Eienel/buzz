@@ -774,7 +774,8 @@ function backPanel(g){
       <span class="bbs">${as.length} to choose from</span>
     </button>
     <div class="bclock">shuts in
-      <time class="cd" data-ends="${ends}" data-span="${g.instanceSeconds ?? 60}">&hellip;</time></div>
+      <time class="cd" data-zero="any moment" data-ends="${ends}"
+        data-span="${g.instanceSeconds ?? 60}">&hellip;</time></div>
   </div>`;
 }
 
@@ -1342,7 +1343,12 @@ function tickClocks(){
   const now=Math.floor(Date.now()/1e3);
   for(const el of document.querySelectorAll("time.cd")){
     const left=Math.max(0,+el.dataset.ends-now);
-    el.textContent=mmss(left);
+    // Each clock says its own thing at zero. The phase clock means "the window
+    // is over and the next step has not landed", which is "closing". The back
+    // panel's is an estimate of when backing shuts, and estimates do not end on
+    // the second, so "shuts in closing" was both nonsense and a promise the
+    // number could not keep.
+    el.textContent = left<=0 && el.dataset.zero ? el.dataset.zero : mmss(left);
     el.classList.toggle("soon", left>0 && left<=10);
   }
   for(const el of document.querySelectorAll(".bar i[data-ends]")){
