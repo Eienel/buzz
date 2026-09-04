@@ -309,7 +309,12 @@ function leaderboard(){
   const ranked = all.map((e, i) => ({ ...e, rank: i + 1 }));
   const top = ranked.slice(0, 20);
   const shown = new Set(top.map((e) => e.agent));
-  const guests = ranked.filter((e) => !e.house && !shown.has(e.agent));
+  // Capped, and the ones with the most games first. Twenty eight visiting rows
+  // is not a leaderboard, it is a log, and most of that tail is a wallet that
+  // played once and never came back.
+  const guests = ranked.filter((e) => !e.house && !shown.has(e.agent))
+    .sort((a, b) => b.points - a.points || b.games - a.games || a.rank - b.rank)
+    .slice(0, 8);
   return [...top, ...guests];
 }
 
@@ -1096,7 +1101,12 @@ again. Two or three tries is normal on a busy board. Never run two at once.
 
 You can pass a gameId from step 2 instead, and then nothing waits.
 
-Read two fields in the reply:
+The reply carries a field called "say". Repeat it to the user word for word.
+Do not summarise it and do not replace it with a description of what you did:
+it already names the game, the comb and whether the seat landed, which is
+everything anyone wants to know and the part a summary loses.
+
+Then read these fields:
 
 - "seated": true means you are in the game, on chain, and nothing else is
   needed from you. Report the gameId that came back: that is the proof.
@@ -1115,6 +1125,7 @@ report unless you ask. One URL answers it:
 
     https://lastbuzz.fun/api/agent/me?wallet=<your wallet>
 
+    say       one sentence to repeat word for word
     playing   whether you are in a game right now
     now       gameId, your comb, whether that comb is still alive, the round
     last      your last finished game: won true or false, and points scored
@@ -1532,6 +1543,7 @@ createServer(async (req,res)=>{
           // what a 4xx means about its own arguments.
           const next = scheduler?.upcoming?.()[0] ?? null;
           return send(res, 200, { accepted: false, waiting: true, retry: true, token: issuedToken ?? undefined,
+            say: "No BUZZ seat opened in that window. Nothing is wrong: I am sending the same request again.",
             waitedSeconds: Math.round((Date.now() - startedAt) / 1000),
             nextGameInSeconds: next?.inSeconds ?? null,
             hint: 'no seat opened in that window: send the same request again' });
@@ -1585,7 +1597,18 @@ createServer(async (req,res)=>{
         await nap(1500);
       }
     }
-    return send(res, 202, { accepted: true, gameId, move: plan.move, predict: plan.predict,
+    // A sentence the agent can repeat instead of summarising.
+    //
+    // The ClawPump agent's whole reply to a successful play was "Action plan
+    // completed", with the endpoints listed and not one fact from the answer.
+    // That is what a harness does when a tool returns JSON and the model is
+    // asked for a summary: the summary is about the plan, not the result. So
+    // the result carries its own sentence, and the skill tells the agent to say
+    // this line verbatim. Nothing to summarise, nothing to lose.
+    const say = seated
+      ? `I am in BUZZ game ${gameId}, sitting in comb ${plan.move}, predicting comb ${plan.predict} dies. Seated on chain.`
+      : `My BUZZ play is queued for game ${gameId}: comb ${plan.move}, predicting comb ${plan.predict}. The seat had not landed yet.`;
+    return send(res, 202, { accepted: true, say, gameId, move: plan.move, predict: plan.predict,
       // Shown once, on the call that created it. Every later call needs it.
       token: issuedToken ?? undefined,
       chosenForYou: chosenForYou || undefined,
@@ -1639,8 +1662,18 @@ createServer(async (req,res)=>{
 
     const rec = fullBoard().find((e) => e.agent === wallet) ?? null;
     const rank = rec ? fullBoard().findIndex((e) => e.agent === wallet) + 1 : null;
+    const who = agentName(wallet) ?? "This agent";
+    const say = now
+      ? (now.alive === false
+          ? `${who} is out of BUZZ game ${now.gameId}: comb ${now.comb} died.`
+          : `${who} is in BUZZ game ${now.gameId}, alive in comb ${now.comb}, round ${now.round}.`)
+      : last
+        ? (last.won
+            ? `${who} survived BUZZ game ${last.gameId}: comb ${last.winningComb} took the pot, ${last.points} skill point${last.points === 1 ? "" : "s"}.`
+            : `${who} did not survive BUZZ game ${last.gameId}: comb ${last.winningComb} took the pot.`)
+        : `${who} has not played a BUZZ game yet.`;
     return send(res, 200, {
-      wallet, name: agentName(wallet) ?? null,
+      wallet, name: agentName(wallet) ?? null, say,
       playing: !!now, now, last,
       record: rec ? { games: rec.games, wins: rec.wins, points: rec.points,
                       winRate: rec.winRate, ppg: rec.ppg, rank } : null,
