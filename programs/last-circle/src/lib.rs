@@ -20,6 +20,13 @@ declare_id!("4TNbztSMd3zxG57M25y8WhpcKrQMJQVYEK6EnnkQy1Hw");
 const BPS: u128 = 10_000;
 /// Fate-strike probability ε = 15% (a uniformly random circle dies).
 const FATE_STRIKE_BPS: u64 = 1_500;
+/// Comb ids the round book can hold a pool for. Games are created with six and
+/// the client caps ids at eleven, so twelve slots is the whole space at 96
+/// bytes, which is cheaper than the accounts a per-comb pool would need.
+const MAX_COMBS: usize = 12;
+/// "no comb", for a round book that has not been settled yet. Not zero, which
+/// is a real comb id and the one that dies most often.
+const NO_COMB: u8 = 255;
 /// Refund floor/ceiling in bps (55% → 80%, rising with survival time).
 const REFUND_LO_BPS: u64 = 5_500;
 const REFUND_HI_BPS: u64 = 8_000;
@@ -1315,6 +1322,188 @@ pub mod last_circle {
                     mint: ctx.accounts.stake_mint.to_account_info(),
                     to: ctx.accounts.bettor_token.to_account_info(),
                     authority: ctx.accounts.market_vault.to_account_info(),
+                },
+                &[seeds],
+            ),
+            payout,
+            ctx.accounts.stake_mint.decimals,
+        )?;
+        Ok(())
+    }
+
+    // ----- The round book: which comb dies THIS round ------------------------
+    //
+    // The game book asks one question per game, "who is still standing at the
+    // end", and answers it in eight minutes. That is one decision per visit,
+    // and it shuts halfway through, so a spectator who arrives late has nothing
+    // to do but watch. This asks a question every round instead, on the one
+    // fact the whole game turns on, and settles it sixty seconds later.
+    //
+    // It is deliberately a separate set of accounts rather than a mode on the
+    // existing Market. The two books resolve off different facts (a comb dying
+    // now, an agent surviving to the end), close at different times, and have
+    // different failure modes, and folding them together would mean every
+    // constraint on one carrying an exception for the other.
+
+    /// Open the book for the round the game is currently in.
+    ///
+    /// Permissionless: the server cranks it, and if the server is down anybody
+    /// can. Commit phase only, because the whole point is to take bets before
+    /// anything about this round is known, and by Reveal the moves are public.
+    pub fn open_round(ctx: Context<OpenRound>) -> Result<()> {
+        let g = &ctx.accounts.game;
+        require!(g.status == GameStatus::Running, GameError::WrongPhase);
+        require!(g.phase == InstancePhase::Commit, GameError::WrongPhase);
+        require!(g.instance > 0, GameError::WrongPhase);
+        let r = &mut ctx.accounts.round;
+        r.game = g.key();
+        r.stake_mint = g.stake_mint;
+        r.instance = g.instance;
+        r.pools = [0u64; MAX_COMBS];
+        r.total_pool = 0;
+        r.bettors = 0;
+        r.doomed = NO_COMB;
+        r.settled = false;
+        r.void = false;
+        r.bump = ctx.bumps.round;
+        r.vault_bump = ctx.bumps.round_vault;
+        Ok(())
+    }
+
+    /// Stake on the comb you think dies this round.
+    ///
+    /// One comb per bettor per round: a second bet on a different comb would be
+    /// a hedge that guarantees a share of its own money back, which is not a
+    /// prediction. Adding to the comb you already chose is fine.
+    pub fn place_round_bet(ctx: Context<PlaceRoundBet>, comb: u8, amount: u64) -> Result<()> {
+        require!(amount > 0, GameError::BadParam);
+        {
+            let g = &ctx.accounts.game;
+            let r = &ctx.accounts.round;
+            require!(g.status == GameStatus::Running, GameError::WrongPhase);
+            require!(!r.settled && !r.void, GameError::WrongPhase);
+            // The round the book was opened for, still in its blind phase. Once
+            // the crank moves this instance to Reveal the moves start becoming
+            // public, and a bet after that is a bet on a known board.
+            require!(g.instance == r.instance, GameError::BettingClosed);
+            require!(g.phase == InstancePhase::Commit, GameError::BettingClosed);
+            require!(comb < g.num_circles && (comb as usize) < MAX_COMBS, GameError::BadParam);
+        }
+        // A comb that is already dead cannot die again, and taking money for it
+        // would be taking money for a losing ticket we know is losing.
+        require!(ctx.accounts.circle.alive, GameError::CircleDead);
+        require!(ctx.accounts.circle.circle_id == comb, GameError::BadParam);
+
+        resolve_delegate(&ctx.accounts.bettor, &ctx.accounts.payer, &ctx.accounts.relayer)?;
+
+        token_interface::transfer_checked(
+            CpiContext::new(
+                ctx.accounts.token_program.to_account_info(),
+                TransferChecked {
+                    from: ctx.accounts.payer_token.to_account_info(),
+                    mint: ctx.accounts.stake_mint.to_account_info(),
+                    to: ctx.accounts.round_vault.to_account_info(),
+                    authority: ctx.accounts.payer.to_account_info(),
+                },
+            ),
+            amount,
+            ctx.accounts.stake_mint.decimals,
+        )?;
+
+        let bet = &mut ctx.accounts.round_bet;
+        if bet.round == Pubkey::default() {
+            bet.round = ctx.accounts.round.key();
+            bet.bettor = ctx.accounts.bettor.key();
+            bet.comb = comb;
+            bet.bump = ctx.bumps.round_bet;
+            let r = &mut ctx.accounts.round;
+            r.bettors = r.bettors.checked_add(1).ok_or(GameError::MathOverflow)?;
+        }
+        require!(bet.comb == comb, GameError::BadParam);
+        bet.amount = bet.amount.checked_add(amount).ok_or(GameError::MathOverflow)?;
+
+        let r = &mut ctx.accounts.round;
+        r.pools[comb as usize] = r.pools[comb as usize]
+            .checked_add(amount).ok_or(GameError::MathOverflow)?;
+        r.total_pool = r.total_pool.checked_add(amount).ok_or(GameError::MathOverflow)?;
+        Ok(())
+    }
+
+    /// Record which comb died, while the game is still on that round.
+    ///
+    /// Permissionless and idempotent. `doomed_circle` is a single field the
+    /// game overwrites every instance, so this can only be read truthfully
+    /// while `game.instance` is still the round this book was opened for.
+    /// After that the honest answer is not "some other comb died", it is that
+    /// we no longer know, which is what void_round is for.
+    pub fn settle_round(ctx: Context<SettleRound>) -> Result<()> {
+        let g = &ctx.accounts.game;
+        let r = &mut ctx.accounts.round;
+        require!(!r.settled && !r.void, GameError::AlreadyClaimed);
+        require!(g.instance == r.instance, GameError::WrongPhase);
+        // Selected, and executed. In Resolving the choice is made but the comb
+        // is not dead yet; waiting for Scoring means the death is on chain.
+        require!(g.phase == InstancePhase::Scoring, GameError::WrongPhase);
+        require!(g.doomed_circle < MAX_COMBS as u8, GameError::BadParam);
+        r.doomed = g.doomed_circle;
+        r.settled = true;
+        Ok(())
+    }
+
+    /// Refund a round nobody settled in time, or one whose game ended under it.
+    ///
+    /// Without this a missed crank would strand every stake in the round vault
+    /// for good. A book that can eat your money when our server has a bad
+    /// minute is not a book anyone should use.
+    pub fn void_round(ctx: Context<VoidRound>) -> Result<()> {
+        let g = &ctx.accounts.game;
+        let r = &mut ctx.accounts.round;
+        require!(!r.settled && !r.void, GameError::AlreadyClaimed);
+        require!(g.instance > r.instance || g.status != GameStatus::Running,
+                 GameError::WrongPhase);
+        r.void = true;
+        Ok(())
+    }
+
+    /// Take the winnings, or the refund.
+    ///
+    /// Parimutuel across the comb that died. Three cases pay the stake straight
+    /// back rather than keeping it: a voided round, a round where nobody picked
+    /// the comb that died, and a bet on any other comb pays nothing at all.
+    pub fn claim_round_bet(ctx: Context<ClaimRoundBet>) -> Result<()> {
+        let (total_pool, doomed, winning_pool, settled, void, rkey, vbump) = {
+            let r = &ctx.accounts.round;
+            let w = if r.doomed < MAX_COMBS as u8 { r.pools[r.doomed as usize] } else { 0 };
+            (r.total_pool, r.doomed, w, r.settled, r.void, r.key(), r.vault_bump)
+        };
+        require!(settled || void, GameError::WrongPhase);
+
+        resolve_delegate(&ctx.accounts.bettor, &ctx.accounts.payer, &ctx.accounts.relayer)?;
+        let bet = &mut ctx.accounts.round_bet;
+        require!(!bet.claimed, GameError::AlreadyClaimed);
+        bet.claimed = true;
+
+        let payout = if void || winning_pool == 0 {
+            bet.amount
+        } else if bet.comb == doomed {
+            (bet.amount as u128)
+                .checked_mul(total_pool as u128).ok_or(GameError::MathOverflow)?
+                .checked_div(winning_pool as u128).ok_or(GameError::MathOverflow)? as u64
+        } else {
+            0
+        };
+        if payout == 0 { return Ok(()); }
+        require!(payout <= ctx.accounts.round_vault.amount, GameError::ConservationViolated);
+
+        let seeds: &[&[u8]] = &[b"rvault", rkey.as_ref(), &[vbump]];
+        token_interface::transfer_checked(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                TransferChecked {
+                    from: ctx.accounts.round_vault.to_account_info(),
+                    mint: ctx.accounts.stake_mint.to_account_info(),
+                    to: ctx.accounts.bettor_token.to_account_info(),
+                    authority: ctx.accounts.round_vault.to_account_info(),
                 },
                 &[seeds],
             ),
@@ -2752,6 +2941,50 @@ impl TargetPool {
     pub const SPACE: usize = 8 + 32 + 32 + 8 + 1 + 1 + 1;
 }
 
+/// A book on one round of one game: which comb dies at this instance.
+///
+/// Pools are a flat array rather than an account per comb. A round lasts sixty
+/// seconds and there are five or six of them per game, so an account per comb
+/// per round would be thirty rent-paying accounts per game to open, resolve and
+/// reap. The array is 96 bytes and needs none of that.
+#[account]
+pub struct RoundMarket {
+    pub game: Pubkey,
+    pub stake_mint: Pubkey,
+    /// The instance this book asks about. A book is only ever about one.
+    pub instance: u16,
+    /// Stake per comb id, indexed by the id itself.
+    pub pools: [u64; MAX_COMBS],
+    pub total_pool: u64,
+    pub bettors: u32,
+    /// The comb that died, or NO_COMB until it is settled.
+    pub doomed: u8,
+    pub settled: bool,
+    /// Nobody settled it while the game was still on this round, so every stake
+    /// comes back. Distinct from settled: one pays winners, the other pays
+    /// everybody.
+    pub void: bool,
+    pub bump: u8,
+    pub vault_bump: u8,
+}
+impl RoundMarket {
+    pub const SPACE: usize = 8 + 32 + 32 + 2 + (8 * MAX_COMBS) + 8 + 4 + 1 + 1 + 1 + 1 + 1;
+}
+
+/// One bettor's position on one round.
+#[account]
+pub struct RoundBet {
+    pub round: Pubkey,
+    pub bettor: Pubkey,
+    pub comb: u8,
+    pub amount: u64,
+    pub claimed: bool,
+    pub bump: u8,
+}
+impl RoundBet {
+    pub const SPACE: usize = 8 + 32 + 32 + 1 + 8 + 1 + 1;
+}
+
 /// One bettor's position on one agent.
 #[account]
 pub struct Bet {
@@ -2936,6 +3169,112 @@ pub struct ResolveTarget<'info> {
               bump = winning_circle.bump)]
     pub winning_circle: Account<'info, Circle>,
     pub cranker: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct OpenRound<'info> {
+    #[account(seeds = [b"game", game.game_id.to_le_bytes().as_ref()], bump = game.bump)]
+    pub game: Account<'info, Game>,
+    // Seeded on the game's CURRENT instance rather than an argument, so the
+    // book can only ever be opened for the round actually being played. An
+    // instance parameter would let somebody open books for rounds that have
+    // not happened, at our rent.
+    #[account(
+        init, payer = payer, space = RoundMarket::SPACE,
+        seeds = [b"round", game.key().as_ref(), game.instance.to_le_bytes().as_ref()], bump
+    )]
+    pub round: Account<'info, RoundMarket>,
+    #[account(
+        init, payer = payer,
+        token::mint = stake_mint, token::authority = round_vault,
+        seeds = [b"rvault", round.key().as_ref()], bump
+    )]
+    pub round_vault: InterfaceAccount<'info, TokenAccount>,
+    #[account(constraint = stake_mint.key() == game.stake_mint @ GameError::BadParam)]
+    pub stake_mint: InterfaceAccount<'info, Mint>,
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    pub token_program: Interface<'info, TokenInterface>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(comb: u8)]
+pub struct PlaceRoundBet<'info> {
+    #[account(seeds = [b"game", game.game_id.to_le_bytes().as_ref()], bump = game.bump)]
+    pub game: Account<'info, Game>,
+    #[account(mut, seeds = [b"round", game.key().as_ref(), round.instance.to_le_bytes().as_ref()],
+              bump = round.bump)]
+    pub round: Account<'info, RoundMarket>,
+    #[account(mut, seeds = [b"rvault", round.key().as_ref()], bump = round.vault_bump)]
+    pub round_vault: InterfaceAccount<'info, TokenAccount>,
+    /// The comb being bet on, so its own account proves it is alive.
+    #[account(seeds = [b"circle", game.key().as_ref(), &[comb]], bump = circle.bump)]
+    pub circle: Account<'info, Circle>,
+    #[account(
+        init_if_needed, payer = payer, space = RoundBet::SPACE,
+        seeds = [b"rbet", round.key().as_ref(), bettor.key().as_ref()], bump
+    )]
+    pub round_bet: Account<'info, RoundBet>,
+    #[account(mut, constraint = payer_token.owner == payer.key() @ GameError::Unauthorized)]
+    pub payer_token: InterfaceAccount<'info, TokenAccount>,
+    /// CHECK: whose bet this is. Same split the game itself uses: this identity
+    /// owns the position and need not hold a key.
+    pub bettor: UncheckedAccount<'info>,
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    #[account(seeds = [b"relayer", payer.key().as_ref()], bump = relayer.bump)]
+    pub relayer: Option<Account<'info, AllowedRelayer>>,
+    #[account(constraint = stake_mint.key() == round.stake_mint @ GameError::BadParam)]
+    pub stake_mint: InterfaceAccount<'info, Mint>,
+    pub token_program: Interface<'info, TokenInterface>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct SettleRound<'info> {
+    #[account(seeds = [b"game", game.game_id.to_le_bytes().as_ref()], bump = game.bump)]
+    pub game: Account<'info, Game>,
+    #[account(mut, seeds = [b"round", game.key().as_ref(), round.instance.to_le_bytes().as_ref()],
+              bump = round.bump)]
+    pub round: Account<'info, RoundMarket>,
+}
+
+#[derive(Accounts)]
+pub struct VoidRound<'info> {
+    #[account(seeds = [b"game", game.game_id.to_le_bytes().as_ref()], bump = game.bump)]
+    pub game: Account<'info, Game>,
+    #[account(mut, seeds = [b"round", game.key().as_ref(), round.instance.to_le_bytes().as_ref()],
+              bump = round.bump)]
+    pub round: Account<'info, RoundMarket>,
+}
+
+#[derive(Accounts)]
+pub struct ClaimRoundBet<'info> {
+    #[account(seeds = [b"round", round.game.as_ref(), round.instance.to_le_bytes().as_ref()],
+              bump = round.bump)]
+    pub round: Account<'info, RoundMarket>,
+    #[account(mut, seeds = [b"rvault", round.key().as_ref()], bump = round.vault_bump)]
+    pub round_vault: InterfaceAccount<'info, TokenAccount>,
+    #[account(
+        mut,
+        seeds = [b"rbet", round.key().as_ref(), bettor.key().as_ref()],
+        bump = round_bet.bump,
+        constraint = round_bet.bettor == bettor.key() @ GameError::Unauthorized
+    )]
+    pub round_bet: Account<'info, RoundBet>,
+    #[account(mut, constraint = bettor_token.owner == bettor.key() @ GameError::Unauthorized)]
+    pub bettor_token: InterfaceAccount<'info, TokenAccount>,
+    /// CHECK: whose bet this is. The payout always goes to their own token
+    /// account, so a relayer claiming for them cannot redirect it.
+    pub bettor: UncheckedAccount<'info>,
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    #[account(seeds = [b"relayer", payer.key().as_ref()], bump = relayer.bump)]
+    pub relayer: Option<Account<'info, AllowedRelayer>>,
+    #[account(constraint = stake_mint.key() == round.stake_mint @ GameError::BadParam)]
+    pub stake_mint: InterfaceAccount<'info, Mint>,
+    pub token_program: Interface<'info, TokenInterface>,
 }
 
 #[derive(Accounts)]
