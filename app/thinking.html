@@ -257,6 +257,7 @@
     <div><b class="n" id="sHit">…</b><span>predictions correct</span></div>
     <div><b class="n" id="sTok">…</b><span>tokens</span></div>
   </div>
+  <p class="lede" id="emptyWhy" hidden></p>
 
   <div class="panel">
     <div class="ptitle">
@@ -411,6 +412,28 @@ function step(label, body, cls) {
   return `<div class="step ${cls || ""}"><div class="slab">${label}</div><div class="sbody">${body}</div></div>`;
 }
 
+/**
+ * A skip reason a person can read.
+ *
+ * These come straight off the provider or the abort controller, so the page
+ * was printing things like
+ * `402 {"error":{"message":"insufficient balance","type":"insufficient_balance"}}`
+ * into a public feed. It is honest and it is unreadable, and it reads as the
+ * arena being broken rather than as a budget that ran out.
+ *
+ * Anything unrecognised still shows verbatim, trimmed. A reason nobody has
+ * seen before is exactly the one worth not hiding.
+ */
+function reasonFor(raw) {
+  const s = String(raw ?? "");
+  if (/insufficient[_ ]balance|402/i.test(s))      return "out of inference budget";
+  if (/aborted|timeout|timed out/i.test(s))        return "missed the commit window";
+  if (/save a call/i.test(s))                      return "chose to save a call";
+  if (/rate limit|429/i.test(s))                   return "provider rate limited";
+  if (/no budget|budget/i.test(s))                 return "no calls left this game";
+  return s.length > 90 ? s.slice(0, 90) + "\u2026" : s;
+}
+
 function trace(t) {
   const skip = !!t.skipped, c = colourOf(t.agent);
   const fog = t.fog || {};
@@ -426,7 +449,7 @@ function trace(t) {
   // the inference call itself: latency, price, who served it
   if (skip) {
     S.push(step("Inference",
-      `<span class="warn">no usable answer</span> <span class="k">&middot; ${esc(t.skipped)}</span>` +
+      `<span class="warn">no usable answer</span> <span class="k">&middot; ${esc(reasonFor(t.skipped))}</span>` +
       (t.ms ? ` <span class="k">&middot; after ${secs(t.ms)}</span>` : ""), "bad"));
   } else {
     const frac = Math.min(1, (t.ms || 0) / maxMs);
@@ -599,6 +622,37 @@ async function tick() {
     // Filtering narrows every tile. Without saying so, one pod's spend reads
     // as the arena's total.
     $("scope").textContent = filter ? "Live inference · " + filter : "Live inference";
+
+    // Say why the page is empty, when it is.
+    //
+    // Every tile reads "…" or 0 when nothing has been answered, which looks
+    // identical to a page that is broken. It is not: the arena keeps playing
+    // when a model cannot answer, the agent just holds its comb and forfeits
+    // the prediction. The reason is already on every record, so the page can
+    // name it instead of leaving a visitor to guess.
+    const why = (() => {
+      // d.calls, not `calls`: that is declared further down this function and
+      // reading it here is a temporal dead zone error, which would take the
+      // whole render with it.
+      const recent = d.calls || [];
+      if (s.answered) return null;
+      if (!recent.length) return "No calls in this window yet.";
+      const counts = {};
+      for (const c of recent) if (c.skipped) {
+        const r = reasonFor(c.skipped);
+        counts[r] = (counts[r] ?? 0) + 1;
+      }
+      const top = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
+      if (!top) return null;
+      const [reason, n] = top;
+      return reason === "out of inference budget"
+        ? `The inference budget is empty, so the agents are playing without it: ` +
+          `they hold their comb and forfeit the prediction. ${n} of the last ` +
+          `${recent.length} calls were skipped for this.`
+        : `Nothing answered in this window. ${n} of ${recent.length} calls: ${reason}.`;
+    })();
+    const note = $("emptyWhy");
+    if (note) { note.textContent = why ?? ""; note.hidden = !why; }
 
     $("legend").innerHTML = roster.map((a) =>
       `<span><i style="background:${colourOf(a)}"></i>${esc(a)}</span>`).join("");
