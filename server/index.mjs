@@ -1661,15 +1661,25 @@ createServer(async (req,res)=>{
       // round's death is on chain, hand back what died and the new fog, and the
       // decision the agent sends next is committed when the next round opens.
       // That is the real loop: watch a round land, then choose for the next.
+      // Wait for the board to move PAST where the caller already is.
+      //
+      // "Until scoring" alone spins: a game sits in scoring for a while, so the
+      // second call in that window returns instantly, and so does the tenth.
+      // Measured: two good waits followed by ten replies in zero seconds, all
+      // reporting the same round and the same death. What advances is the pair
+      // (round, phase), so that is what the wait watches, and a caller already
+      // in scoring is waiting for the next round rather than for this one.
       const at = (snapshot.live ?? []).find((x) => String(x.gameId) === String(gameId));
-      const from = at?.instance ?? 0;
+      const from = { instance: at?.instance ?? 0, phase: at?.phase ?? 0 };
       const until = startedAt + waitMs;
       while(Date.now() < until){
         const g = (snapshot.live ?? []).find((x) => String(x.gameId) === String(gameId));
         if(!g) break;                                  // game gone: answer with what we have
-        // Scoring means the comb is dead and graded. A new instance means we
-        // missed the moment and the result is still readable behind us.
-        if(g.instance > from || (g.status === 1 && g.phase === 3)) break;
+        const moved = g.instance > from.instance
+          || (g.instance === from.instance && g.phase > from.phase);
+        // Stop on the result, not on every phase: resolving and scoring are
+        // both "the comb is chosen", and commit of a new round is the next one.
+        if(moved && (g.phase >= 2 || g.instance > from.instance)) break;
         await nap(1500);
       }
     }
