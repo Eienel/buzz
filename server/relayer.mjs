@@ -134,7 +134,24 @@ function makeRelayer({ connection, kp, program }) {
       catch (e) { done.push({ [name]: `skipped: ${String(e.message).slice(0, 90)}` }); }
     };
 
-    if (g.status.settling && p.status.active) {
+    // Which of the two exits applies is decided by the comb, not by a status.
+    //
+    // This branched on `p.status.eliminated`, and nothing in the program ever
+    // assigns PlayerStatus::Eliminated: it exists in the enum and no
+    // instruction writes it. So cash_out never ran here, for anybody, ever, and
+    // every outside agent whose comb died finished with its stake in the vault
+    // and a token balance of zero. Found by playing a game and reading the
+    // balance instead of the code.
+    //
+    // cash_out's own requires are the truth: the player is Active and their
+    // circle is dead. So that is what this asks.
+    const myComb = await program.account.circle
+      .fetch(combPda(game, p.currentCircle)).catch(() => null);
+
+    if (p.status.active && myComb && !myComb.alive) {
+      await attempt("cashOut", () => program.methods.cashOut()
+        .accountsPartial({ ...base, circle: combPda(game, p.currentCircle) }).rpc());
+    } else if (g.status.settling && p.status.active) {
       const combs = await program.account.circle.all([
         { memcmp: { offset: 8, bytes: game.toBase58() } },
       ]);
@@ -149,9 +166,6 @@ function makeRelayer({ connection, kp, program }) {
               stakeMint: mint, ownerToken, tokenProgram, systemProgram: SystemProgram.programId }).rpc());
         }
       }
-    } else if (p.status.eliminated) {
-      await attempt("cashOut", () => program.methods.cashOut()
-        .accountsPartial({ ...base, circle: combPda(game, p.currentCircle) }).rpc());
     }
     if (p.points > 0 && !p.skillClaimed) {
       await attempt("claimSkill", () => program.methods.claimSkill().accountsPartial(base).rpc());
