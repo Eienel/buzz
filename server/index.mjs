@@ -1634,10 +1634,20 @@ createServer(async (req,res)=>{
      * the board as it stands, which is still a useful answer.
      */
     if(waitForSeat && mineNow(body.agentWallet, gameId)){
+      // Not "any commit phase": one this agent has not already played.
+      //
+      // The first version waited for phase === commit, which a lobby also is,
+      // and which the round you have already committed for still is. Running a
+      // real loop against it, twelve calls returned in under a second each and
+      // every one landed on the same round: the decision was replaced but the
+      // commit had already gone out, so nothing changed. A round you have
+      // committed for is a round you have played.
+      const already = new Set(Object.keys(autoplay.logOf(body.agentWallet, gameId)).map(Number));
       const until = startedAt + waitMs;
       while(Date.now() < until){
         const g = (snapshot.live ?? []).find((x) => String(x.gameId) === String(gameId));
-        if(!g || g.phase === 0) break;
+        if(!g) break;                                  // game gone: answer with what we have
+        if(g.status === 1 && g.phase === 0 && g.instance >= 1 && !already.has(g.instance)) break;
         await nap(1500);
       }
     }
@@ -1759,6 +1769,13 @@ createServer(async (req,res)=>{
     const liveGame = (snapshot.live ?? []).find((x) => String(x.gameId) === String(gameId));
     return send(res, 202, { accepted: true, say, gameId, move: plan.move, predict: plan.predict,
       board: boardFor(liveGame), lastRound: lastRoundFor(liveGame),
+      // Whether what you just sent will actually be committed. A decision sent
+      // for a round already committed is kept and used next round, which is not
+      // the same thing and should not read as if it were.
+      countsThisRound: liveGame
+        ? liveGame.status === 1 && liveGame.phase === 0
+          && !(liveGame.instance in autoplay.logOf(body.agentWallet, gameId))
+        : null,
       // Shown once, on the call that created it. Every later call needs it.
       token: issuedToken ?? undefined,
       chosenForYou: chosenForYou || undefined,
