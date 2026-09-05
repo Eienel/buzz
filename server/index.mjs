@@ -322,6 +322,14 @@ function leaderboard(){
 // Our own agents' wallets, for telling a guest from the house.
 const HOUSE_WALLETS = new Set(houseWallets().map((h) => h.wallet));
 
+/**
+ * Games we have already asked to settle for one wallet, so a tick every 2.5
+ * seconds does not queue the same instruction forever. Bounded: this is a
+ * de-duplicator, not a record, and the chain is the record.
+ */
+const settleAsked = new Set();
+setInterval(() => { if (settleAsked.size > 400) settleAsked.clear(); }, 60_000).unref?.();
+
 let snapshot = { ok:false, updatedAt:0, games:[], error:"starting" };
 
 /**
@@ -446,6 +454,33 @@ async function poll(){
     // only find out by opening the panel and asking, so every first click on
     // a fresh game met "Waiting for the book".
     for (const g of games) g.book = book ? book.isOpen(g.gameId) : false;
+
+    // Nobody's stake should depend on this process staying alive.
+    //
+    // Easy mode's plans live in memory, so a deploy drops every guest agent
+    // mid-game: no commits, no reveals, and no settle, with the stake left in
+    // the vault. Measured on my own test, where a deploy landed one minute into
+    // a game and the agent finished eliminated with a token balance of zero.
+    //
+    // So the refund does not depend on remembering anything. Every tick, any
+    // registered outside wallet sitting in a dead comb, or in a game that has
+    // stopped running, is asked to settle. The relayer works out which of cash
+    // out, claim winnings and claim skill applies by reading the player
+    // account, and settling twice is harmless: the program refuses the second.
+    if (relayer) for (const pl of players) {
+      if (HOUSE_WALLETS.has(pl.owner)) continue;      // the swarm settles its own
+      if (!agentName(pl.owner)) continue;             // not one of ours to chase
+      const g = games.find((x) => x.pubkey === pl.game);
+      if (!g) continue;
+      const comb = (g.combs ?? []).find((c) => c.id === pl.comb);
+      const owed = (g.status === 1 && comb && !comb.alive) || g.status >= 2;
+      if (!owed) continue;
+      const k = `${g.gameId}:${pl.owner}`;
+      if (settleAsked.has(k)) continue;
+      settleAsked.add(k);
+      enqueue({ kind: "settle", agentWallet: pl.owner, gameId: g.gameId });
+      console.log(`[settle] asking for ${agentName(pl.owner)} in ${g.gameId}`);
+    }
 
     snapshot = { ok:true, updatedAt:Date.now(), programId:PROGRAM_ID, cluster:RPC.includes("devnet")?"devnet":"mainnet",
                  live:games.filter(g=>(g.status===0||g.status===1) && !g.legacy), finished:history.length,
