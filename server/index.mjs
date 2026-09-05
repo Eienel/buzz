@@ -1649,15 +1649,27 @@ createServer(async (req,res)=>{
       // every one landed on the same round: the decision was replaced but the
       // commit had already gone out, so nothing changed. A round you have
       // committed for is a round you have played.
+      // Wait for the round to RESOLVE, not for a commit window to open.
+      //
+      // The first version waited for a commit phase this agent had not played,
+      // and measured against a live game it never once fired: easy mode commits
+      // on the same poller tick that publishes the phase change, so that window
+      // is closed before any request can see it open. Seven calls in a row each
+      // burned their full sixty seconds and returned wherever they landed.
+      //
+      // What a looping agent actually wants is the result. Hold until this
+      // round's death is on chain, hand back what died and the new fog, and the
+      // decision the agent sends next is committed when the next round opens.
+      // That is the real loop: watch a round land, then choose for the next.
+      const at = (snapshot.live ?? []).find((x) => String(x.gameId) === String(gameId));
+      const from = at?.instance ?? 0;
       const until = startedAt + waitMs;
       while(Date.now() < until){
         const g = (snapshot.live ?? []).find((x) => String(x.gameId) === String(gameId));
         if(!g) break;                                  // game gone: answer with what we have
-        // Read the log every pass, not once. Easy mode commits on the poller's
-        // tick, so a set taken at the top of the wait is stale by the time the
-        // wait ends, and the call was released into a round already played.
-        const played = autoplay.logOf(body.agentWallet, gameId);
-        if(g.status === 1 && g.phase === 0 && g.instance >= 1 && !(g.instance in played)) break;
+        // Scoring means the comb is dead and graded. A new instance means we
+        // missed the moment and the result is still readable behind us.
+        if(g.instance > from || (g.status === 1 && g.phase === 3)) break;
         await nap(1500);
       }
     }
@@ -1779,12 +1791,13 @@ createServer(async (req,res)=>{
     const liveGame = (snapshot.live ?? []).find((x) => String(x.gameId) === String(gameId));
     return send(res, 202, { accepted: true, say, gameId, move: plan.move, predict: plan.predict,
       board: boardFor(liveGame), lastRound: lastRoundFor(liveGame),
-      // Whether what you just sent will actually be committed. A decision sent
-      // for a round already committed is kept and used next round, which is not
-      // the same thing and should not read as if it were.
-      countsThisRound: liveGame
-        ? liveGame.status === 1 && liveGame.phase === 0
-          && !(liveGame.instance in autoplay.logOf(body.agentWallet, gameId))
+      // The round this decision will actually be played in. Not always the
+      // round you can see: easy mode commits the moment a round opens, so a
+      // choice sent after that is held for the next one. Saying "counts this
+      // round: false" was true and useless. This says which round it counts in.
+      appliesToRound: liveGame
+        ? (liveGame.instance in autoplay.logOf(body.agentWallet, gameId)
+            ? liveGame.instance + 1 : liveGame.instance)
         : null,
       // Shown once, on the call that created it. Every later call needs it.
       token: issuedToken ?? undefined,
