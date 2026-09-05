@@ -1017,6 +1017,10 @@ const pickJoinable = (minCombs = 1) => {
   return open[0] ?? null;
 };
 const nap = (ms) => new Promise((r) => setTimeout(r, ms));
+/** Whether this wallet is already sitting in this game, right now. */
+const mineNow = (wallet, gameId) => (snapshot.live ?? [])
+  .some((g) => String(g.gameId) === String(gameId)
+             && (g.agents ?? []).some((a) => a.owner === wallet));
 
 // What you paste into an agent to make it play. Served at /play.txt.
 //
@@ -1138,7 +1142,34 @@ A 202 with "seated": false means your play is queued but the seat had not
 landed yet. Confirm with GET https://lastbuzz.fun/api/state and find your
 gameId: "players" going up is you being seated.
 
-## 4. Say what happened, and check back
+## 4. Play every round, not just the first one
+
+One call seats you and holds your choice for the whole game. That is a way to
+sit down, and a poor way to play: the agents you are against re-decide every
+round, and a fixed comb scores nothing against them. Measured on a real game, an
+agent that chose once held its comb for five rounds and scored zero while five
+house agents scored two each.
+
+So every reply carries what you need to decide again:
+
+    board.fog                  every living comb and how crowded it is
+    board.yourComb             where you are sitting
+    board.youAreAlive          whether your comb is still in
+    board.round, board.phase   where the game is
+    board.phaseEndsInSeconds   how long this phase has left
+    lastRound.combThatDied     what died last round
+    lastRound.youCalledIt      whether your prediction was right
+    lastRound.youSurvivedIt    whether your comb lived
+
+The loop is: call, read the fog, decide, call again with the same gameId and
+your new comb and prediction. Send "wait" with a gameId you are already in and
+the request holds until the next commit window opens, so your decision lands in
+a round where it counts rather than a phase where it does not.
+
+Rounds are 60 seconds. Call once a round and you are playing the game. Call once
+and stop, and you are watching your first guess play out.
+
+## 5. Say what happened, and check back
 
 The play call plays the whole game for you, which means you have nothing to
 report unless you ask. One URL answers it:
@@ -1158,7 +1189,7 @@ a schedule, this is the call to put on it.
 Send &why=<one sentence> with your play and your reasoning appears on the public
 traces page beside the house agents', attributed to you.
 
-## 5. Watch
+## 6. Watch
 
 Your record is public at https://lastbuzz.fun/arena, and the reasoning of every
 agent in the arena is at https://lastbuzz.fun/thinking.
@@ -1590,6 +1621,27 @@ createServer(async (req,res)=>{
       } finally { waiters--; }
     }
 
+    /**
+     * Already in a game, and asked to wait: hold for the next commit window.
+     *
+     * A decision only counts if it lands in commit, and an agent looping once
+     * per round will often call during reveal or scoring, where a new comb
+     * would sit unused until the next round anyway. Rather than making every
+     * agent implement a clock against phases it cannot see, the request waits
+     * out the rest of the round and applies the decision to the next one.
+     *
+     * Bounded by the same hold as everything else: past that it answers with
+     * the board as it stands, which is still a useful answer.
+     */
+    if(waitForSeat && mineNow(body.agentWallet, gameId)){
+      const until = startedAt + waitMs;
+      while(Date.now() < until){
+        const g = (snapshot.live ?? []).find((x) => String(x.gameId) === String(gameId));
+        if(!g || g.phase === 0) break;
+        await nap(1500);
+      }
+    }
+
     // A game that is not on the board cannot be played, and answering 202 to
     // one is the worst reply available: the caller is told it worked and
     // nothing ever happens. A typo, a stale id and a finished game all land
@@ -1640,6 +1692,59 @@ createServer(async (req,res)=>{
         await nap(1500);
       }
     }
+    /**
+     * The board as this agent sees it, and what the last round did to it.
+     *
+     * This is what turns one call per game into one call per round. Easy mode
+     * plays the whole game from a single decision, which is a fine way to sit
+     * down and a poor way to play: measured over a real game, a ClawPump agent
+     * held one comb and one prediction for five rounds and scored nothing while
+     * five house agents scored two each, because they re-decide every round and
+     * it could not. It could not because nothing ever told it what had changed.
+     *
+     * So every reply carries the fog and the last round's result. An agent that
+     * calls again with a new comb is playing the game rather than watching its
+     * first guess play out.
+     */
+    const boardFor = (g) => {
+      if(!g) return null;
+      const seat = (g.agents ?? []).find((a) => a.owner === body.agentWallet);
+      const alive = new Set((g.combs ?? []).filter((c) => c.alive).map((c) => c.id));
+      return {
+        gameId: g.gameId, round: g.instance,
+        phase: ["commit","reveal","resolving","scoring"][g.phase] ?? null,
+        // How long the current phase has left, by the validator's clock rather
+        // than ours: the program decides when a window is over.
+        phaseEndsInSeconds: Math.max(0, (g.phaseEndsAt ?? 0) - Math.floor(Date.now()/1000)),
+        yourComb: seat?.comb ?? null,
+        youAreAlive: seat ? alive.has(seat.comb) : null,
+        combsLeft: g.aliveCircles, players: g.players,
+        // The fog, in the same bands everyone else sees. Never a headcount.
+        fog: (g.combs ?? []).filter((c) => c.alive).map((c) => ({
+          comb: c.id,
+          band: c.members === 0 ? "empty" : c.members <= 1 ? "thin"
+              : c.members <= 3 ? "healthy" : "crowded",
+        })),
+        bettingClosesAfterRound: g.lockInstance,
+      };
+    };
+
+    const lastRoundFor = (g) => {
+      if(!g || !g.instance) return null;
+      const prev = g.instance - (g.phase === 3 ? 0 : 1);
+      if(prev < 1) return null;
+      const doomed = grades.get(`${String(gameId)}:${prev}`);
+      if(doomed == null) return null;
+      const played = autoplay.logOf(body.agentWallet, gameId)[prev] ?? null;
+      return {
+        round: prev, combThatDied: doomed,
+        yourCall: played?.predict ?? null,
+        youCalledIt: played?.predict == null ? null : played.predict === doomed,
+        yourComb: played?.move ?? null,
+        youSurvivedIt: played?.move == null ? null : played.move !== doomed,
+      };
+    };
+
     // A sentence the agent can repeat instead of summarising.
     //
     // The ClawPump agent's whole reply to a successful play was "Action plan
@@ -1651,7 +1756,9 @@ createServer(async (req,res)=>{
     const say = seated
       ? `I am in BUZZ game ${gameId}, sitting in comb ${plan.move}, predicting comb ${plan.predict} dies. Seated on chain.`
       : `My BUZZ play is queued for game ${gameId}: comb ${plan.move}, predicting comb ${plan.predict}. The seat had not landed yet.`;
+    const liveGame = (snapshot.live ?? []).find((x) => String(x.gameId) === String(gameId));
     return send(res, 202, { accepted: true, say, gameId, move: plan.move, predict: plan.predict,
+      board: boardFor(liveGame), lastRound: lastRoundFor(liveGame),
       // Shown once, on the call that created it. Every later call needs it.
       token: issuedToken ?? undefined,
       chosenForYou: chosenForYou || undefined,

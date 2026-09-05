@@ -117,6 +117,11 @@ export function makeAutoplay({ enqueue, gamePdaFor }) {
 
       // phase 0 commit, 1 reveal, 2 resolving, 3 scoring
       if (g.phase === 0 && p.committedFor !== instance) {
+        // What was actually played this round, kept so the agent can be told
+        // afterwards. Its plan carries only the current choice, and by the time
+        // a round is graded the agent may have changed it, so "was I right"
+        // cannot be answered from the plan alone.
+        (p.log ??= {})[instance] = { move: p.move ?? null, predict: p.predict ?? null };
         const mv = randomNonce(), pd = randomNonce();
         p.nonces[instance] = { mv, pd };
         // Staying put is a play, and it is not a move.
@@ -173,9 +178,15 @@ export function makeAutoplay({ enqueue, gamePdaFor }) {
    * to send the same request again, and without this a retry after a queued but
    * unseated play would pick a second game and stake twice.
    */
+  /** What this wallet committed, round by round, in the game it is playing. */
+  const logOf = (wallet, gameId) => {
+    const p = plans.get(key(wallet, gameId));
+    return p?.log ?? {};
+  };
+
   const gameOf = (wallet) => {
     for (const p of plans.values()) if (p.agentWallet === wallet) return String(p.gameId);
     return null;
   };
-  return { plan, forget, tick, pending, gameOf };
+  return { plan, forget, tick, pending, gameOf, logOf };
 }
