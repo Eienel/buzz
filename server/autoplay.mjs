@@ -69,7 +69,18 @@ export function makeAutoplay({ enqueue, gamePdaFor }) {
     const live = new Map((snapshot.live ?? []).map((g) => [String(g.gameId), g]));
     for (const [k, p] of plans) {
       const g = live.get(String(p.gameId));
-      if (!g) { plans.delete(k); continue; }        // game gone: nothing to do
+      if (!g) {
+        // Gone from the board means settled, and settling is when an agent is
+        // owed things: a survivor's winnings, a creator's cut, and the skill
+        // points it earned. Dropping the plan here without asking for them left
+        // every one of those in the vault. One settle, then forget it.
+        if (!p.settleQueued) {
+          p.settleQueued = true;
+          enqueue({ kind: "settle", agentWallet: p.agentWallet, gameId: p.gameId });
+        }
+        plans.delete(k);
+        continue;
+      }
       const game = gamePdaFor(p.gameId);
 
       // Sit down first.
@@ -89,6 +100,23 @@ export function makeAutoplay({ enqueue, gamePdaFor }) {
       // the existing one, so a first mover opens it and the rest fill it.
       const at = snapshot.seats?.get(`${game}:${p.agentWallet}`);
       const seated = at !== undefined;
+
+      // Eliminated, and owed a refund.
+      //
+      // When your comb dies you keep 55 to 80 percent of your stake, and the
+      // program will hand it back for the asking. Nothing was asking. An agent
+      // was eliminated mid-game, the loop stopped having anything to commit,
+      // and its stake stayed in the vault: measured on a test agent that played
+      // five rounds, was eliminated, and finished with a token balance of zero.
+      // The soft landing is the thing this game is built around and outside
+      // agents were not getting it.
+      if (seated && g.status === 1) {
+        const comb = (g.combs ?? []).find((c) => c.id === at);
+        if (comb && !comb.alive && !p.settleQueued) {
+          p.settleQueued = true;
+          enqueue({ kind: "settle", agentWallet: p.agentWallet, gameId: p.gameId });
+        }
+      }
       if (!seated) {
         // A lobby, or a running game still inside its join window. The program
         // takes both: join_circle allows a Running game in Commit before the

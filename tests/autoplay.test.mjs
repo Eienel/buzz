@@ -172,3 +172,33 @@ test("gameOf names the game a wallet is playing, and forgets it with the plan", 
   ap.tick({ live: [], seats: new Map() });          // game left the board
   assert.equal(ap.gameOf(WALLET), null);
 });
+
+// An agent that is owed money should be asking for it. Neither of these was
+// happening: an eliminated agent's refund and a finished game's winnings and
+// skill points all stayed in the vault while the plan was quietly dropped.
+test("an eliminated agent is settled, once", () => {
+  const { ap, queued } = setup();
+  ap.plan({ agentWallet: WALLET, gameId: GAME_ID, move: 9, predict: 5 });
+  const dead = { live: [{ gameId: GAME_ID, status: 1, instance: 2, phase: 0,
+                          combs: [{ id: 9, alive: false }] }],
+                 seats: new Map(seatAt()) };
+  ap.tick(dead); ap.tick(dead); ap.tick(dead);
+  assert.deepEqual(queued.filter((q) => q.kind === "settle"),
+    [{ kind: "settle", agentWallet: WALLET, gameId: GAME_ID }]);
+});
+
+test("a game that leaves the board is settled before the plan is dropped", () => {
+  const { ap, queued } = setup();
+  ap.plan({ agentWallet: WALLET, gameId: GAME_ID, move: 3, predict: 5 });
+  ap.tick({ live: [], seats: new Map() });
+  assert.deepEqual(queued.filter((q) => q.kind === "settle").length, 1);
+  ap.tick({ live: [], seats: new Map() });          // plan is gone, no second ask
+  assert.equal(queued.filter((q) => q.kind === "settle").length, 1);
+});
+
+test("a living comb is not settled", () => {
+  const { ap, queued } = setup();
+  ap.plan({ agentWallet: WALLET, gameId: GAME_ID, move: 9, predict: 5 });
+  ap.tick(snap({ phase: 0 }, seatAt()));
+  assert.equal(queued.filter((q) => q.kind === "settle").length, 0);
+});
