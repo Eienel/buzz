@@ -50,6 +50,34 @@ function saveLedger(m) {
   catch (e) { log("ledger write failed:", String(e.message ?? e).slice(0, 80)); }
 }
 
+/**
+ * Fold every decided bet into the ledger. Idempotent: keyed by the Bet
+ * account, and a row already there keeps its original timestamp.
+ */
+function recordSettled(bets, pools, markets, tpool) {
+  const led = loadLedger();
+  const marketBy = new Map(markets.map((m) => [m.pubkey.toBase58(), m]));
+  const poolBy = new Map(pools.map((p) => [p.pubkey.toBase58(), p]));
+  let added = 0;
+  for (const b of bets) {
+    const key = b.pubkey.toBase58();
+    const m = marketBy.get(b.market.toBase58());
+    if (!m) continue;
+    const pool = poolBy.get(tpool(new PublicKey(b.market.toBase58()), b.target).toBase58());
+    if (!pool || !pool.resolved) continue;
+    const stake = Number(b.amount);
+    const total = Number(m.totalPool), win = Number(m.winningPool);
+    // Mirrors claim_bet, refund branch included.
+    const payout = win === 0 ? stake : pool.won ? Math.floor(stake * total / win) : 0;
+    const row = { bettor: b.bettor.toBase58(), stake, payout, won: !!pool.won,
+                  at: led.get(key)?.at ?? Date.now() };
+    if (!led.has(key)) added++;
+    led.set(key, row);
+  }
+  if (added) { saveLedger(led); log(`recorded ${added} settled bet${added === 1 ? "" : "s"}`); }
+  return added;
+}
+
 export function makeMarket({ program, payer, connection }) {
   const PID = program.programId;
   const pda = (...seeds) => PublicKey.findProgramAddressSync(seeds, PID)[0];
@@ -264,6 +292,18 @@ export function makeMarket({ program, payer, connection }) {
     };
     const [bets, pools, markets] = await Promise.all(
       [load("bet"), load("targetPool"), load("market")]);
+
+    // Write down every decided bet, here, before anything closes it.
+    //
+    // The ledger was updated inside bettors(), which only runs when somebody
+    // loads the board. The reaper runs every ten minutes whether anyone is
+    // looking or not, so overnight it closed every settled bet and the record
+    // it was meant to preserve was never written: a bettor who had two graded
+    // bets at bedtime had none in the morning. This runs on the book's own
+    // schedule, sees the same accounts the payout does, and costs no extra RPC
+    // because the scan already happened above.
+    recordSettled(bets, pools, markets, tpoolPda);
+
     poolWon.clear();
     for (const p of pools) if (p.resolved && p.won) poolWon.set(p.pubkey.toBase58(), true);
 
@@ -370,6 +410,9 @@ export function makeMarket({ program, payer, connection }) {
       // by its own account, and the answer is chain plus ledger. Anyone can
       // still recompute the chain half; the ledger only holds rows the chain
       // used to hold and no longer does.
+      // Read only. The sweep is what writes this, on the book's own schedule,
+      // because a record that is only written when somebody opens the page
+      // loses every race with the reaper.
       const seenBets = loadLedger();
       const load = async (name) => {
         const raw = await connection.getProgramAccounts(PID, {
@@ -408,10 +451,7 @@ export function makeMarket({ program, payer, connection }) {
         r.staked += stake; r.returned += payout;
         by.set(k, r);
         graded += 1;
-        seenBets.set(b.pubkey.toBase58(),
-          { bettor: k, stake, payout, won: !!pool.won, at: seenBets.get(b.pubkey.toBase58())?.at ?? Date.now() });
       }
-      saveLedger(seenBets);
       // Anything the ledger holds that the chain no longer does. Counted once:
       // the key is the bet's own account, so a row cannot be double counted
       // while it is still on chain.
