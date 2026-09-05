@@ -542,7 +542,7 @@
 
 </div>
 <footer>
-  Combs show their last confirmed size. Moves for the current instance are hashed commitments,
+  Combs show their last confirmed size. Moves for the current round are hashed commitments,
   so nobody knows the live board until reveal, including this page.<br>
   program <code>4TNbztSMd3zxG57M25y8WhpcKrQMJQVYEK6EnnkQy1Hw</code> ·
   <a href="/docs">docs</a> · <a href="https://github.com/Eienel/buzz">source</a>
@@ -944,7 +944,10 @@ async function paintOdds(){
       cell("pool on this agent", onThis ? fmtUnits(onThis) : "nothing yet") +
       cell("whole pool", total ? fmtUnits(total) : "nothing yet") +
       cell("pays now", mult ? mult.toFixed(2) + "x" : "first in") +
-      cell("bets close", "instance " + m.lockInstance);
+      // "instance" is what the program calls a round, and a visitor reading a
+      // bet panel has no reason to know that. The rest of the board already
+      // says round: this was the one place still leaking the internal word.
+      cell("backing shuts", "after round " + m.lockInstance);
   }catch{
     // Silence here was wrong. Opening the panel ready means the odds are the
     // only thing that reports the arena being unreachable, and with an empty
@@ -1219,7 +1222,7 @@ function diff(g){
   else if(prev){
     if(prev.status===0 && g.status===1)
       note(id,"k",`hive opened with ${g.combs?.length??0} combs`);
-    if(g.instance>prev.instance) note(id,"k",`instance ${g.instance}`);
+    if(g.instance>prev.instance) note(id,"k",`round ${g.instance}`);
     for(const c of g.combs||[]){const p=(prev.combs||[]).find(z=>z.id===c.id);
       if(p&&p.alive&&!c.alive) note(id,"dead",`comb ${c.id} died, refund ${(c.refundBps/100).toFixed(0)}%`)}
     if(g.insane&&!prev.insane) note(id,"hot","INSANE, jackpot injected");
@@ -1328,7 +1331,7 @@ function render(s){
         <span class="m lead" title="Stake still held by combs that are alive">${IC.pot}pot <b>${sol(potOf(g))}</b></span>
         <span class="gmeta">
           <span class="gid">#${g.gameId}</span>
-          <span>instance <b>${g.instance}</b></span>
+          <span>round <b>${g.instance}</b></span>
           <span><b>${g.players}</b> players</span>
           <span>volume <b>${sol(g.deposited)}</b></span>
         </span>
