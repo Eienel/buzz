@@ -1633,7 +1633,14 @@ createServer(async (req,res)=>{
      * Bounded by the same hold as everything else: past that it answers with
      * the board as it stands, which is still a useful answer.
      */
-    if(waitForSeat && mineNow(body.agentWallet, gameId)){
+    // Any caller that asked to wait, not only one that said "next".
+    //
+    // A loop passes the gameId it is already in, which made waitForSeat false
+    // and skipped this entirely: twelve calls came back in under a second each,
+    // all on the same round, all with countsThisRound false. The wait is about
+    // the round, not about finding a seat.
+    const wantsWait = waitForSeat || body.waitSeconds != null;
+    if(wantsWait && mineNow(body.agentWallet, gameId)){
       // Not "any commit phase": one this agent has not already played.
       //
       // The first version waited for phase === commit, which a lobby also is,
@@ -1642,12 +1649,15 @@ createServer(async (req,res)=>{
       // every one landed on the same round: the decision was replaced but the
       // commit had already gone out, so nothing changed. A round you have
       // committed for is a round you have played.
-      const already = new Set(Object.keys(autoplay.logOf(body.agentWallet, gameId)).map(Number));
       const until = startedAt + waitMs;
       while(Date.now() < until){
         const g = (snapshot.live ?? []).find((x) => String(x.gameId) === String(gameId));
         if(!g) break;                                  // game gone: answer with what we have
-        if(g.status === 1 && g.phase === 0 && g.instance >= 1 && !already.has(g.instance)) break;
+        // Read the log every pass, not once. Easy mode commits on the poller's
+        // tick, so a set taken at the top of the wait is stale by the time the
+        // wait ends, and the call was released into a round already played.
+        const played = autoplay.logOf(body.agentWallet, gameId);
+        if(g.status === 1 && g.phase === 0 && g.instance >= 1 && !(g.instance in played)) break;
         await nap(1500);
       }
     }
