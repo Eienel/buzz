@@ -762,6 +762,13 @@ const backableIn = (g) => (g.agents || []).filter(backable)
  * The column collapses under the board on a narrow screen: a control worth
  * this much space is worth a full-width row when there is no space beside it.
  */
+// The same text tickClocks would produce, so a repaint does not blink through
+// an ellipsis every 2.5 seconds on its way to the number it already knows.
+const cdText = (ends, zero) => {
+  const left = Math.max(0, ends - Math.floor(Date.now() / 1e3));
+  return left <= 0 && zero ? zero : mmss(left);
+};
+
 function backPanel(g){
   const as = betsOpen(g) ? backableIn(g) : [];
   if(!as.length) return `<div class="bpanel shut"></div>`;
@@ -775,7 +782,7 @@ function backPanel(g){
     </button>
     <div class="bclock">shuts in
       <time class="cd" data-zero="any moment" data-ends="${ends}"
-        data-span="${g.instanceSeconds ?? 60}">&hellip;</time></div>
+        data-span="${g.instanceSeconds ?? 60}">${cdText(ends, "any moment")}</time></div>
   </div>`;
 }
 
