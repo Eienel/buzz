@@ -482,6 +482,25 @@ async function poll(){
       console.log(`[settle] asking for ${agentName(pl.owner)} in ${g.gameId}`);
     }
 
+    // And the games that already ended.
+    //
+    // The sweep above reads players, and players are only read for games on the
+    // board, so a game that finished while this process was restarting is
+    // invisible to it: exactly the case it was built for. The history record
+    // knows who was in each game, and the player accounts outlive the game by
+    // however long the reaper takes, so the entrants of recent games get the
+    // same ask. Costs no RPC: the record is already in hand.
+    if (relayer) for (const h of history.slice(0, 20)) {
+      for (const owner of h.entrants ?? []) {
+        if (HOUSE_WALLETS.has(owner) || !agentName(owner)) continue;
+        const k = `${h.gameId}:${owner}`;
+        if (settleAsked.has(k)) continue;
+        settleAsked.add(k);
+        enqueue({ kind: "settle", agentWallet: owner, gameId: h.gameId });
+        console.log(`[settle] asking for ${agentName(owner)} in finished ${h.gameId}`);
+      }
+    }
+
     snapshot = { ok:true, updatedAt:Date.now(), programId:PROGRAM_ID, cluster:RPC.includes("devnet")?"devnet":"mainnet",
                  live:games.filter(g=>(g.status===0||g.status===1) && !g.legacy), finished:history.length,
                  // Settled but not yet swept. Kept apart from `live` so the
