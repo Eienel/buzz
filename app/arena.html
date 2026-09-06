@@ -245,6 +245,29 @@
      width, beside the comb label rather than over the count. */
   .hex .backwrap{top:25%;right:7px}
   .comb,.hex{position:relative}
+  /* The round strip. Sits under the board because it is about this round
+     rather than about the game, and reads as a row of choices rather than a
+     panel of information. */
+  .rstrip{margin:0 16px 14px;border:1px solid var(--edge);border-radius:14px;
+    padding:12px 14px;background:#100c07}
+  .rstrip.open{border-color:var(--edge2)}
+  .rhead{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+  .rq{font-size:14px;color:var(--text)}
+  .rstate{font-family:var(--mono);font-size:11px;letter-spacing:.06em;color:var(--dimmer)}
+  .rstate .cd{color:var(--gold)}
+  .rcombs{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+  .rc{flex:1 1 92px;font:inherit;font-family:var(--mono);font-size:11.5px;cursor:pointer;
+    display:flex;flex-direction:column;gap:3px;align-items:flex-start;
+    padding:8px 10px;border-radius:10px;color:var(--text);
+    background:#161009;border:1px solid var(--edge)}
+  .rc:hover:not([disabled]){border-color:var(--honey);color:var(--honey)}
+  .rc[disabled]{opacity:.45;cursor:default}
+  .rcid{letter-spacing:.06em;color:var(--dim)}
+  .rc:hover:not([disabled]) .rcid{color:inherit}
+  .rcpool{font-size:13px;color:var(--gold)}
+  .rc.died{border-color:var(--dead);background:#1b0c12}
+  .rc.died .rcpool{color:#e88aa2}
+  @media (max-width:820px){ .rstrip{margin:0 14px 12px} }
   /* The board and its side column. The honeycomb is centred in a card far wider
      than it is, so the one thing a visitor can do gets that empty column
      instead of a chip in the metadata. */
@@ -670,6 +693,17 @@ const MIN_COMBS_TO_BACK = 4;
 // The book is open. Kept as a flag so it can be shut from one line if the
 // market has to come down without a deploy that touches anything else.
 const MARKET_LIVE = true;
+// The round book is switched on per arena. The page asks once rather than
+// assuming, so a deploy that has it off does not render a control nobody can
+// use, and one that has it on does not need a page rebuild.
+let ROUND_BOOK = false;
+(async function askRoundBook(){
+  try{
+    const r = await fetch("/api/round?game=0", { cache: "no-store" });
+    const d = await r.json();
+    ROUND_BOOK = !!d.on;
+  }catch{ /* leave it off: a control that cannot be used is worse than none */ }
+})();
 // A single bet, in stake-token units. Mirrors BET_MAX on the server, which is
 // the one that actually enforces it: a parimutuel pool IS the odds, so one bet
 // ten times everyone else's makes every other price in that game noise.
@@ -769,6 +803,39 @@ const cdText = (ends, zero) => {
   return left <= 0 && zero ? zero : mmss(left);
 };
 
+/**
+ * The round book: which comb dies THIS round.
+ *
+ * The game book asks one question per game and shuts halfway through, so a
+ * visitor who arrives late has nothing to do. This asks a question every round
+ * and settles it in sixty seconds, which is the difference between a board you
+ * watch and a board you play along with.
+ *
+ * Rendered from what the poll already knows, then filled in with pools by
+ * paintRounds. Rendering the shape first means the strip does not pop in and
+ * push the page around every time a fetch lands.
+ */
+function roundStrip(g){
+  if(!ROUND_BOOK || g.status !== 1 || !g.instance) return "";
+  const open = g.phase === 0;
+  const alive = (g.combs ?? []).filter((c) => c.alive);
+  if(alive.length < 2) return "";
+  return `<div class="rstrip${open ? " open" : ""}" data-round="${esc(g.gameId)}">
+    <div class="rhead">
+      <span class="rq">which comb dies this round?</span>
+      <span class="rstate">${open
+        ? `<time class="cd" data-zero="closing" data-ends="${g.phaseEndsAt ?? 0}"
+             data-span="${g.instanceSeconds ?? 60}">${cdText(g.phaseEndsAt ?? 0, "closing")}</time> left to call it`
+        : "moves are out, this round is shut"}</span>
+    </div>
+    <div class="rcombs">${alive.map((c) => `
+      <button class="rc" data-rbet="${esc(g.gameId)}" data-comb="${c.id}"${open ? "" : " disabled"}>
+        <span class="rcid">comb ${c.id}</span>
+        <span class="rcpool">&middot;</span>
+      </button>`).join("")}</div>
+  </div>`;
+}
+
 function backPanel(g){
   const as = betsOpen(g) ? backableIn(g) : [];
   if(!as.length) return `<div class="bpanel shut"></div>`;
@@ -840,6 +907,28 @@ function openBackMenu(btn){
   menuEl.style.left = Math.max(10, left) + "px";
   menuEl.style.top = top + "px";
   btn.setAttribute("aria-expanded", "true");
+}
+
+/** Send a round bet, and say plainly what happened either way. */
+async function placeRoundBet(go, amount){
+  go.disabled = true; go.dataset.busy = "1"; go.textContent = "Backing…"; betError("");
+  try{
+    const me = await identity();
+    const r = await fetch("/api/round/bet", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ game: betCtx.game, bettor: me.pk, comb: betCtx.comb, amount }),
+    });
+    const d = await r.json();
+    if(!r.ok) throw new Error(d.error || `server said ${r.status}`);
+    showBacked(amount, d.sig);
+    paintRoundOdds();
+  }catch(err){
+    const raw = String(err?.message ?? err);
+    betError(/failed to fetch|networkerror|load failed/i.test(raw)
+      ? "Could not reach the arena. Nothing was staked."
+      : raw.slice(0, 180));
+    go.dataset.busy = ""; go.disabled = false; go.textContent = "Back it";
+  }
 }
 
 // Escaping anything that reaches innerHTML. Agent names come off the chain and
@@ -992,7 +1081,9 @@ function showBacked(amount, sig){
   const ok = document.createElement("div");
   ok.className = "betok";
   ok.innerHTML = `<span class="tick">&#10003;</span><div class="okb">
-    <div class="okt">Backed ${esc(betCtx.name)} with ${esc(amount)} BUZZ</div>
+    <div class="okt">${betCtx.round
+      ? `Called comb ${esc(betCtx.comb)} with ${esc(amount)} BUZZ`
+      : `Backed ${esc(betCtx.name)} with ${esc(amount)} BUZZ`}</div>
     <div class="oks"><a href="https://explorer.solana.com/tx/${encodeURIComponent(sig)}?cluster=devnet"
       target="_blank" rel="noopener">${esc(String(sig).slice(0, 20))}&hellip; on the explorer &#8599;</a></div>
   </div>`;
@@ -1000,8 +1091,11 @@ function showBacked(amount, sig){
   // No second trip. The book claims for you now, so telling somebody to come
   // back is both wrong and the exact friction that lost the first twelve
   // bettors: eleven of them won and not one returned to collect.
-  if(note) note.innerHTML =
-    "Your stake is in the pool. If this agent is the one still standing when the game ends, " +
+  if(note) note.innerHTML = betCtx.round
+    ? "Your stake is in this round's pool. If that comb is the one that dies, the winnings arrive " +
+      "in your account on their own. If nobody called it, or the round is not settled in time, " +
+      "everyone is refunded in full."
+    : "Your stake is in the pool. If this agent is the one still standing when the game ends, " +
     "the winnings arrive in your account on their own, with nothing for you to claim. " +
     "Nothing is lost if it is not: the book pays out in full either way, to whoever " +
     "backed a survivor.";
@@ -1009,6 +1103,63 @@ function showBacked(amount, sig){
 }
 
 function shutBet(){ veil.hidden = true; betCtx = null; }
+
+/**
+ * Stake on a comb dying this round.
+ *
+ * Deliberately its own panel rather than a mode on the agent one. They ask
+ * different questions, settle at different times and pay from different
+ * vaults, and one panel doing both would need a conditional on every line.
+ */
+function openRoundPanel(game, comb){
+  betCtx = { round: true, game, comb };
+  veil.innerHTML = `<div class="betbox">
+    <button class="betclose" aria-label="Close">&times;</button>
+    <h3>Comb ${esc(comb)} dies this round</h3>
+    <div class="who">game ${esc(String(game).slice(-6))} &middot; settles in about a minute</div>
+    <div class="odds"></div>
+    <div class="betrow">
+      <input type="number" min="1" max="${BET_MAX}" step="1" value="10" aria-label="Amount to stake">
+      <button class="betgo">Back it</button>
+    </div>
+    <div class="beterr"></div>
+    <div class="betnote">The whole round pool is split across whoever called the comb that
+      actually died. If nobody called it, everyone is refunded. If the round is not settled in
+      time, everyone is refunded. Devnet tokens, max ${BET_MAX} a bet.</div>
+  </div>`;
+  veil.hidden = false;
+  setReady(true);
+  paintRoundOdds();
+  veil.querySelector("input")?.focus();
+}
+
+/** What is on each comb this round, refreshed while the panel is open. */
+async function paintRoundOdds(){
+  if(!betCtx?.round) return;
+  const box = veil.querySelector(".odds");
+  if(!box) return;
+  try{
+    const r = await fetch(`/api/round?game=${encodeURIComponent(betCtx.game)}`, { cache: "no-store" });
+    const d = await r.json();
+    const b = d.book;
+    const mine = Number(b?.pools?.[betCtx.comb] ?? 0);
+    const total = Number(b?.totalPool ?? 0);
+    // Same parimutuel as the game book: what a unit returns if this comb is the
+    // one that dies and nobody else joins in.
+    const mult = mine > 0 ? (total / mine) : null;
+    box.innerHTML =
+      cell("on this comb", mine ? fmtUnits(mine) : "nothing yet") +
+      cell("whole round pool", total ? fmtUnits(total) : "nothing yet") +
+      cell("pays now", mult ? mult.toFixed(2) + "x" : "first in") +
+      cell("bets close", d.open ? "when the moves come out" : "shut");
+    setReady(!!d.open);
+    if(!d.open) betError("This round is shut. Nothing was staked.");
+  }catch{
+    box.innerHTML = cell("odds", "unreachable") + cell("pool", "&hellip;");
+    setReady(false);
+    betError("Cannot reach the arena right now. Nothing was staked.");
+  }
+}
 
 function openBetPanel(target, name, game){
   betCtx = { target, name, game };
@@ -1043,6 +1194,8 @@ veil.addEventListener("click", async (e) => {
   const amount = Number(veil.querySelector("input").value);
   if(!Number.isFinite(amount) || amount <= 0 || amount > BET_MAX){
     betError(`Stake between 1 and ${BET_MAX}.`); return;
+  }
+  if(betCtx.round){ await placeRoundBet(go, amount); return;
   }
   go.disabled = true; go.dataset.busy = "1"; go.textContent = "Backing…"; betError("");
   try{
@@ -1342,6 +1495,7 @@ function render(s){
         ${VIEW==="hive"?combs:`<div class="combs">${combs}</div>`}
         ${backPanel(g)}
       </div>
+      ${roundStrip(g)}
       <div class="side"><h4>Feed</h4><ul class="feed">${feed}</ul></div>
     </section>`;
   }).join("");
@@ -1556,6 +1710,35 @@ async function tickHistory(){
        else document.getElementById("hist").innerHTML="";
   }catch{ document.getElementById("hist").innerHTML=""; }
 }
+/**
+ * Fill each round strip with what is actually staked, and mark the comb that
+ * died once the round resolves.
+ *
+ * One fetch per visible strip, on a slower clock than the board: pools move
+ * when somebody bets, not every 2.5 seconds, and a strip that refetches with
+ * the board would triple this page's request count for numbers that mostly do
+ * not change.
+ */
+async function paintRounds(){
+  if(!ROUND_BOOK) return;
+  for(const strip of document.querySelectorAll(".rstrip")){
+    const game = strip.dataset.round;
+    try{
+      const r = await fetch(`/api/round?game=${encodeURIComponent(game)}`, { cache: "no-store" });
+      const d = await r.json();
+      const book = d.book;
+      for(const btn of strip.querySelectorAll(".rc")){
+        const id = Number(btn.dataset.comb);
+        const pool = book?.pools?.[id] ?? "0";
+        const el = btn.querySelector(".rcpool");
+        if(el) el.textContent = Number(pool) ? fmtUnits(pool) : "nothing yet";
+        btn.classList.toggle("died", book?.doomed === id);
+      }
+    }catch{ /* the strip still says what it is for without the numbers */ }
+  }
+}
+setInterval(paintRounds, 6000);
+
 document.addEventListener("click",(e)=>{
   const shut = () => { menuEl.hidden = true;
     for(const b of document.querySelectorAll(".backb,.bigback")) b.setAttribute("aria-expanded","false"); };
@@ -1564,6 +1747,12 @@ document.addEventListener("click",(e)=>{
     const wasOpen = t.getAttribute("aria-expanded")==="true";
     shut();
     if(!wasOpen) openBackMenu(t);
+    return;
+  }
+  // A comb in the round strip: same panel, different question.
+  const rb=e.target.closest(".rc");
+  if(rb && !rb.disabled){
+    openRoundPanel(rb.dataset.rbet, Number(rb.dataset.comb));
     return;
   }
   const back=e.target.closest(".bopt");
