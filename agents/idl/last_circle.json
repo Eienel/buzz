@@ -882,6 +882,149 @@
       "args": []
     },
     {
+      "name": "claim_round_bet",
+      "docs": [
+        "Take the winnings, or the refund.",
+        "",
+        "Parimutuel across the comb that died. Three cases pay the stake straight",
+        "back rather than keeping it: a voided round, a round where nobody picked",
+        "the comb that died, and a bet on any other comb pays nothing at all."
+      ],
+      "discriminator": [
+        182,
+        183,
+        38,
+        14,
+        72,
+        250,
+        114,
+        210
+      ],
+      "accounts": [
+        {
+          "name": "round",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  111,
+                  117,
+                  110,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "round.game",
+                "account": "RoundMarket"
+              },
+              {
+                "kind": "account",
+                "path": "round.instance",
+                "account": "RoundMarket"
+              }
+            ]
+          }
+        },
+        {
+          "name": "round_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "round"
+              }
+            ]
+          }
+        },
+        {
+          "name": "round_bet",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  98,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "round"
+              },
+              {
+                "kind": "account",
+                "path": "bettor"
+              }
+            ]
+          }
+        },
+        {
+          "name": "bettor_token",
+          "writable": true
+        },
+        {
+          "name": "bettor",
+          "docs": [
+            "account, so a relayer claiming for them cannot redirect it."
+          ]
+        },
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "relayer",
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  108,
+                  97,
+                  121,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "payer"
+              }
+            ]
+          }
+        },
+        {
+          "name": "stake_mint"
+        },
+        {
+          "name": "token_program"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "claim_season_reward",
       "docs": [
         "Claim a share of the last closed season, pro rata by the skill points",
@@ -3319,6 +3462,115 @@
       ]
     },
     {
+      "name": "open_round",
+      "docs": [
+        "Open the book for the round the game is currently in.",
+        "",
+        "Permissionless: the server cranks it, and if the server is down anybody",
+        "can. Commit phase only, because the whole point is to take bets before",
+        "anything about this round is known, and by Reveal the moves are public."
+      ],
+      "discriminator": [
+        66,
+        235,
+        123,
+        240,
+        8,
+        35,
+        185,
+        159
+      ],
+      "accounts": [
+        {
+          "name": "game",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  97,
+                  109,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game.game_id",
+                "account": "Game"
+              }
+            ]
+          }
+        },
+        {
+          "name": "round",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  111,
+                  117,
+                  110,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game"
+              },
+              {
+                "kind": "account",
+                "path": "game.instance",
+                "account": "Game"
+              }
+            ]
+          }
+        },
+        {
+          "name": "round_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "round"
+              }
+            ]
+          }
+        },
+        {
+          "name": "stake_mint"
+        },
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "open_season",
       "docs": [
         "Authority-only: start ranking this mint. Only a mint with an open season",
@@ -3628,6 +3880,189 @@
         }
       ],
       "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "place_round_bet",
+      "docs": [
+        "Stake on the comb you think dies this round.",
+        "",
+        "One comb per bettor per round: a second bet on a different comb would be",
+        "a hedge that guarantees a share of its own money back, which is not a",
+        "prediction. Adding to the comb you already chose is fine."
+      ],
+      "discriminator": [
+        173,
+        68,
+        62,
+        150,
+        112,
+        51,
+        113,
+        255
+      ],
+      "accounts": [
+        {
+          "name": "game",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  97,
+                  109,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game.game_id",
+                "account": "Game"
+              }
+            ]
+          }
+        },
+        {
+          "name": "round",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  111,
+                  117,
+                  110,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game"
+              },
+              {
+                "kind": "account",
+                "path": "round.instance",
+                "account": "RoundMarket"
+              }
+            ]
+          }
+        },
+        {
+          "name": "round_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "round"
+              }
+            ]
+          }
+        },
+        {
+          "name": "circle",
+          "docs": [
+            "The comb being bet on, so its own account proves it is alive."
+          ]
+        },
+        {
+          "name": "round_bet",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  98,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "round"
+              },
+              {
+                "kind": "account",
+                "path": "bettor"
+              }
+            ]
+          }
+        },
+        {
+          "name": "payer_token",
+          "writable": true
+        },
+        {
+          "name": "bettor",
+          "docs": [
+            "owns the position and need not hold a key."
+          ]
+        },
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "relayer",
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  108,
+                  97,
+                  121,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "payer"
+              }
+            ]
+          }
+        },
+        {
+          "name": "stake_mint"
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "comb",
+          "type": "u8"
+        },
         {
           "name": "amount",
           "type": "u64"
@@ -4347,6 +4782,79 @@
       ]
     },
     {
+      "name": "settle_round",
+      "docs": [
+        "Record which comb died, while the game is still on that round.",
+        "",
+        "Permissionless and idempotent. `doomed_circle` is a single field the",
+        "game overwrites every instance, so this can only be read truthfully",
+        "while `game.instance` is still the round this book was opened for.",
+        "After that the honest answer is not \"some other comb died\", it is that",
+        "we no longer know, which is what void_round is for."
+      ],
+      "discriminator": [
+        40,
+        101,
+        18,
+        1,
+        31,
+        129,
+        52,
+        77
+      ],
+      "accounts": [
+        {
+          "name": "game",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  97,
+                  109,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game.game_id",
+                "account": "Game"
+              }
+            ]
+          }
+        },
+        {
+          "name": "round",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  111,
+                  117,
+                  110,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game"
+              },
+              {
+                "kind": "account",
+                "path": "round.instance",
+                "account": "RoundMarket"
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "start_game",
       "docs": [
         "Close the lobby and start the instance loop (instance 1, Commit phase)."
@@ -4462,6 +4970,77 @@
           "type": "u16"
         }
       ]
+    },
+    {
+      "name": "void_round",
+      "docs": [
+        "Refund a round nobody settled in time, or one whose game ended under it.",
+        "",
+        "Without this a missed crank would strand every stake in the round vault",
+        "for good. A book that can eat your money when our server has a bad",
+        "minute is not a book anyone should use."
+      ],
+      "discriminator": [
+        102,
+        72,
+        126,
+        187,
+        12,
+        18,
+        16,
+        96
+      ],
+      "accounts": [
+        {
+          "name": "game",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  97,
+                  109,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game.game_id",
+                "account": "Game"
+              }
+            ]
+          }
+        },
+        {
+          "name": "round",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  111,
+                  117,
+                  110,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game"
+              },
+              {
+                "kind": "account",
+                "path": "round.instance",
+                "account": "RoundMarket"
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
     },
     {
       "name": "withdraw_bucket",
@@ -4782,6 +5361,32 @@
         155,
         206,
         218
+      ]
+    },
+    {
+      "name": "RoundBet",
+      "discriminator": [
+        94,
+        161,
+        115,
+        147,
+        160,
+        65,
+        219,
+        179
+      ]
+    },
+    {
+      "name": "RoundMarket",
+      "discriminator": [
+        67,
+        224,
+        185,
+        41,
+        239,
+        205,
+        168,
+        171
       ]
     },
     {
@@ -5575,6 +6180,120 @@
           },
           {
             "name": "Settled"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RoundBet",
+      "docs": [
+        "One bettor's position on one round."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "round",
+            "type": "pubkey"
+          },
+          {
+            "name": "bettor",
+            "type": "pubkey"
+          },
+          {
+            "name": "comb",
+            "type": "u8"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "claimed",
+            "type": "bool"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RoundMarket",
+      "docs": [
+        "A book on one round of one game: which comb dies at this instance.",
+        "",
+        "Pools are a flat array rather than an account per comb. A round lasts sixty",
+        "seconds and there are five or six of them per game, so an account per comb",
+        "per round would be thirty rent-paying accounts per game to open, resolve and",
+        "reap. The array is 96 bytes and needs none of that."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "game",
+            "type": "pubkey"
+          },
+          {
+            "name": "stake_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "instance",
+            "docs": [
+              "The instance this book asks about. A book is only ever about one."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "pools",
+            "docs": [
+              "Stake per comb id, indexed by the id itself."
+            ],
+            "type": {
+              "array": [
+                "u64",
+                12
+              ]
+            }
+          },
+          {
+            "name": "total_pool",
+            "type": "u64"
+          },
+          {
+            "name": "bettors",
+            "type": "u32"
+          },
+          {
+            "name": "doomed",
+            "docs": [
+              "The comb that died, or NO_COMB until it is settled."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "settled",
+            "type": "bool"
+          },
+          {
+            "name": "void",
+            "docs": [
+              "Nobody settled it while the game was still on this round, so every stake",
+              "comes back. Distinct from settled: one pays winners, the other pays",
+              "everybody."
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "vault_bump",
+            "type": "u8"
           }
         ]
       }
