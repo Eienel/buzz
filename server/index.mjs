@@ -24,6 +24,7 @@ import { loadKeypair } from "./keypair.mjs";
 import { makeCranker } from "./cranker.mjs";
 import { makeScheduler } from "./scheduler.mjs";
 import { makeMarket } from "./market.mjs";
+import { makeRounds } from "./rounds.mjs";
 import { nameFor, houseWallets } from "./names.mjs";
 import { verifyPayment } from "./x402.mjs";
 import { loadRelayer, startDrain } from "./relayer.mjs";
@@ -327,6 +328,9 @@ const HOUSE_WALLETS = new Set(houseWallets().map((h) => h.wallet));
  * seconds does not queue the same instruction forever. Bounded: this is a
  * de-duplicator, not a record, and the chain is the record.
  */
+const roundCache = new Map();
+setInterval(() => { if (roundCache.size > 200) roundCache.clear(); }, 60_000).unref?.();
+
 const settleAsked = new Set();
 setInterval(() => { if (settleAsked.size > 400) settleAsked.clear(); }, 60_000).unref?.();
 
@@ -526,6 +530,7 @@ async function poll(){
     cranker?.once(snapshot);
     scheduler?.once(snapshot);
     book?.once(snapshot);
+    rounds?.once(snapshot);
     pollRelayer().then(pollFuel).then(pollFloat);
     pollFails = 0;
   }catch(e){
@@ -665,6 +670,7 @@ const limiter = makeLimiter();
 let cranker = null;
 let scheduler = null;
 let book = null;
+let rounds = null;
 // Small and unbounded is fine: one entry per game id the arena has asked about,
 // and the arena only asks about games that are on the board.
 const marketCache = new Map();
@@ -1325,6 +1331,12 @@ if (relayer && process.env.RUN_SCHEDULER === "1") {
 // allowed to.
 if (relayer && process.env.RUN_MARKET !== "0") {
   book = makeMarket({ program: relayer.program, payer: relayer.kp, connection });
+  // The round book rides the same key and the same tick. Off unless asked for:
+  // it needs a program upgrade that is not on devnet yet, and a ticker sending
+  // instructions the deployed program does not have would log an error every
+  // 2.5 seconds forever.
+  if (process.env.ROUND_BOOK === "1")
+    rounds = makeRounds({ program: relayer.program, payer: relayer.kp, connection });
   console.log("book on");
 
   // Winners get paid without being asked to come back for it.
@@ -2086,6 +2098,38 @@ createServer(async (req,res)=>{
   // Build an unsigned place_bet for somebody with their own wallet. Nothing is
   // signed here, and the transaction can only move tokens out of an account the
   // signer already controls.
+  /**
+   * One round's book: what is staked on each comb, and what died.
+   *
+   * Answers even when the round book is switched off, because "not on this
+   * arena" and "this game has no book" are different facts and a page that
+   * cannot tell them apart shows the wrong empty state for both.
+   */
+  if(p === "/api/round"){
+    if(!rounds) return send(res, 200, { on: false,
+      note: "the round book is not running on this arena yet" });
+    const gameId = url.searchParams.get("game");
+    if(!gameId || !/^[0-9]{1,20}$/.test(gameId))
+      return send(res, 400, { error: "game must be a numeric game id" });
+    const g = (snapshot.live ?? []).find((x) => String(x.gameId) === gameId);
+    const instance = Number(url.searchParams.get("round") ?? g?.instance ?? 0);
+    if(!Number.isInteger(instance) || instance < 0 || instance > 65535)
+      return send(res, 400, { error: "round must be a whole number" });
+    const c = roundCache.get(`${gameId}:${instance}`);
+    if(c && Date.now() - c.at < 3000) return send(res, 200, c.body);
+    try{
+      const r = await rounds.read(gameId, instance);
+      const body = { on: true, game: gameId, round: instance, book: r,
+        // Bets are only taken in commit, so the page can say whether a click
+        // will build before anyone clicks.
+        open: !!g && g.status === 1 && g.phase === 0 && g.instance === instance };
+      roundCache.set(`${gameId}:${instance}`, { at: Date.now(), body });
+      return send(res, 200, body);
+    }catch(e){
+      if(c) return send(res, 200, { ...c.body, stale: Math.round((Date.now() - c.at) / 1000) });
+      return send(res, 502, { error: String(e.message ?? e).slice(0, 140) });
+    }
+  }
   if(p === "/api/bet/prepare"){
     if(!book) return send(res, 503, { error: "the book is not running" });
     if(req.method !== "POST") return send(res, 405, { error: "POST" });
