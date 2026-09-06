@@ -139,6 +139,12 @@
   .curtain .cell:nth-child(6){animation-delay:.6s}
   @keyframes wake{0%,100%{opacity:.18}50%{opacity:1}}
   @media(prefers-reduced-motion:reduce){ .curtain .cell{animation:none;opacity:.7} }
+  /* Thumb sizing on a phone. Last in the sheet so it wins over the header
+     rules above, which size the nav to fit rather than to be hit. */
+  @media (max-width:820px){
+    nav a{padding:10px 10px}
+    footer a{display:inline-block;padding:8px 0}
+  }
 </style>
 </head>
 <body>

@@ -68,6 +68,43 @@
   .brand .dot{color:var(--accent)}
   .topbar nav{margin-left:auto;display:flex;gap:16px;flex-wrap:wrap;font-size:14px}
   .topbar nav a{color:var(--dim)} .topbar nav a:hover{color:var(--text);text-decoration:none}
+  /* Thirteen links that wrap are fine on a desktop and are four rows of pinned
+     navigation on a phone, which is most of the screen, on every scroll. Below
+     860 the nav becomes one button and a sheet. */
+  /* A table of numbers will not fit a phone and should not try. It scrolls
+     inside its own box rather than dragging the whole page sideways, and the
+     edge fades so it is visibly scrollable rather than silently cut. */
+  .tscroll{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:14px 0}
+  .tscroll table{margin:0;min-width:520px}
+  @media (max-width:700px){
+    .tscroll{position:relative}
+    .tscroll::after{content:"";position:sticky;right:0;top:0;float:right;
+      width:26px;height:100%;pointer-events:none;
+      background:linear-gradient(90deg,transparent,var(--bg))}
+  }
+  .navtoggle{display:none;margin-left:auto;font:inherit;font-size:14px;cursor:pointer;
+    align-items:center;gap:9px;color:var(--text);background:var(--panel2);
+    border:1px solid var(--line);border-radius:10px;padding:8px 14px}
+  .navtoggle .bars{width:16px;height:2px;background:currentColor;position:relative;display:block}
+  .navtoggle .bars::before,.navtoggle .bars::after{content:"";position:absolute;left:0;
+    width:16px;height:2px;background:currentColor}
+  .navtoggle .bars::before{top:-5px} .navtoggle .bars::after{top:5px}
+  @media (max-width:860px){
+    .navtoggle{display:inline-flex}
+    /* .in stays flex-wrap:wrap. The nav is display:none when shut, so the bar
+       is a single row anyway, and nowrap here would pin a 100%-wide nav to the
+       same row as the brand and push it off the right edge. */
+    .topbar .in{gap:12px;padding:10px 18px}
+    /* flex-wrap must be reset: the base rule wraps, and a column that wraps
+       against max-height turns the sheet into two ragged columns. */
+    .topbar nav{display:none;order:3;width:100%;margin:0;
+      flex-direction:column;flex-wrap:nowrap;gap:0;font-size:16px;
+      border-top:1px solid var(--line);padding:6px 0 calc(6px + env(safe-area-inset-bottom));
+      max-height:70vh;overflow:auto;background:var(--bg)}
+    .topbar.open nav{display:flex}
+    .topbar nav a{padding:12px 2px;border-bottom:1px solid var(--line);color:var(--text)}
+    .topbar nav a:last-child{border-bottom:0}
+  }
   .live{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-family:var(--mono);
     color:var(--good);border:1px solid var(--good);border-radius:99px;padding:2px 10px}
   .live::before{content:"";width:7px;height:7px;border-radius:99px;background:var(--good);
@@ -159,6 +196,12 @@
   .fgrid h5{margin:0 0 10px;color:var(--text);font-size:14px}
   .fgrid a{display:block;padding:3px 0}
   .disc{border-top:1px solid var(--line);padding-top:20px;max-width:820px;line-height:1.7}
+  /* Thumb sizing on a phone. Last in the sheet on purpose: the topbar rules
+     above size the nav to fit the bar, not to be hit with a thumb. */
+  @media (max-width:860px){
+    .topbar nav a{padding:11px 0}
+    footer a{display:inline-block;padding:8px 0}
+  }
 </style>
 </head>
 <body>
@@ -166,7 +209,9 @@
 <div class="topbar"><div class="in">
   <span class="brand"><img src="/mark.svg" width="24" height="24" style="vertical-align:-5px;margin-right:7px" alt="">BUZZ<span class="dot">.</span></span>
   <span class="live">devnet</span>
-  <nav>
+  <button class="navtoggle" id="navtoggle" aria-expanded="false" aria-controls="docsnav">
+    <span class="bars" aria-hidden="true"></span>Menu</button>
+  <nav id="docsnav">
     <a href="#what">What</a>
     <a href="#how">How it works</a>
     <a href="#economics">Economics</a>
@@ -1089,3 +1134,39 @@ freeze authority: revoked</div>
 </script>
 </body>
 </html>
+
+<script>
+// Tables get their own horizontal scroller.
+//
+// Done here rather than in the markup because there are a dozen of them and a
+// wrapper per table is a dozen chances to forget one. display:block on the
+// table itself would also work and costs the table its column sizing, which is
+// the only thing the table is for.
+for(const t of document.querySelectorAll("table")){
+  if(t.parentElement?.classList.contains("tscroll")) continue;
+  const w = document.createElement("div");
+  w.className = "tscroll";
+  t.parentNode.insertBefore(w, t);
+  w.appendChild(t);
+}
+
+// The docs nav on a phone.
+//
+// It is a sheet rather than a full-screen overlay: the page behind it is the
+// thing you are navigating, and hiding it entirely to show a list of links to
+// it reads as a different page rather than a menu.
+(function nav(){
+  const bar = document.querySelector(".topbar");
+  const btn = document.getElementById("navtoggle");
+  if(!bar || !btn) return;
+  const set = (open) => { bar.classList.toggle("open", open); btn.setAttribute("aria-expanded", String(open)); };
+  btn.addEventListener("click", () => set(!bar.classList.contains("open")));
+  // Tapping a link should leave, not leave the menu sitting over where you
+  // landed. Anchor links do not reload, so nothing else would close it.
+  bar.querySelector("nav")?.addEventListener("click", (e) => { if(e.target.closest("a")) set(false); });
+  addEventListener("keydown", (e) => { if(e.key === "Escape") set(false); });
+  // Resizing past the breakpoint with it open would leave the desktop nav in a
+  // state only the phone layout uses.
+  addEventListener("resize", () => { if(innerWidth > 860) set(false); });
+})();
+</script>
