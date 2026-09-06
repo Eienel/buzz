@@ -1331,11 +1331,15 @@ if (relayer && process.env.RUN_SCHEDULER === "1") {
 // allowed to.
 if (relayer && process.env.RUN_MARKET !== "0") {
   book = makeMarket({ program: relayer.program, payer: relayer.kp, connection });
-  // The round book rides the same key and the same tick. Off unless asked for:
-  // it needs a program upgrade that is not on devnet yet, and a ticker sending
-  // instructions the deployed program does not have would log an error every
-  // 2.5 seconds forever.
-  if (process.env.ROUND_BOOK === "1")
+  // The round book rides the same key and the same tick.
+  //
+  // This was off by default because the instructions were not on devnet and a
+  // ticker sending instructions the deployed program does not have would log
+  // an error every 2.5 seconds forever. They are on devnet now: the deployed
+  // executable carries the discriminators for all five, and open_round plus
+  // place_round_bet have both landed against a live game by hand. So the
+  // default flips, and ROUND_BOOK=0 is the way back.
+  if (process.env.ROUND_BOOK !== "0")
     rounds = makeRounds({ program: relayer.program, payer: relayer.kp, connection });
   console.log("book on");
 

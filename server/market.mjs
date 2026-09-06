@@ -31,6 +31,40 @@ const log = (...a) => console.log(new Date().toISOString().slice(11, 19), "[book
 const LOCK_AFTER = Number(process.env.MARKET_LOCK_AFTER ?? 2);
 
 /**
+ * House money in the book, and why it is there.
+ *
+ * A parimutuel with one bettor pays that bettor their own stake back. The one
+ * real bet this book had ever taken did exactly that: it won, and returned
+ * 10.000000 of the 10.000000 staked. Being first was therefore worth nothing,
+ * which is a bad thing for the first stranger to find out by doing it.
+ *
+ * So the house stakes a little on every backable agent when a book opens. On
+ * all of them and in equal size, on purpose: the house is supplying a
+ * denominator, not taking a view, and a seed that leaned would be the operator
+ * betting against its own users. A visitor's bet then moves the split, and what
+ * they win comes out of the seed on the agents that died.
+ *
+ * The identity is in the source rather than in a secret, because the whole
+ * point is that anybody can tell our money from theirs: filter this key on any
+ * explorer and you have the seed, independent of what this server claims. The
+ * arena says the house share beside each pool for the same reason, and the
+ * bettor leaderboard leaves it out, since that board is about who reads the
+ * agents best and would be meaningless with the operator ranked on volume it
+ * handed itself.
+ *
+ * Nothing here holds its private key, and that cuts both ways: the relayer
+ * signs the seed and claim_bet pays it back to this account and nowhere else,
+ * so the seed circulates with no key in existence that could divert it, but
+ * its winnings pile up here rather than returning to the float. On devnet,
+ * against a token we mint, that is a fair price for a number nobody has to
+ * take our word for.
+ *
+ * HOUSE_BETTOR= (empty) turns seeding off.
+ */
+const HOUSE = (process.env.HOUSE_BETTOR ?? "8SLpjke9HFvKc9JbwZQvA1bptkUpQUWSFcYcMr863cvf") || null;
+const HOUSE_SEED = Number(process.env.HOUSE_SEED ?? 5);
+
+/**
  * Settled bets, remembered past the life of their accounts.
  *
  * Keyed by the Bet account's own address, so a row cannot be counted twice
@@ -105,6 +139,10 @@ export function makeMarket({ program, payer, connection }) {
   // bet on it: claim_bet needs `settled`, and `settled` needs every target
   // resolved. So the book remembers its own games until they are finished.
   const watching = new Map();   // gameId -> numCircles
+  // Games the house seed has been offered to. In memory on purpose: after a
+  // restart the seed is skipped rather than doubled, and a book with no seed is
+  // a smaller problem than a book seeded twice at different points in a game.
+  const seeded = new Set();
   let busy = false;
 
   const tokenProgramFor = async (mint) => {
@@ -138,6 +176,66 @@ export function makeMarket({ program, payer, connection }) {
       // The game moved on between the snapshot and the send. Next tick.
       if (!/WrongPhase|BadParam/.test(m)) log(`open ${g.gameId}: ${m.slice(0, 80)}`);
     }
+  }
+
+  /**
+   * Stake `amount` for an identity that holds no key, from our own float.
+   *
+   * The same call the relayer makes for a bettor with no wallet, which is why
+   * the seed needs no separate program path: to the book, house money is a bet
+   * like any other, and it wins or loses on the same rule.
+   */
+  async function placeAs(bettorKey, gameId, targetKey, amount) {
+    const bettor = new PublicKey(bettorKey), target = new PublicKey(targetKey);
+    const game = gamePda(gameId);
+    const market = marketPda(game);
+    const g = await program.account.game.fetch(game);
+    const mint = g.stakeMint;
+    const tokenProgram = await tokenProgramFor(mint);
+    const decimals = (await connection.getTokenSupply(mint)).value.decimals;
+    const units = new BN(String(BigInt(Math.round(Number(amount))) * 10n ** BigInt(decimals)));
+    // The seed has to have somewhere to be paid back to, and claim_bet will not
+    // pay anywhere but here.
+    const ataIx = createAssociatedTokenAccountIdempotentInstruction(
+      payer.publicKey, getAssociatedTokenAddressSync(mint, bettor, true, tokenProgram),
+      bettor, mint, tokenProgram);
+    return program.methods.placeBet(units).accountsPartial({
+      game, market, marketVault: mvaultPda(market),
+      targetPlayer: playerPda(game, target), backable: backablePda(target),
+      targetPool: tpoolPda(market, target), bet: betPda(market, bettor, target),
+      payerToken: getAssociatedTokenAddressSync(mint, payer.publicKey, false, tokenProgram),
+      bettor, payer: payer.publicKey, relayer: relayerPda,
+      stakeMint: mint, tokenProgram, systemProgram: SystemProgram.programId,
+    }).preInstructions([ataIx]).rpc();
+  }
+
+  /**
+   * Put the house seed on every backable agent in one game.
+   *
+   * Runs once per game, after its book exists. Equal size on every target: see
+   * HOUSE above for why the house must not lean. A failure here is logged and
+   * dropped rather than retried, because a seed that arrives late is a seed
+   * placed against a board a bettor has already read, which is the one thing
+   * the lock_instance rule exists to prevent.
+   *
+   * Backable agents are named pod-*, the same filter the arena uses. The
+   * program enforces the real rule with a marker account per agent, so a wrong
+   * guess here costs a failed transaction, not a bad bet.
+   */
+  async function seedFor(g) {
+    if (!HOUSE || HOUSE_SEED <= 0 || seeded.has(g.gameId)) return;
+    seeded.add(g.gameId);
+    const targets = (g.agents ?? [])
+      .filter((a) => (a.name ?? "").startsWith("pod-"))
+      .filter((a) => (g.combs ?? []).find((c) => c.id === a.comb)?.alive !== false)
+      .map((a) => a.owner).filter(Boolean);
+    if (!targets.length) return;
+    let placed = 0;
+    for (const t of new Set(targets)) {
+      try { await placeAs(HOUSE, g.gameId, t, HOUSE_SEED); placed++; }
+      catch (e) { log(`seed ${g.gameId} -> ${String(t).slice(0, 8)}: ${String(e.message ?? e).slice(0, 70)}`); }
+    }
+    if (placed) log(`seeded ${g.gameId}: ${HOUSE_SEED} on each of ${placed}`);
   }
 
   /** Every TargetPool on this book that still needs deciding. */
@@ -356,11 +454,35 @@ export function makeMarket({ program, payer, connection }) {
       // hardcoded divisor rendered a 45 token pool as "0.045".
       let decimals = 6;
       try { decimals = (await connection.getTokenSupply(m.stakeMint)).value.decimals; } catch {}
+      // How much of this pool is ours. The page says so out loud, because a
+      // pool that looks like other people's money and is not is the kind of
+      // number anybody can check on chain and nobody should have to.
+      let housePool = "0";
+      if (HOUSE) {
+        try {
+          const bdisc = program.coder.accounts.memcmp("bet").bytes;
+          const mine = await connection.getProgramAccounts(PID, {
+            filters: [{ memcmp: { offset: 0, bytes: bdisc } },
+                      { memcmp: { offset: 8, bytes: market.toBase58() } },
+                      { memcmp: { offset: 40, bytes: HOUSE } }],
+          });
+          let n = 0n;
+          for (const { account } of mine) {
+            const b = program.coder.accounts.decode("bet", account.data);
+            n += BigInt(b.amount.toString());
+            const key = b.target.toBase58();
+            if (pools[key]) pools[key].house = b.amount.toString();
+          }
+          housePool = n.toString();
+        } catch { /* the label is worth less than the odds: serve them anyway */ }
+      }
       return {
         market: market.toBase58(),
         vault: mvaultPda(market).toBase58(),
         stakeMint: m.stakeMint.toBase58(),
         decimals,
+        house: HOUSE,
+        housePool,
         totalPool: m.totalPool.toString(),
         winningPool: m.winningPool.toString(),
         lockInstance: m.lockInstance,
@@ -435,6 +557,11 @@ export function makeMarket({ program, payer, connection }) {
       const by = new Map();
       let graded = 0;
       for (const b of bets) {
+        // The house seed is not a read of the agents, it is the denominator
+        // those reads are measured against. Scoring it would put the operator
+        // at the top of a board about who predicts best, on volume it gave
+        // itself, which is the opposite of what the board is for.
+        if (HOUSE && b.bettor.toBase58() === HOUSE) continue;
         const m = marketBy.get(b.market.toBase58());
         if (!m) continue;
         const pool = poolFor(b.market.toBase58(), b.target);
@@ -458,6 +585,7 @@ export function makeMarket({ program, payer, connection }) {
       const onChain = new Set(bets.map((b) => b.pubkey.toBase58()));
       for (const [key, row] of seenBets) {
         if (onChain.has(key)) continue;
+        if (HOUSE && row.bettor === HOUSE) continue;   // same reason as above
         const r = by.get(row.bettor) ?? { bettor: row.bettor, bets: 0, hits: 0, staked: 0, returned: 0 };
         r.bets += 1; r.hits += row.won ? 1 : 0;
         r.staked += row.stake; r.returned += row.payout;
@@ -550,6 +678,9 @@ export function makeMarket({ program, payer, connection }) {
           if (g.status !== 1) continue;
           running.add(g.gameId);
           await openFor(g);
+          // After the book exists, never before: the seed is a bet, and a bet
+          // needs somewhere to go.
+          if (watching.has(g.gameId)) await seedFor(g);
         }
         // Anything we hold a book on that is no longer running has either
         // settled or gone away, and both want the same call: try to decide it,

@@ -519,6 +519,9 @@
   .intro .skip{padding:12px 16px;border-radius:12px;background:transparent;
     border:1px solid var(--edge2);color:var(--dim);font:500 14px/1 var(--sans);cursor:pointer}
   .intro .skip:hover{color:var(--text)}
+  /* The house share of a pool, said beside the pool rather than under it: it
+     is a qualifier on that number, not a second number. */
+  .odds .hs{color:var(--dimmer);font-size:11px;font-weight:400;white-space:nowrap}
   .helpb{background:none;border:0;padding:0;font:inherit;color:var(--honey);cursor:pointer;
     border-bottom:1px solid rgba(255,179,0,.4)}
 
@@ -1059,9 +1062,17 @@ async function paintOdds(){
     // else bets. It moves as the pool moves, which is the whole point of a
     // parimutuel, so it is labelled as a rate rather than a promise.
     const mult = onThis > 0 ? (total / onThis) : null;
+    // House money is named rather than counted silently. The book seeds every
+    // backable agent equally so a first bettor has something to win, and a
+    // pool that looks like other people's money and is not is exactly the kind
+    // of number somebody checks on chain afterwards.
+    const house = Number(m.housePool ?? 0);
+    const wholeLabel = total
+      ? fmtUnits(total) + (house > 0 ? ` <span class="hs">${fmtUnits(house)} house</span>` : "")
+      : "nothing yet";
     box.innerHTML =
       cell("pool on this agent", onThis ? fmtUnits(onThis) : "nothing yet") +
-      cell("whole pool", total ? fmtUnits(total) : "nothing yet") +
+      cell("whole pool", wholeLabel) +
       cell("pays now", mult ? mult.toFixed(2) + "x" : "first in") +
       // "instance" is what the program calls a round, and a visitor reading a
       // bet panel has no reason to know that. The rest of the board already
