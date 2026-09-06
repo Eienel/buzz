@@ -2130,6 +2130,50 @@ createServer(async (req,res)=>{
       return send(res, 502, { error: String(e.message ?? e).slice(0, 140) });
     }
   }
+  /**
+   * Stake on the comb that dies this round, through the relayer.
+   *
+   * Same identity model as the game book: the browser holds a key it never
+   * signs with, the relayer pays, and the payout account is bound to the
+   * bettor. The round is not a parameter, because between a click and this
+   * call the board can move and a bet on a round that has passed is a bet
+   * nobody can win.
+   */
+  if(p === "/api/round/bet"){
+    if(req.method !== "POST") return send(res, 405, { error: "POST" });
+    if(!rounds) return send(res, 503, { error: "the round book is not running on this arena yet" });
+    if(!relayer) return send(res, 503, { error: "arena is read-only: no relayer configured" });
+    const b = await readBody(req);
+    const { game, bettor, comb, amount } = b ?? {};
+    if(!game || !/^[0-9]{1,20}$/.test(String(game)))
+      return send(res, 400, { error: "game must be a numeric game id" });
+    if(!isPubkey(bettor)) return send(res, 400, { error: "bettor must be a base58 pubkey" });
+    if(!Number.isInteger(comb) || comb < 0 || comb > 11)
+      return send(res, 400, { error: "comb must be 0-11" });
+    const amt = Number(amount);
+    if(!Number.isFinite(amt) || amt <= 0 || amt > BET_MAX)
+      return send(res, 400, { error: `stake between 1 and ${BET_MAX}` });
+
+    const g = (snapshot.live ?? []).find((x) => String(x.gameId) === String(game));
+    if(!g) return send(res, 404, { error: "no such game on the board" });
+    // Commit only, checked here as well as on chain: the program refuses it
+    // anyway, and answering "backing is shut for this round" beats relaying a
+    // transaction whose failure the bettor has to decode.
+    if(g.status !== 1 || g.phase !== 0)
+      return send(res, 409, { error: "backing this round is shut",
+        hint: "a round takes bets only while its moves are still hidden" });
+
+    const gate = limiter.check("bet", bettor, String(game), { queued: queuedCount(), relayerSol });
+    if(!gate.ok) return send(res, 429, { error: gate.error, retryAfter: gate.retryAfter ?? null });
+    try{
+      const r = await relayer.handlers.roundBet({ bettorWallet: bettor, gameId: String(game),
+                                                  comb, amount: amt });
+      roundCache.clear();                       // the pools just moved
+      return send(res, 200, { ok: true, ...r });
+    }catch(e){
+      return send(res, 502, { error: explainTxError(e).slice(0, 200) });
+    }
+  }
   if(p === "/api/bet/prepare"){
     if(!book) return send(res, 503, { error: "the book is not running" });
     if(req.method !== "POST") return send(res, 405, { error: "POST" });

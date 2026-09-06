@@ -187,6 +187,12 @@ function makeRelayer({ connection, kp, program }) {
   const mvaultPda = (m) => pda(Buffer.from("mvault"), m.toBuffer());
   const tpoolPda = (m, t) => pda(Buffer.from("tpool"), m.toBuffer(), t.toBuffer());
   const betPda = (m, b, t) => pda(Buffer.from("bet"), m.toBuffer(), b.toBuffer(), t.toBuffer());
+  // The round book. Seeded on the instance, so each round is its own market.
+  const roundPda = (game, inst) =>
+    pda(Buffer.from("round"), game.toBuffer(), Buffer.from(new Uint16Array([inst]).buffer));
+  const rvaultPda = (r) => pda(Buffer.from("rvault"), r.toBuffer());
+  const rbetPda = (r, b) => pda(Buffer.from("rbet"), r.toBuffer(), b.toBuffer());
+  const combPdaOf = (game, id) => pda(Buffer.from("circle"), game.toBuffer(), Buffer.from([id]));
   const backablePda = (t) => pda(Buffer.from("backable"), t.toBuffer());
 
   async function bet({ bettorWallet, gameId, targetWallet, amount }) {
@@ -254,7 +260,59 @@ function makeRelayer({ connection, kp, program }) {
     return { sig };
   }
 
-  const handlers = { join, move, predict, revealMove, revealPrediction, settle, bet, claimBet };
+  /**
+   * Stake on the comb that dies this round.
+   *
+   * Same shape as bet(): we pay, somebody else owns, and the payout account is
+   * bound to the bettor so this key cannot redirect a token of it. The round is
+   * read off the game rather than passed in, because a bet on a round the game
+   * has already left is a bet nobody can win and the caller has no way to know
+   * the board moved between their click and this call.
+   */
+  async function roundBet({ bettorWallet, gameId, comb, amount }) {
+    const bettor = new PublicKey(bettorWallet);
+    const game = gamePda(gameId);
+    const g = await program.account.game.fetch(game);
+    const inst = g.instance;
+    const round = roundPda(game, inst);
+    const mint = g.stakeMint;
+    const tokenProgram = (await connection.getAccountInfo(mint)).owner;
+    const decimals = (await connection.getTokenSupply(mint)).value.decimals;
+    const units = new BN(String(BigInt(Math.round(Number(amount))) * 10n ** BigInt(decimals)));
+
+    await createAssociatedTokenAccountIdempotent(connection, kp, mint, bettor,
+      { commitment: "confirmed" }, tokenProgram);
+
+    const sig = await program.methods.placeRoundBet(comb, units).accountsPartial({
+      game, round, roundVault: rvaultPda(round),
+      circle: combPdaOf(game, comb),
+      roundBet: rbetPda(round, bettor),
+      payerToken: getAssociatedTokenAddressSync(mint, kp.publicKey, true, tokenProgram),
+      bettor, payer: kp.publicKey, relayer: relayerPda,
+      stakeMint: mint, tokenProgram, systemProgram: SystemProgram.programId,
+    }).rpc();
+    return { sig, round: inst, comb };
+  }
+
+  /** Take the winnings, or the refund, on one round. */
+  async function claimRoundBet({ bettorWallet, gameId, round: inst }) {
+    const bettor = new PublicKey(bettorWallet);
+    const game = gamePda(gameId);
+    const g = await program.account.game.fetch(game);
+    const round = roundPda(game, inst);
+    const mint = g.stakeMint;
+    const tokenProgram = (await connection.getAccountInfo(mint)).owner;
+    const sig = await program.methods.claimRoundBet().accountsPartial({
+      round, roundVault: rvaultPda(round), roundBet: rbetPda(round, bettor),
+      bettorToken: getAssociatedTokenAddressSync(mint, bettor, true, tokenProgram),
+      bettor, payer: kp.publicKey, relayer: relayerPda,
+      stakeMint: mint, tokenProgram,
+    }).rpc();
+    return { sig };
+  }
+
+  const handlers = { join, move, predict, revealMove, revealPrediction, settle, bet, claimBet,
+                     roundBet, claimRoundBet };
 
   /** Is this relayer actually allowed to act for others? */
   async function ready() {
