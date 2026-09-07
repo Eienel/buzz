@@ -640,6 +640,31 @@ async function playGame(gameNo) {
       log(`  ${a.name} staked into circle ${a.circle}`);
     } catch (e) {
       const m = String(e.message ?? e);
+      // "Not confirmed in 30 seconds" is not a failure, it is an unanswered
+      // question, and the answer is on chain.
+      //
+      // Devnet regularly takes longer than the client's confirmation window
+      // even when the RPC is healthy, and the transaction lands anyway: two of
+      // these signatures were checked by hand and both had finalized. Treating
+      // it as a failure marked the agent dead, and once enough agents died the
+      // fill dropped below MIN_COMBS and the whole lobby was abandoned. That is
+      // what left the board showing empty lobbies with nothing running in them.
+      if (/was not confirmed|Timed out awaiting|block height exceeded/i.test(m)) {
+        const seated = await program.account.player
+          .fetch(playerPda(a.kp.publicKey)).catch(() => null);
+        if (seated) {
+          taken.add(a.circle);
+          // Whether this was a create or a join decides the creator cut, and
+          // the timeout gives no way to tell. The circle says who made it, so
+          // ask it rather than infer: every seated agent has this circle as its
+          // current one either way.
+          const circle = await program.account.circle
+            .fetch(circlePda(a.circle)).catch(() => null);
+          if (circle?.creator?.equals(a.kp.publicKey)) a.createdCircle = a.circle;
+          log(`  ${a.name} staked into circle ${a.circle} (confirmation timed out, landed anyway)`);
+          continue;
+        }
+      }
       a.dead = true;                     // never played, so never plays or scores
       // WrongPhase here means the lobby is already running. Nobody else can get
       // in, so stop trying, and play with the agents that did.
