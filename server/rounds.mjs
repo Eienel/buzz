@@ -33,6 +33,10 @@ export function makeRounds({ program, payer, connection }) {
   // guard: open_round is `init`, so a second one is rejected.
   const open = new Map();              // "<gameId>:<instance>" -> true
   const settled = new Set();
+  // Books that are decided and whose rent is therefore owed back. A book is
+  // only removed once it is actually closed, or once closing it has failed
+  // enough times that retrying is just noise.
+  const closable = new Map();          // key -> attempts
   let busy = false;
 
   const tokenProgramFor = async (mint) => {
@@ -80,6 +84,7 @@ export function makeRounds({ program, payer, connection }) {
     try {
       await program.methods.settleRound()
         .accountsPartial({ game, round: roundPda(game, g.instance) }).rpc();
+      closable.set(key, 0);
       settled.add(key);
       log(`settled ${g.gameId} round ${g.instance}, comb ${g.doomed} died`);
     } catch (e) {
@@ -104,11 +109,60 @@ export function makeRounds({ program, payer, connection }) {
       await program.methods.voidRound()
         .accountsPartial({ game, round: roundPda(game, instance) }).rpc();
       settled.add(key);
+      closable.set(key, 0);
       log(`voided ${key}: nobody settled it in time, every stake refunded`);
     } catch (e) {
       const m = String(e.message ?? e);
       if (/AlreadyClaimed|WrongPhase/.test(m)) settled.add(key);
       else log(`void ${key}: ${m.slice(0, 80)}`);
+    }
+  }
+
+  /**
+   * Give a decided book's rent back.
+   *
+   * This is the half that did not exist when the round book was first turned
+   * on, and its absence is the whole reason it had to be turned off again:
+   * open_round inits a RoundMarket and a token vault every round of every
+   * game, and in one day that was 2217 accounts and about 9 SOL that nothing
+   * could reclaim. A book that costs rent per round needs its reaper on the
+   * same tick that opens it, not in a script somebody remembers to run.
+   *
+   * Closing is attempted rather than scheduled, because the program decides
+   * whether it is allowed: close_round refuses while the vault still holds
+   * tokens, which is exactly the window where bettors have positions they have
+   * not claimed. So a book with money still in it fails here and is tried
+   * again next tick, and that failure is the safety property working.
+   */
+  async function closeFor(key) {
+    const [gameId, instStr] = key.split(":");
+    const game = gamePda(gameId);
+    const round = roundPda(game, Number(instStr));
+    const vault = rvaultPda(round);
+    try {
+      const acc = await connection.getAccountInfo(vault);
+      // Already gone: somebody else closed it, which is the permissionless
+      // design working rather than a problem.
+      if (!acc) { closable.delete(key); open.delete(key); return; }
+      await program.methods.closeRound().accountsPartial({
+        round, roundVault: vault, cranker: payer.publicKey,
+        tokenProgram: acc.owner,
+      }).rpc();
+      closable.delete(key); open.delete(key);
+      log(`closed ${key}, rent back`);
+    } catch (e) {
+      const m = String(e.message ?? e);
+      // Bettors still hold stakes here. Not an error, just not yet.
+      if (/ConservationViolated/.test(m)) { closable.set(key, 0); return; }
+      const tries = (closable.get(key) ?? 0) + 1;
+      // Ten ticks of the same refusal is a book this process cannot close, and
+      // saying so once beats saying so forever.
+      if (tries >= 10) {
+        closable.delete(key);
+        log(`close ${key}: giving up after ${tries}: ${m.slice(0, 70)}`);
+        return;
+      }
+      closable.set(key, tries);
     }
   }
 
@@ -158,6 +212,10 @@ export function makeRounds({ program, payer, connection }) {
           const now = at.get(gameId);
           if (now === undefined || now > inst) await voidFor(gameId, inst);
         }
+        // Hand back the rent on everything already decided. A few per tick:
+        // the tick runs every 2.5 seconds and there is no hurry, and closing a
+        // whole backlog in one pass is how a sweep earns a rate limit.
+        for (const key of [...closable.keys()].slice(0, 4)) await closeFor(key);
       } catch (e) {
         log("tick:", String(e.message ?? e).slice(0, 100));
       } finally { busy = false; }
