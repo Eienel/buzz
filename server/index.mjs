@@ -1331,19 +1331,28 @@ if (relayer && process.env.RUN_SCHEDULER === "1") {
 // allowed to.
 if (relayer && process.env.RUN_MARKET !== "0") {
   book = makeMarket({ program: relayer.program, payer: relayer.kp, connection });
-  // The round book rides the same key and the same tick. Off by default, and
-  // this is the second reason for that rather than the first.
+  // The round book rides the same key and the same tick.
   //
-  // The first was that its instructions were not on devnet. They are now. So
-  // the default was flipped on, and in one day it opened 2217 round books and
-  // closed none of them, because there is no close_round: open_round inits a
-  // RoundMarket and a token vault per round per game, and nothing ever gets
-  // that rent back. It took the payer from 15.06 SOL to 1.03 and the swarm
-  // stopped being able to seat agents, so the board became empty lobbies.
+  // This was on once before and cost 9 SOL in a day: open_round inits a
+  // RoundMarket and a token vault per round per game, there was no
+  // close_round, and nothing ever got that rent back. The payer went from
+  // 15.06 to 1.03, the swarm stopped seating agents, and the board became
+  // empty lobbies. So the bar for turning it on again is not "it works", it
+  // is "the rent comes back and I have watched it do so".
   //
-  // A book that costs rent per round needs a reaper before it needs a default.
-  // Back to opt-in until close_round exists and the backlog is swept.
-  if (process.env.ROUND_BOOK === "1")
+  // What changed, each verified rather than argued:
+  //   - close_round and close_round_bet exist and are deployed
+  //   - a book whose game was reaped can be closed, and one holding a stake
+  //     still cannot, which is the conservation guard
+  //   - the ticker closes on the same pass it settles
+  //   - it reconciles against the chain every five minutes, so a restart no
+  //     longer forgets the books it had in flight, which is what a deploy is
+  //   - measured end to end, one book costs 10,000 lamports: 3,093,640 in,
+  //     3,083,640 back, the difference being two transaction fees
+  //
+  // ROUND_BOOK=0 is still the way back, and the account count on chain is the
+  // number to watch.
+  if (process.env.ROUND_BOOK !== "0")
     rounds = makeRounds({ program: relayer.program, payer: relayer.kp, connection });
   console.log("book on");
 
