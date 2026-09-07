@@ -20,6 +20,12 @@ const log = (...a) => console.log(new Date().toISOString().slice(11, 19), "[roun
 /** Phases, as the program numbers them. */
 const COMMIT = 0, SCORING = 3;
 
+/** How often to ask the chain what we have forgotten. See reconcile(). */
+const RECONCILE_MS = Number(process.env.ROUND_RECONCILE_MS ?? 5 * 60_000);
+
+/** How long to leave a book alone when its bettors have not claimed yet. */
+const CLAIM_WAIT_MS = Number(process.env.ROUND_CLAIM_WAIT_MS ?? 60_000);
+
 export function makeRounds({ program, payer, connection }) {
   const PID = program.programId;
   const pda = (...seeds) => PublicKey.findProgramAddressSync(seeds, PID)[0];
@@ -36,7 +42,13 @@ export function makeRounds({ program, payer, connection }) {
   // Books that are decided and whose rent is therefore owed back. A book is
   // only removed once it is actually closed, or once closing it has failed
   // enough times that retrying is just noise.
-  const closable = new Map();          // key -> attempts
+  const closable = new Map();          // key -> { round, tries }
+  // Books adopted from a previous run, so reconcile does not re-send a void
+  // every time it sweeps.
+  const adoptedKeys = new Set();
+  // First sweep happens on the first tick, because a restart is exactly when
+  // there is something to adopt.
+  let lastReconcile = 0;
   let busy = false;
 
   const tokenProgramFor = async (mint) => {
@@ -84,7 +96,7 @@ export function makeRounds({ program, payer, connection }) {
     try {
       await program.methods.settleRound()
         .accountsPartial({ game, round: roundPda(game, g.instance) }).rpc();
-      closable.set(key, 0);
+      closable.set(key, { round: roundPda(game, g.instance), tries: 0 });
       settled.add(key);
       log(`settled ${g.gameId} round ${g.instance}, comb ${g.doomed} died`);
     } catch (e) {
@@ -109,7 +121,7 @@ export function makeRounds({ program, payer, connection }) {
       await program.methods.voidRound()
         .accountsPartial({ game, round: roundPda(game, instance) }).rpc();
       settled.add(key);
-      closable.set(key, 0);
+      closable.set(key, { round: roundPda(game, instance), tries: 0 });
       log(`voided ${key}: nobody settled it in time, every stake refunded`);
     } catch (e) {
       const m = String(e.message ?? e);
@@ -135,9 +147,11 @@ export function makeRounds({ program, payer, connection }) {
    * again next tick, and that failure is the safety property working.
    */
   async function closeFor(key) {
-    const [gameId, instStr] = key.split(":");
-    const game = gamePda(gameId);
-    const round = roundPda(game, Number(instStr));
+    const entry = closable.get(key);
+    if (!entry?.round) { closable.delete(key); return; }
+    // A book waiting on its bettors does not need asking every 2.5 seconds.
+    if (entry.after && Date.now() < entry.after) return;
+    const { round } = entry;
     const vault = rvaultPda(round);
     try {
       const acc = await connection.getAccountInfo(vault);
@@ -152,9 +166,16 @@ export function makeRounds({ program, payer, connection }) {
       log(`closed ${key}, rent back`);
     } catch (e) {
       const m = String(e.message ?? e);
-      // Bettors still hold stakes here. Not an error, just not yet.
-      if (/ConservationViolated/.test(m)) { closable.set(key, 0); return; }
-      const tries = (closable.get(key) ?? 0) + 1;
+      // Bettors still hold stakes here. Not an error, just not yet, so it
+      // keeps its place in the queue but stops being asked on every tick: an
+      // unclaimed book would otherwise cost two RPC calls every 2.5 seconds
+      // for as long as it went unclaimed, which is the sort of quiet spend
+      // that only shows up on the bill.
+      if (/ConservationViolated/.test(m)) {
+        closable.set(key, { round, tries: 0, after: Date.now() + CLAIM_WAIT_MS });
+        return;
+      }
+      const tries = (closable.get(key)?.tries ?? 0) + 1;
       // Ten ticks of the same refusal is a book this process cannot close, and
       // saying so once beats saying so forever.
       if (tries >= 10) {
@@ -162,8 +183,53 @@ export function makeRounds({ program, payer, connection }) {
         log(`close ${key}: giving up after ${tries}: ${m.slice(0, 70)}`);
         return;
       }
-      closable.set(key, tries);
+      closable.set(key, { round, tries });
     }
+  }
+
+  /**
+   * Adopt books this process did not open.
+   *
+   * Everything above is driven by `open`, which is in memory, so a restart
+   * forgets every book in flight. The board moves on, those books are never
+   * settled, never voided and never closed, and nothing ever looks at them
+   * again: the reaper only reaps what it opened in this run.
+   *
+   * Measured rather than reasoned: killing the ticker mid-game and restarting
+   * it left a book at round 3 sitting there while the restarted process opened
+   * and closed rounds 4 and 5 around it. One orphan per in-flight game per
+   * restart, and a deploy is a restart.
+   *
+   * So the chain is asked directly, on a slow timer. getProgramAccounts is the
+   * most expensive call we make and the only one that can answer "what exists
+   * that I have forgotten", which is why this runs every few minutes rather
+   * than every tick.
+   */
+  async function reconcile() {
+    const raw = await connection.getProgramAccounts(PID, {
+      filters: [{ memcmp: { offset: 0, bytes: program.coder.accounts.memcmp("roundMarket").bytes } }],
+    });
+    let adopted = 0;
+    for (const { pubkey, account } of raw) {
+      let r;
+      try { r = program.coder.accounts.decode("roundMarket", account.data); } catch { continue; }
+      const key = `${r.game.toBase58()}:${r.instance}`;
+      if (closable.has(key) || adoptedKeys.has(key)) continue;
+      adoptedKeys.add(key);
+      adopted++;
+      // Decided already: it only needs its rent handing back.
+      if (r.settled || r.void) { closable.set(key, { round: pubkey, tries: 0 }); continue; }
+      // Undecided and forgotten. void_round refuses while the game is still on
+      // this round, which is the guard against voiding a live book, so a book
+      // the board has not passed yet simply fails here and is retried.
+      try {
+        await program.methods.voidRound()
+          .accountsPartial({ game: r.game, round: pubkey }).rpc();
+        closable.set(key, { round: pubkey, tries: 0 });
+        log(`adopted and voided ${key}`);
+      } catch { adoptedKeys.delete(key); adopted--; }
+    }
+    if (adopted) log(`adopted ${adopted} book${adopted === 1 ? "" : "s"} left by a previous run`);
   }
 
   return {
@@ -216,6 +282,14 @@ export function makeRounds({ program, payer, connection }) {
         // the tick runs every 2.5 seconds and there is no hurry, and closing a
         // whole backlog in one pass is how a sweep earns a rate limit.
         for (const key of [...closable.keys()].slice(0, 4)) await closeFor(key);
+        // And pick up anything a previous run left behind. Slow on purpose:
+        // getProgramAccounts is the most expensive call we make, and the books
+        // it finds have already been sitting there, so a few minutes more
+        // costs nothing.
+        if (Date.now() - lastReconcile > RECONCILE_MS) {
+          lastReconcile = Date.now();
+          await reconcile();
+        }
       } catch (e) {
         log("tick:", String(e.message ?? e).slice(0, 100));
       } finally { busy = false; }
