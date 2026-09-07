@@ -147,6 +147,46 @@ const payer = loadKeypair(process.env.PAYER, `${process.env.HOME}/.config/solana
 const connection = makeConnection(RPC, { label: "swarm" });
 surviveRateLimits("swarm");
 const provider = new AnchorProvider(connection, new Wallet(payer), { commitment: "confirmed" });
+
+// A confirmation timeout is a question, not a failure, and the answer is on
+// chain.
+//
+// Devnet routinely takes longer to confirm than the client waits, healthy RPC
+// or not: this runs on Alchemy, which has never been benched onto the
+// fallback, and still sees "not confirmed in 30.00 seconds" several times an
+// hour. The transactions land. Signatures from those errors were checked by
+// hand and had finalized.
+//
+// Anchor's .rpc() turns that into a throw, which propagated all the way out of
+// playGame and abandoned the entire game, agents already staked and all. The
+// board sat at zero running games for a solid thirty minutes while lobbies
+// piled up behind it. Patching individual call sites was whack-a-mole, so it
+// is fixed once, here, for every transaction the swarm sends.
+//
+// Only the ambiguous errors are retried this way. A transaction that actually
+// failed still has an error attached to its status, and still throws.
+const _send = provider.sendAndConfirm.bind(provider);
+provider.sendAndConfirm = async (tx, signers, opts) => {
+  try {
+    return await _send(tx, signers, opts);
+  } catch (e) {
+    const m = String(e?.message ?? e);
+    if (!/was not confirmed|Timed out awaiting|block height exceeded/i.test(m)) throw e;
+    const sig = m.match(/signature ([1-9A-HJ-NP-Za-km-z]{80,90})/)?.[1] ?? e?.signature;
+    if (!sig) throw e;
+    // Give it the time the client would not. A landed transaction is visible
+    // within a few slots; one that never landed stays null and rethrows.
+    for (let i = 0; i < 10; i++) {
+      await new Promise((r) => setTimeout(r, 3000));
+      const st = (await connection.getSignatureStatuses([sig])).value?.[0];
+      if (!st) continue;
+      if (st.err) throw e;                       // it landed and it failed
+      log(`  tx confirmed late (${sig.slice(0, 12)}…), carrying on`);
+      return sig;
+    }
+    throw e;
+  }
+};
 const idl = JSON.parse(readFileSync(new URL("./idl/last_circle.json", import.meta.url), "utf8"));
 const program = new Program(idl, provider);
 const PID = program.programId;
