@@ -1604,7 +1604,19 @@ pub mod last_circle {
     /// accounts keep the vault non-empty until they claim.
     pub fn close_round(ctx: Context<CloseRound>) -> Result<()> {
         let r = &ctx.accounts.round;
-        require!(r.settled || r.void, GameError::WrongPhase);
+        // A book nobody ever bet in can close without being settled or voided.
+        //
+        // void_round takes the Game account, so once rent recovery closes a
+        // finished game its leftover round books can never be voided, and
+        // requiring settled-or-void stranded them forever. Measured on the
+        // backlog: about one book in five. That is not a one-off, it is what
+        // happens every time a game is reaped before its books are swept.
+        //
+        // CONSERVATION: the empty vault below is the guard that matters and it
+        // is unchanged. total_pool == 0 only widens this to books that never
+        // held a stake at all, and a book with unclaimed positions still has a
+        // non-empty vault and still cannot close.
+        require!(r.settled || r.void || r.total_pool == 0, GameError::WrongPhase);
         require!(ctx.accounts.round_vault.amount == 0, GameError::ConservationViolated);
         let rkey = r.key();
         let seeds: &[&[u8]] = &[b"rvault", rkey.as_ref(), &[r.vault_bump]];
