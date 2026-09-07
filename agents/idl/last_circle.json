@@ -2022,6 +2022,189 @@
       "args": []
     },
     {
+      "name": "close_round",
+      "docs": [
+        "Close a decided round book and hand its rent back to whoever opened it.",
+        "",
+        "This instruction is the whole reason the round book is safe to run. Every",
+        "round of every game inits a RoundMarket and a token vault, so without a",
+        "way back that is roughly 0.0042 SOL per round per game, forever. Run",
+        "without it for one day, the book opened 2217 accounts and took the payer",
+        "from 15.06 SOL to 1.03, which stopped the swarm seating agents and left",
+        "the board showing empty lobbies. close_market exists for exactly this",
+        "reason on the game book; this is the same lesson, learned twice.",
+        "",
+        "CONSERVATION: an empty vault is the whole guard, as in close_market.",
+        "Every token that entered this round left as a payout or a refund, so",
+        "there is nothing here to sweep and nobody left to pay. A book with",
+        "bettors still holding positions therefore cannot close: their RoundBet",
+        "accounts keep the vault non-empty until they claim."
+      ],
+      "discriminator": [
+        149,
+        14,
+        81,
+        88,
+        230,
+        226,
+        234,
+        37
+      ],
+      "accounts": [
+        {
+          "name": "round",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  111,
+                  117,
+                  110,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "round.game",
+                "account": "RoundMarket"
+              },
+              {
+                "kind": "account",
+                "path": "round.instance",
+                "account": "RoundMarket"
+              }
+            ]
+          }
+        },
+        {
+          "name": "round_vault",
+          "docs": [
+            "Drained to nothing before the book may close. Closed by CPI rather than",
+            "by Anchor's `close` for the same reason as the market vault: a token",
+            "account belongs to the token program and has to be told to close itself."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "round"
+              }
+            ]
+          }
+        },
+        {
+          "name": "cranker",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "token_program"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "close_round_bet",
+      "docs": [
+        "Close one round bet, so the round book it sits under can close too.",
+        "",
+        "Same forfeit rule as close_bet: an unclaimed bet can only be closed by",
+        "the bettor themselves, because closing it is giving up the claim."
+      ],
+      "discriminator": [
+        222,
+        13,
+        69,
+        137,
+        99,
+        208,
+        133,
+        101
+      ],
+      "accounts": [
+        {
+          "name": "round",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  111,
+                  117,
+                  110,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "round.game",
+                "account": "RoundMarket"
+              },
+              {
+                "kind": "account",
+                "path": "round.instance",
+                "account": "RoundMarket"
+              }
+            ]
+          }
+        },
+        {
+          "name": "round_bet",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  98,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "round"
+              },
+              {
+                "kind": "account",
+                "path": "bettor"
+              }
+            ]
+          }
+        },
+        {
+          "name": "bettor",
+          "docs": [
+            "this bet. Its signature is only required to close a bet that has not",
+            "claimed, which is an explicit forfeit."
+          ],
+          "writable": true
+        },
+        {
+          "name": "cranker",
+          "signer": true
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "close_season",
       "docs": [
         "Authority-only: end the open season and start the next. Whatever nobody",
