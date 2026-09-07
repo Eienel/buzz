@@ -1575,6 +1575,49 @@ pub mod last_circle {
             &[seeds],
         ))
     }
+
+    /// Close one round bet, so the round book it sits under can close too.
+    ///
+    /// Same forfeit rule as close_bet: an unclaimed bet can only be closed by
+    /// the bettor themselves, because closing it is giving up the claim.
+    pub fn close_round_bet(ctx: Context<CloseRoundBet>) -> Result<()> {
+        if !ctx.accounts.round_bet.claimed {
+            require!(ctx.accounts.bettor.is_signer, GameError::Unauthorized);
+        }
+        Ok(())
+    }
+
+    /// Close a decided round book and hand its rent back to whoever opened it.
+    ///
+    /// This instruction is the whole reason the round book is safe to run. Every
+    /// round of every game inits a RoundMarket and a token vault, so without a
+    /// way back that is roughly 0.0042 SOL per round per game, forever. Run
+    /// without it for one day, the book opened 2217 accounts and took the payer
+    /// from 15.06 SOL to 1.03, which stopped the swarm seating agents and left
+    /// the board showing empty lobbies. close_market exists for exactly this
+    /// reason on the game book; this is the same lesson, learned twice.
+    ///
+    /// CONSERVATION: an empty vault is the whole guard, as in close_market.
+    /// Every token that entered this round left as a payout or a refund, so
+    /// there is nothing here to sweep and nobody left to pay. A book with
+    /// bettors still holding positions therefore cannot close: their RoundBet
+    /// accounts keep the vault non-empty until they claim.
+    pub fn close_round(ctx: Context<CloseRound>) -> Result<()> {
+        let r = &ctx.accounts.round;
+        require!(r.settled || r.void, GameError::WrongPhase);
+        require!(ctx.accounts.round_vault.amount == 0, GameError::ConservationViolated);
+        let rkey = r.key();
+        let seeds: &[&[u8]] = &[b"rvault", rkey.as_ref(), &[r.vault_bump]];
+        token_interface::close_account(CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            token_interface::CloseAccount {
+                account: ctx.accounts.round_vault.to_account_info(),
+                destination: ctx.accounts.cranker.to_account_info(),
+                authority: ctx.accounts.round_vault.to_account_info(),
+            },
+            &[seeds],
+        ))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -3045,6 +3088,43 @@ pub struct CloseMarket<'info> {
     /// itself, signed by the authority, which here is the vault PDA.
     #[account(mut, seeds = [b"mvault", market.key().as_ref()], bump = market.vault_bump)]
     pub market_vault: InterfaceAccount<'info, TokenAccount>,
+    #[account(mut)]
+    pub cranker: Signer<'info>,
+    pub token_program: Interface<'info, TokenInterface>,
+}
+
+#[derive(Accounts)]
+pub struct CloseRoundBet<'info> {
+    #[account(seeds = [b"round", round.game.as_ref(), round.instance.to_le_bytes().as_ref()],
+              bump = round.bump)]
+    pub round: Account<'info, RoundMarket>,
+    #[account(
+        mut,
+        close = bettor,
+        seeds = [b"rbet", round.key().as_ref(), bettor.key().as_ref()],
+        bump = round_bet.bump,
+        constraint = round_bet.bettor == bettor.key() @ GameError::Unauthorized
+    )]
+    pub round_bet: Account<'info, RoundBet>,
+    /// CHECK: the rent goes here and nowhere else, and the seeds bind it to
+    /// this bet. Its signature is only required to close a bet that has not
+    /// claimed, which is an explicit forfeit.
+    #[account(mut)]
+    pub bettor: UncheckedAccount<'info>,
+    pub cranker: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct CloseRound<'info> {
+    #[account(mut, close = cranker,
+              seeds = [b"round", round.game.as_ref(), round.instance.to_le_bytes().as_ref()],
+              bump = round.bump)]
+    pub round: Account<'info, RoundMarket>,
+    /// Drained to nothing before the book may close. Closed by CPI rather than
+    /// by Anchor's `close` for the same reason as the market vault: a token
+    /// account belongs to the token program and has to be told to close itself.
+    #[account(mut, seeds = [b"rvault", round.key().as_ref()], bump = round.vault_bump)]
+    pub round_vault: InterfaceAccount<'info, TokenAccount>,
     #[account(mut)]
     pub cranker: Signer<'info>,
     pub token_program: Interface<'info, TokenInterface>,
