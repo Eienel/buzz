@@ -59,9 +59,18 @@ for (const { pubkey, account } of raw) {
   const vault = pda(Buffer.from("rvault"), pubkey.toBuffer());
   try {
     if (!r.settled && !r.void) {
-      await patiently(() => program.methods.voidRound()
-        .accountsPartial({ game: r.game, round: pubkey }).rpc(), "void");
-      voided++;
+      // void_round takes the Game account, so a book outliving its game cannot
+      // be voided at all. That is not fatal here: close_round already accepts a
+      // book nobody bet in, and a failed void must not skip the close, which is
+      // what stranded the last 15 of the backlog behind a counter that only
+      // said "failed".
+      try {
+        await patiently(() => program.methods.voidRound()
+          .accountsPartial({ game: r.game, round: pubkey }).rpc(), "void");
+        voided++;
+      } catch (e) {
+        if (r.totalPool.toString() !== "0") throw e;   // real money: leave it alone
+      }
     }
     // A book with stakes still in it is not ours to close: those are somebody's
     // to claim, and an empty vault is the conservation guard.
