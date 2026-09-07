@@ -171,12 +171,22 @@ provider.sendAndConfirm = async (tx, signers, opts) => {
     return await _send(tx, signers, opts);
   } catch (e) {
     const m = String(e?.message ?? e);
-    if (!/was not confirmed|Timed out awaiting|block height exceeded/i.test(m)) throw e;
-    const sig = m.match(/signature ([1-9A-HJ-NP-Za-km-z]{80,90})/)?.[1] ?? e?.signature;
+    const slow = /was not confirmed|Timed out awaiting/i.test(m);
+    const expired = /block height exceeded/i.test(m);
+    if (!slow && !expired) throw e;
+    // Case-insensitive on purpose. The two messages disagree: one says
+    // "...Check signature 5JS..." and the other "Signature 5JS... has
+    // expired", and matching only the lowercase spelling meant the expired
+    // case never extracted a signature and threw regardless of what the chain
+    // said. That was most of them.
+    const sig = m.match(/signature ([1-9A-HJ-NP-Za-km-z]{80,90})/i)?.[1] ?? e?.signature;
     if (!sig) throw e;
-    // Give it the time the client would not. A landed transaction is visible
-    // within a few slots; one that never landed stays null and rethrows.
-    for (let i = 0; i < 10; i++) {
+    // A slow confirmation is worth waiting out. An expired blockhash usually
+    // means the transaction never made it in, so it gets a short look rather
+    // than half a minute per agent: nine agents each burning 30 seconds would
+    // cost more game time than the failure does.
+    const tries = slow ? 10 : 3;
+    for (let i = 0; i < tries; i++) {
       await new Promise((r) => setTimeout(r, 3000));
       const st = (await connection.getSignatureStatuses([sig])).value?.[0];
       if (!st) continue;
