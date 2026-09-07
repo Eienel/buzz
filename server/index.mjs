@@ -29,7 +29,7 @@ import { nameFor, houseWallets } from "./names.mjs";
 import { verifyPayment } from "./x402.mjs";
 import { loadRelayer, startDrain } from "./relayer.mjs";
 import { DATA_DIR } from "./keypair.mjs";
-import { makeConnection, surviveRateLimits, rpcStats, rpcTotal, rpcComputeUnits } from "./rpc.mjs";
+import { makeConnection, surviveRateLimits, rpcStats, rpcTotal, rpcComputeUnits, rpcHealth } from "./rpc.mjs";
 
 const { keccak_256 } = jsSha3;
 
@@ -2523,6 +2523,10 @@ createServer(async (req,res)=>{
         newestEndedAt: history.reduce((m, h) => Math.max(m, h.endedAt ?? 0), 0) || null,
       },
       rpcHost: RPC_HOST,
+      // Whether we are actually talking to that host or have been benched onto
+      // the public fallback. The counts above say how much we ask for; this
+      // says whether the endpoint we pay for is still answering.
+      rpcFallback: rpcHealth(),
       // false means the program is not on this chain, so an empty board is a
       // misconfiguration rather than a quiet night. null means not checked yet.
       programOnThisChain: programPresent,

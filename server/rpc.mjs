@@ -45,6 +45,26 @@ const CU = { getAccountInfo: 10, getBalance: 10, getMultipleAccountsInfo: 20,
 export const rpcComputeUnits = () =>
   [...rpcCalls.entries()].reduce((n, [m, c]) => n + c * (CU[m] ?? 20), 0);
 
+/**
+ * Whether the primary RPC is currently benched, and how often it has been.
+ *
+ * The fallback below only announced itself in the log, which means "is our
+ * paid endpoint throttling us" could only be answered by someone with log
+ * access. That is the same failure /api/version already fixed for env vars:
+ * a condition that changes behaviour should be visible from outside rather
+ * than deduced from the absence of it. Alchemy rate-limiting us and the public
+ * endpoint being slow look identical from the arena, and they want different
+ * fixes.
+ */
+const fallbackState = new Map();     // label -> { until, hits, url }
+export const rpcHealth = () =>
+  Object.fromEntries([...fallbackState.entries()].map(([label, s]) => [label, {
+    onFallback: Date.now() < s.until,
+    fallbackUrl: s.url,
+    secondsLeft: Math.max(0, Math.round((s.until - Date.now()) / 1000)),
+    timesBenched: s.hits,
+  }]));
+
 export function makeConnection(rpc, opts = {}) {
   const fallbackUrl = opts.fallback ?? process.env.RPC_FALLBACK ?? "https://api.devnet.solana.com";
   const cooldown = Number(opts.cooldownMs ?? process.env.RPC_COOLDOWN_MS ?? 10 * 60_000);
@@ -55,6 +75,11 @@ export function makeConnection(rpc, opts = {}) {
   const fallback = fallbackUrl === rpc ? null : new Connection(fallbackUrl, commitment);
   let benchedUntil = 0;
   const benched = () => Date.now() < benchedUntil;
+
+  // Registered up front, so an empty report means "no fallback configured"
+  // rather than "configured and never needed". Those are different facts and
+  // nothing after the event can tell them apart.
+  fallbackState.set(label, { until: 0, hits: 0, url: fallback ? fallbackUrl : null });
 
   if (!fallback) return primary;
 
@@ -74,6 +99,8 @@ export function makeConnection(rpc, opts = {}) {
           if (!benched())
             console.log(`[${label}] primary rate-limited, using ${fallbackUrl} for ${Math.round(cooldown / 1000)}s`);
           benchedUntil = Date.now() + cooldown;
+          const st = fallbackState.get(label) ?? { hits: 0, url: fallbackUrl };
+          fallbackState.set(label, { ...st, until: benchedUntil, hits: st.hits + 1 });
           // Answer the call rather than making the caller pay for the
           // discovery. Without this the first read after a quota runs out
           // still throws, which is exactly what killed the swarm.
