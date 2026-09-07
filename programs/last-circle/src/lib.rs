@@ -1456,11 +1456,36 @@ pub mod last_circle {
     /// for good. A book that can eat your money when our server has a bad
     /// minute is not a book anyone should use.
     pub fn void_round(ctx: Context<VoidRound>) -> Result<()> {
-        let g = &ctx.accounts.game;
+        let game_ai = ctx.accounts.game.to_account_info();
+        // The game must be THIS book's game. The round PDA is seeded from it,
+        // so the pairing is already fixed at open time and this only refuses a
+        // caller who substitutes some other game to satisfy the rule below.
+        require_keys_eq!(game_ai.key(), ctx.accounts.round.game, GameError::BadParam);
+
+        // A book can outlive its game, because rent recovery closes finished
+        // games and nothing made it wait for the books hanging off them.
+        //
+        // This used to take Account<Game>, so once that happened void_round
+        // could not be called at all: not voidable, therefore never settled or
+        // void, therefore claim_round_bet refused forever and any stake still
+        // in the vault was locked for good. Found with 5 BUZZ of test money
+        // stuck in exactly that state.
+        //
+        // A closed account is the strongest possible evidence the game is over,
+        // so it satisfies the same condition a finished game would.
+        let done = if game_ai.data_is_empty() {
+            true
+        } else {
+            // Borrowed and dropped inside this block: Account::try_from holds a
+            // reference to the AccountInfo, and the AccountInfo is a temporary.
+            let data = game_ai.try_borrow_data()?;
+            let g = Game::try_deserialize(&mut &data[..])?;
+            g.instance > ctx.accounts.round.instance || g.status != GameStatus::Running
+        };
+        require!(done, GameError::WrongPhase);
+
         let r = &mut ctx.accounts.round;
         require!(!r.settled && !r.void, GameError::AlreadyClaimed);
-        require!(g.instance > r.instance || g.status != GameStatus::Running,
-                 GameError::WrongPhase);
         r.void = true;
         Ok(())
     }
@@ -3334,9 +3359,13 @@ pub struct SettleRound<'info> {
 
 #[derive(Accounts)]
 pub struct VoidRound<'info> {
-    #[account(seeds = [b"game", game.game_id.to_le_bytes().as_ref()], bump = game.bump)]
-    pub game: Account<'info, Game>,
-    #[account(mut, seeds = [b"round", game.key().as_ref(), round.instance.to_le_bytes().as_ref()],
+    /// CHECK: may be closed, which is the case this instruction exists to
+    /// handle, so it cannot be an Account<Game>: Anchor deserializes before
+    /// constraints run and a closed account has nothing to deserialize. The
+    /// handler checks the key against round.game and reads it only when it
+    /// still holds data.
+    pub game: UncheckedAccount<'info>,
+    #[account(mut, seeds = [b"round", round.game.as_ref(), round.instance.to_le_bytes().as_ref()],
               bump = round.bump)]
     pub round: Account<'info, RoundMarket>,
 }

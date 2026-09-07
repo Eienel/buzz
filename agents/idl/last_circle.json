@@ -5176,24 +5176,12 @@
       "accounts": [
         {
           "name": "game",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  103,
-                  97,
-                  109,
-                  101
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "game.game_id",
-                "account": "Game"
-              }
-            ]
-          }
+          "docs": [
+            "handle, so it cannot be an Account<Game>: Anchor deserializes before",
+            "constraints run and a closed account has nothing to deserialize. The",
+            "handler checks the key against round.game and reads it only when it",
+            "still holds data."
+          ]
         },
         {
           "name": "round",
@@ -5212,7 +5200,8 @@
               },
               {
                 "kind": "account",
-                "path": "game"
+                "path": "round.game",
+                "account": "RoundMarket"
               },
               {
                 "kind": "account",
