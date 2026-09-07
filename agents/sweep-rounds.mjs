@@ -23,6 +23,28 @@ const program = new Program(JSON.parse(fs.readFileSync("./agents/idl/last_circle
 const PID = program.programId;
 const pda = (...s) => PublicKey.findProgramAddressSync(s, PID)[0];
 
+/**
+ * Retry a call through a rate limit.
+ *
+ * The public devnet endpoint answers 429 under a sweep this size, and the
+ * first full run treated that as fatal: it closed 900 accounts, hit a 429 on
+ * the websocket, and threw with 1300 still open. A sweep is by nature a long
+ * sequence of small identical calls, so the rate limit is the expected
+ * condition, not the exceptional one.
+ */
+async function patiently(fn, label) {
+  for (let attempt = 0; ; attempt++) {
+    try { return await fn(); }
+    catch (e) {
+      const m = String(e.message ?? e);
+      if (!/429|Too Many Requests|rate limit|blockhash not found/i.test(m) || attempt >= 6) throw e;
+      const wait = Math.min(1000 * 2 ** attempt, 20_000);
+      if (attempt >= 3) console.log(`  ${label}: rate limited, waiting ${wait}ms`);
+      await new Promise((r) => setTimeout(r, wait));
+    }
+  }
+}
+
 const disc = program.coder.accounts.memcmp("roundMarket").bytes;
 const raw = await c.getProgramAccounts(PID, { filters: [{ memcmp: { offset: 0, bytes: disc } }] });
 console.log(`${raw.length} round books on chain`);
@@ -37,25 +59,29 @@ for (const { pubkey, account } of raw) {
   const vault = pda(Buffer.from("rvault"), pubkey.toBuffer());
   try {
     if (!r.settled && !r.void) {
-      await program.methods.voidRound()
-        .accountsPartial({ game: r.game, round: pubkey }).rpc();
+      await patiently(() => program.methods.voidRound()
+        .accountsPartial({ game: r.game, round: pubkey }).rpc(), "void");
       voided++;
     }
     // A book with stakes still in it is not ours to close: those are somebody's
     // to claim, and an empty vault is the conservation guard.
-    const bal = await c.getTokenAccountBalance(vault).catch(() => null);
+    const bal = await patiently(() => c.getTokenAccountBalance(vault), "balance").catch(() => null);
     if (bal && BigInt(bal.value.amount) > 0n) { skipped++; continue; }
-    await program.methods.closeRound().accountsPartial({
+    const owner = (await patiently(() => c.getAccountInfo(vault), "vault")).owner;
+    await patiently(() => program.methods.closeRound().accountsPartial({
       round: pubkey, roundVault: vault, cranker: kp.publicKey,
-      tokenProgram: (await c.getAccountInfo(vault)).owner }).rpc();
+      tokenProgram: owner }).rpc(), "close");
     closed++;
     if (closed % 25 === 0)
-      console.log(`  ${closed} closed, ${((await c.getBalance(kp.publicKey)) - before)/1e9} SOL back`);
+      console.log(`  ${closed} closed, ${((await patiently(() => c.getBalance(kp.publicKey), "bal")) - before)/1e9} SOL back`);
+    // Paced rather than as fast as the RPC will take it. A sweep has nowhere
+    // to be, and going flat out is what earns the 429 in the first place.
+    await new Promise((r) => setTimeout(r, Number(process.env.PACE_MS ?? 120)));
   } catch (e) {
     failed++;
     if (failed <= 3) console.log("  fail:", String(e.message ?? e).split("\n")[0].slice(0, 110));
   }
 }
-const after = await c.getBalance(kp.publicKey);
+const after = await patiently(() => c.getBalance(kp.publicKey), "final");
 console.log(`\nclosed ${closed}  voided ${voided}  skipped ${skipped}  failed ${failed}`);
 console.log(`recovered ${(after - before) / 1e9} SOL  (payer now ${after / 1e9})`);

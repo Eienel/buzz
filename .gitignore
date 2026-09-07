@@ -24,6 +24,7 @@ server/agents.json
 server/grades.json
 server/faucet.json
 server/swarm.json
+server/bets.json
 
 # scratch scripts used to measure things against a live chain
 *.tmp.mjs
