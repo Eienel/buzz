@@ -37,7 +37,12 @@ export function makeRounds({ program, payer, connection }) {
   // Books this process has opened or found, so a tick does not re-send an
   // instruction the chain has already accepted. The account itself is the real
   // guard: open_round is `init`, so a second one is rejected.
-  const open = new Map();              // "<gameId>:<instance>" -> true
+  // Everything here is keyed by the round account's own address, which is the
+  // book's identity. Two key spaces was a bug: reconcile keyed by game pubkey
+  // and the tick by game id, so reconcile re-adopted books already being
+  // tracked, closed them under the other key, and the tick then asked to void
+  // a closed account on every pass forever.
+  const open = new Map();              // round pubkey -> { gameId, instance }
   const settled = new Set();
   // Books that are decided and whose rent is therefore owed back. A book is
   // only removed once it is actually closed, or once closing it has failed
@@ -58,13 +63,16 @@ export function makeRounds({ program, payer, connection }) {
 
   /** Open the book for the round this game is in, during its commit phase. */
   async function openFor(g) {
-    const key = `${g.gameId}:${g.instance}`;
-    if (open.has(key)) return;
     const game = gamePda(g.gameId);
     const round = roundPda(game, g.instance);
+    const key = round.toBase58();
+    if (open.has(key)) return;
     // Already there is the common case after a restart, and finding out costs
     // one account read against one failed transaction.
-    if (await connection.getAccountInfo(round)) { open.set(key, true); return; }
+    if (await connection.getAccountInfo(round)) {
+      open.set(key, { gameId: String(g.gameId), instance: g.instance });
+      return;
+    }
     try {
       await program.methods.openRound().accountsPartial({
         game, round, roundVault: rvaultPda(round),
@@ -72,11 +80,14 @@ export function makeRounds({ program, payer, connection }) {
         tokenProgram: await tokenProgramFor(g.stakeMint),
         systemProgram: SystemProgram.programId,
       }).rpc();
-      open.set(key, true);
+      open.set(key, { gameId: String(g.gameId), instance: g.instance });
       log(`opened ${g.gameId} round ${g.instance}`);
     } catch (e) {
       const m = String(e.message ?? e);
-      if (/already in use|custom program error: 0x0/.test(m)) { open.set(key, true); return; }
+      if (/already in use|custom program error: 0x0/.test(m)) {
+        open.set(key, { gameId: String(g.gameId), instance: g.instance });
+        return;
+      }
       // The game moved on between the snapshot and the send. Next round.
       if (!/WrongPhase|BadParam/.test(m)) log(`open ${key}: ${m.slice(0, 80)}`);
     }
@@ -90,13 +101,14 @@ export function makeRounds({ program, payer, connection }) {
    * disaster, it is a refund: see voidFor.
    */
   async function settleFor(g) {
-    const key = `${g.gameId}:${g.instance}`;
-    if (settled.has(key) || !open.has(key)) return;
     const game = gamePda(g.gameId);
+    const round = roundPda(game, g.instance);
+    const key = round.toBase58();
+    if (settled.has(key) || !open.has(key)) return;
     try {
       await program.methods.settleRound()
         .accountsPartial({ game, round: roundPda(game, g.instance) }).rpc();
-      closable.set(key, { round: roundPda(game, g.instance), tries: 0 });
+      closable.set(key, { round, tries: 0 });
       settled.add(key);
       log(`settled ${g.gameId} round ${g.instance}, comb ${g.doomed} died`);
     } catch (e) {
@@ -114,17 +126,21 @@ export function makeRounds({ program, payer, connection }) {
    * not a book anyone should use, and this server has had several bad minutes.
    */
   async function voidFor(gameId, instance) {
-    const key = `${gameId}:${instance}`;
-    if (settled.has(key)) return;
     const game = gamePda(gameId);
+    const round = roundPda(game, instance);
+    const key = round.toBase58();
+    if (settled.has(key)) return;
     try {
       await program.methods.voidRound()
-        .accountsPartial({ game, round: roundPda(game, instance) }).rpc();
+        .accountsPartial({ game, round }).rpc();
       settled.add(key);
-      closable.set(key, { round: roundPda(game, instance), tries: 0 });
+      closable.set(key, { round, tries: 0 });
       log(`voided ${key}: nobody settled it in time, every stake refunded`);
     } catch (e) {
       const m = String(e.message ?? e);
+      // Gone already means somebody closed it, which is the permissionless
+      // design working: drop it rather than asking about it forever.
+      if (/AccountNotInitialized/.test(m)) { settled.add(key); open.delete(key); return; }
       if (/AlreadyClaimed|WrongPhase/.test(m)) settled.add(key);
       else log(`void ${key}: ${m.slice(0, 80)}`);
     }
@@ -213,7 +229,7 @@ export function makeRounds({ program, payer, connection }) {
     for (const { pubkey, account } of raw) {
       let r;
       try { r = program.coder.accounts.decode("roundMarket", account.data); } catch { continue; }
-      const key = `${r.game.toBase58()}:${r.instance}`;
+      const key = pubkey.toBase58();
       if (closable.has(key) || adoptedKeys.has(key)) continue;
       adoptedKeys.add(key);
       adopted++;
@@ -271,12 +287,11 @@ export function makeRounds({ program, payer, connection }) {
         // Anything opened for a round the board has moved past, and never
         // settled, is refunded rather than left to rot.
         const at = new Map(live.map((g) => [String(g.gameId), g.instance]));
-        for (const key of open.keys()) {
+        for (const [key, where] of open) {
           if (settled.has(key)) continue;
-          const [gameId, instStr] = key.split(":");
-          const inst = Number(instStr);
-          const now = at.get(gameId);
-          if (now === undefined || now > inst) await voidFor(gameId, inst);
+          const now = at.get(where.gameId);
+          if (now === undefined || now > where.instance)
+            await voidFor(where.gameId, where.instance);
         }
         // Hand back the rent on everything already decided. A few per tick:
         // the tick runs every 2.5 seconds and there is no hurry, and closing a
