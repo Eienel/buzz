@@ -65,6 +65,46 @@ export const rpcHealth = () =>
     timesBenched: s.hits,
   }]));
 
+/**
+ * What actually happened to a transaction whose confirmation gave up.
+ *
+ * Devnet routinely takes longer to confirm than clients wait, and the two
+ * errors it raises disagree on wording and on capitalisation:
+ *
+ *   Transaction was not confirmed in 30.00 seconds. ... Check signature 5qj...
+ *   Signature 5JS... has expired: block height exceeded.
+ *
+ * Both mean "unknown", not "failed", and the chain has the answer. Returns the
+ * signature if it landed cleanly, null if it never landed or the error was not
+ * one of these, and rethrows the original error if it landed and failed.
+ *
+ * Third call site for this logic, which is why it lives here: the swarm's
+ * transactions, and the fuel top-up, which reported "top-up failed" for a
+ * transfer that had gone through.
+ */
+export async function landedAnyway(connection, e, opts = {}) {
+  const m = String(e?.message ?? e);
+  const slow = /was not confirmed|Timed out awaiting/i.test(m);
+  const expired = /block height exceeded/i.test(m);
+  if (!slow && !expired) return null;
+  // Case-insensitive: one message says "signature", the other "Signature",
+  // and matching only one spelling meant the expired case, which is most of
+  // them, never got checked at all.
+  const sig = m.match(/signature ([1-9A-HJ-NP-Za-km-z]{80,90})/i)?.[1] ?? e?.signature;
+  if (!sig) return null;
+  // A slow confirmation is worth waiting out. An expired blockhash usually
+  // means it never made it in, so it gets a shorter look.
+  const tries = opts.tries ?? (slow ? 10 : 3);
+  for (let i = 0; i < tries; i++) {
+    await new Promise((r) => setTimeout(r, opts.everyMs ?? 3000));
+    const st = (await connection.getSignatureStatuses([sig])).value?.[0];
+    if (!st) continue;
+    if (st.err) throw e;                        // it landed and it failed
+    return sig;
+  }
+  return null;
+}
+
 export function makeConnection(rpc, opts = {}) {
   const fallbackUrl = opts.fallback ?? process.env.RPC_FALLBACK ?? "https://api.devnet.solana.com";
   const cooldown = Number(opts.cooldownMs ?? process.env.RPC_COOLDOWN_MS ?? 10 * 60_000);

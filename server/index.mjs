@@ -29,7 +29,8 @@ import { nameFor, houseWallets } from "./names.mjs";
 import { verifyPayment } from "./x402.mjs";
 import { loadRelayer, startDrain } from "./relayer.mjs";
 import { DATA_DIR } from "./keypair.mjs";
-import { makeConnection, surviveRateLimits, rpcStats, rpcTotal, rpcComputeUnits, rpcHealth } from "./rpc.mjs";
+import { makeConnection, surviveRateLimits, rpcStats, rpcTotal, rpcComputeUnits, rpcHealth,
+         landedAnyway } from "./rpc.mjs";
 
 const { keccak_256 } = jsSha3;
 
@@ -840,6 +841,16 @@ async function topUp(){
     fuel.note = null;
     console.log(`[fuel] moved ${move.toFixed(3)} SOL ${donor.name} -> ${drained.name} (${sig.slice(0,16)}…)`);
   } catch(e){
+    // "Not confirmed" is not "failed". This reported a top-up as failed for a
+    // transfer that had gone through, which is the worst kind of wrong: the
+    // money moved and the operator was told it had not.
+    const sig = await landedAnyway(connection, e).catch(() => null);
+    if(sig){
+      fuel.lastTopUp = { at: Date.now(), sol: move, from: donor.name, to: drained.name, sig };
+      fuel.note = null;
+      console.log(`[fuel] moved ${move.toFixed(3)} SOL ${donor.name} -> ${drained.name} (${sig.slice(0,16)}…, confirmed late)`);
+      return;
+    }
     fuel.note = `top-up failed: ${String(e.message ?? e).slice(0, 80)}`;
     console.log(`[fuel] ${fuel.note}`);
   }

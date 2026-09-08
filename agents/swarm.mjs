@@ -11,7 +11,7 @@
 import anchorPkg from "@coral-xyz/anchor";
 import { Connection, Keypair, PublicKey, SystemProgram, LAMPORTS_PER_SOL,
          SYSVAR_SLOT_HASHES_PUBKEY, Transaction, sendAndConfirmTransaction } from "@solana/web3.js";
-import { makeConnection, surviveRateLimits, explainTxError,
+import { makeConnection, surviveRateLimits, explainTxError, landedAnyway,
          rpcStats, rpcTotal, rpcComputeUnits } from "../server/rpc.mjs";
 import { getOrCreateAssociatedTokenAccount, mintTo, getAssociatedTokenAddressSync } from "@solana/spl-token";
 import jsSha3 from "js-sha3";
@@ -170,31 +170,10 @@ provider.sendAndConfirm = async (tx, signers, opts) => {
   try {
     return await _send(tx, signers, opts);
   } catch (e) {
-    const m = String(e?.message ?? e);
-    const slow = /was not confirmed|Timed out awaiting/i.test(m);
-    const expired = /block height exceeded/i.test(m);
-    if (!slow && !expired) throw e;
-    // Case-insensitive on purpose. The two messages disagree: one says
-    // "...Check signature 5JS..." and the other "Signature 5JS... has
-    // expired", and matching only the lowercase spelling meant the expired
-    // case never extracted a signature and threw regardless of what the chain
-    // said. That was most of them.
-    const sig = m.match(/signature ([1-9A-HJ-NP-Za-km-z]{80,90})/i)?.[1] ?? e?.signature;
+    const sig = await landedAnyway(connection, e);
     if (!sig) throw e;
-    // A slow confirmation is worth waiting out. An expired blockhash usually
-    // means the transaction never made it in, so it gets a short look rather
-    // than half a minute per agent: nine agents each burning 30 seconds would
-    // cost more game time than the failure does.
-    const tries = slow ? 10 : 3;
-    for (let i = 0; i < tries; i++) {
-      await new Promise((r) => setTimeout(r, 3000));
-      const st = (await connection.getSignatureStatuses([sig])).value?.[0];
-      if (!st) continue;
-      if (st.err) throw e;                       // it landed and it failed
-      log(`  tx confirmed late (${sig.slice(0, 12)}…), carrying on`);
-      return sig;
-    }
-    throw e;
+    log(`  tx confirmed late (${sig.slice(0, 12)}…), carrying on`);
+    return sig;
   }
 };
 const idl = JSON.parse(readFileSync(new URL("./idl/last_circle.json", import.meta.url), "utf8"));
