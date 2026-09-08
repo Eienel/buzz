@@ -12,7 +12,8 @@
 
 import anchorPkg from "@coral-xyz/anchor";
 import { PublicKey, SystemProgram } from "@solana/web3.js";
-import { TOKEN_2022_PROGRAM_ID } from "@solana/spl-token";
+import { TOKEN_2022_PROGRAM_ID, getAssociatedTokenAddressSync,
+         createAssociatedTokenAccountIdempotentInstruction } from "@solana/spl-token";
 
 const { BN } = anchorPkg;
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), "[round]", ...a);
@@ -33,6 +34,9 @@ export function makeRounds({ program, payer, connection }) {
   const roundPda = (game, instance) =>
     pda(Buffer.from("round"), game.toBuffer(), Buffer.from(new Uint16Array([instance]).buffer));
   const rvaultPda = (r) => pda(Buffer.from("rvault"), r.toBuffer());
+  // The program takes this as proof we are allowed to act for a bettor who
+  // holds no key, the same way the game book's claims do.
+  const relayerPda = pda(Buffer.from("relayer"), payer.publicKey.toBuffer());
 
   // Books this process has opened or found, so a tick does not re-send an
   // instruction the chain has already accepted. The account itself is the real
@@ -248,6 +252,60 @@ export function makeRounds({ program, payer, connection }) {
     if (adopted) log(`adopted ${adopted} book${adopted === 1 ? "" : "s"} left by a previous run`);
   }
 
+  /**
+   * Pay the winners of decided rounds without being asked.
+   *
+   * claim_round_bet existed and nothing called it: no route, no sweep, no
+   * control on the page. A winning round bet could therefore never be
+   * collected, and because close_round refuses while the vault holds tokens,
+   * one unclaimed win also pinned its book open forever. The game book already
+   * learned this: eleven of its first thirteen winning bets went unclaimed,
+   * because people do not come back to press a button for money they are
+   * already owed.
+   *
+   * The claim pays to the bettor's own token account and nowhere else, which
+   * the program enforces, so doing it on their behalf can only put money where
+   * it was already going.
+   *
+   * Works from the round accounts alone. ClaimRoundBet seeds from round.game
+   * and carries its own stake_mint, so a book whose game has been reaped still
+   * pays out, which is exactly when a bettor would otherwise be stranded.
+   */
+  async function sweepClaims() {
+    const bets = await connection.getProgramAccounts(PID, {
+      filters: [{ memcmp: { offset: 0, bytes: program.coder.accounts.memcmp("roundBet").bytes } }],
+    });
+    let paid = 0;
+    for (const { pubkey, account } of bets) {
+      let bet;
+      try { bet = program.coder.accounts.decode("roundBet", account.data); } catch { continue; }
+      if (bet.claimed) continue;
+      const roundAcc = await connection.getAccountInfo(bet.round).catch(() => null);
+      if (!roundAcc) continue;
+      let r;
+      try { r = program.coder.accounts.decode("roundMarket", roundAcc.data); } catch { continue; }
+      if (!r.settled && !r.void) continue;                  // not decided yet
+      // A losing bet has nothing to collect. Claiming it would still mark it
+      // claimed, which is what lets its book close, so it is worth doing.
+      try {
+        const tokenProgram = await tokenProgramFor(r.stakeMint);
+        const bettorToken = getAssociatedTokenAddressSync(r.stakeMint, bet.bettor, true, tokenProgram);
+        await program.methods.claimRoundBet().accountsPartial({
+          round: bet.round, roundVault: rvaultPda(bet.round), roundBet: pubkey,
+          bettorToken, bettor: bet.bettor, payer: payer.publicKey, relayer: relayerPda,
+          stakeMint: r.stakeMint, tokenProgram,
+        }).preInstructions([createAssociatedTokenAccountIdempotentInstruction(
+          payer.publicKey, bettorToken, bet.bettor, r.stakeMint, tokenProgram)]).rpc();
+        paid++;
+      } catch (e) {
+        const m = String(e.message ?? e);
+        if (!/AlreadyClaimed/.test(m)) log(`claim ${pubkey.toBase58().slice(0, 8)}: ${m.slice(0, 70)}`);
+      }
+    }
+    if (paid) log(`settled ${paid} round bet${paid === 1 ? "" : "s"} for their bettors`);
+    return paid;
+  }
+
   return {
     /** Read one round's book for the page. Null when there is none. */
     async read(gameId, instance) {
@@ -271,6 +329,7 @@ export function makeRounds({ program, payer, connection }) {
         stakeMint: r.stakeMint.toBase58(),
       };
     },
+    sweepClaims,
     roundPdaFor: (gameId, instance) => roundPda(gamePda(gameId), instance).toBase58(),
 
     async once(snapshot) {

@@ -1383,6 +1383,12 @@ if (relayer && process.env.RUN_MARKET !== "0") {
   const payout = async () => {
     if (paying) return;
     paying = true;
+    // Round bets get the same treatment, and for the same reason: a winner
+    // who has to come back and press a button is a winner who does not get
+    // paid. It also unpins the book, since close_round refuses while the
+    // vault still holds a stake.
+    try { if(rounds) await rounds.sweepClaims(); }
+    catch (e) { console.log("[round] payout sweep:", String(e.message ?? e).slice(0, 100)); }
     try { await book.sweepClaims(); }
     catch (e) { console.log("[book] payout sweep:", String(e.message ?? e).slice(0, 100)); }
     finally { paying = false; }
