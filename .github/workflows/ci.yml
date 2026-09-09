@@ -90,8 +90,14 @@ jobs:
 
       # The server and swarm suites. Cheap, no validator, and until now they ran
       # nowhere: six test files sat in the repo that CI never executed.
+      #
+      # Unquoted so the shell expands the glob and node is handed real paths.
+      # Quoted, node has to expand it itself, which it only learned to do in 21:
+      # on the runner's pinned 20 it read the pattern as a filename and failed
+      # with "Could not find tests/*.test.mjs", while passing on a newer local
+      # node. `--test tests/` is not the fix either, it picks up last-circle.ts.
       - name: Server tests
-        run: node --test "tests/*.test.mjs"
+        run: node --test tests/*.test.mjs
 
       - name: Anchor test (spins a local validator)
         run: anchor test --skip-build
