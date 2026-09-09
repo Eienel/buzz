@@ -299,6 +299,14 @@
   .bpanel{flex:0 0 186px;display:flex;flex-direction:column;align-items:stretch;
     gap:8px;padding-right:16px}
   .bpanel.shut{flex-basis:0;padding:0}
+  /* Said quietly. It is an explanation for an absence, not a second control,
+     and it must not pull the eye off the board it is standing next to. */
+  .bpanel.shutwhy{flex:0 0 150px;padding-right:16px;gap:4px;justify-content:center}
+  .bswhy{font-family:var(--mono);font-size:11px;color:var(--dimmer);line-height:1.45}
+  .bsalt{font-size:10.5px;color:var(--dim);opacity:.75;line-height:1.4}
+  @media(max-width:760px){
+    .bpanel.shutwhy{flex:0 0 auto;padding:0 14px 12px}
+  }
   .bigback{font:inherit;cursor:pointer;display:flex;flex-direction:column;gap:3px;
     padding:14px 16px;border-radius:14px;text-align:left;
     color:#231603;background:linear-gradient(180deg,#ffc23d,#ff9d0d);
@@ -931,9 +939,40 @@ function roundStrip(g){
   </div>`;
 }
 
+/**
+ * Why the Back control is not there.
+ *
+ * It used to leave an empty column, which reads as broken rather than closed.
+ * Somebody who knows this arena well looked at a game at round 4 and asked
+ * where the button had gone, so a visitor has no chance. Each of these is a
+ * different fact and they want different words: a book that has not opened
+ * yet is worth waiting for, and one that shut two rounds ago is not.
+ */
+function whyShut(g){
+  if(!MARKET_LIVE) return null;
+  if(g.status !== 1) return null;
+  if(g.book === false) return "book opening";
+  if((g.lockInstance != null) && (g.instance ?? 0) > g.lockInstance)
+    return `backing shut after round ${g.lockInstance}`;
+  if((g.aliveCircles ?? 0) < MIN_COMBS_TO_BACK) return "too few combs left to back";
+  if(!backableIn(g).length) return "nobody here to back";
+  return null;
+}
+
 function backPanel(g){
   const as = betsOpen(g) ? backableIn(g) : [];
-  if(!as.length) return `<div class="bpanel shut"></div>`;
+  if(!as.length){
+    const why = whyShut(g);
+    // The round book is the thing that is still open when this one is not, so
+    // it is worth pointing at rather than leaving a dead end.
+    const roundAlso = ROUND_BOOK && g.status === 1 && g.instance
+      && (g.combs ?? []).filter((c) => c.alive).length >= 2;
+    const alt = why && roundAlso
+      ? `<span class="bsalt">the round call below is still open</span>` : "";
+    return why
+      ? `<div class="bpanel shutwhy"><span class="bswhy">${esc(why)}</span>${alt}</div>`
+      : `<div class="bpanel shut"></div>`;
+  }
   const ends = (g.phaseEndsAt ?? 0)
     + Math.max(0, (g.lockInstance ?? 0) - (g.instance ?? 0)) * (g.instanceSeconds ?? 60);
   return `<div class="bpanel">
