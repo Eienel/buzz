@@ -156,6 +156,25 @@ function sanitise(raw, fog, self) {
  * every failure path returns null instead. The caller keeps the agent in the
  * game and holding its comb; it forfeits only the prediction for that round.
  */
+/**
+ * When the prepaid UsePod account is empty, and until when.
+ *
+ * A 402 insufficient_balance is not a per-agent condition and it is not fast:
+ * measured on the live arena, being told there is no money took 13.1s and
+ * 24.9s on consecutive calls. Every pod paid that out of its own commit window,
+ * every round, to learn the same thing the pod before it had just learned. Over
+ * one sampled window 53 of 60 calls were that, and the agents that spent it
+ * still had their full 60 call budget untouched.
+ *
+ * So the first 402 opens the breaker for the whole cohort and the rest drop
+ * straight to the heuristic with the window intact. It closes on its own,
+ * because the account is topped up out of band and nothing here would be told.
+ */
+const DRY_MS = Number(process.env.USEPOD_DRY_COOLDOWN_MS ?? 10 * 60 * 1000);
+let dryUntil = 0;
+/** ms timestamp the prepaid account is assumed empty until, or 0 if not. */
+export const inferenceDry = () => (dryUntil > Date.now() ? dryUntil : 0);
+
 export async function decide(fog, self, opts = {}) {
   // Reasoning switched off is a state worth publishing, not a silent return.
   // This was the one path that produced no record of any kind, which made an
@@ -163,6 +182,11 @@ export async function decide(fog, self, opts = {}) {
   // cost an evening telling the two apart.
   if (!TOKEN) {
     if (opts.onSkip) opts.onSkip("USEPOD_TOKEN is not set: reasoning is off", 0);
+    return null;
+  }
+  if (dryUntil > Date.now()) {
+    const mins = Math.ceil((dryUntil - Date.now()) / 60000);
+    if (opts.onSkip) opts.onSkip(`402 insufficient balance: prepaid account is empty, not retrying for ${mins}m`, 0);
     return null;
   }
   // Thinking is not free. An agent out of budget does not fall back to a rule,
@@ -231,7 +255,13 @@ export async function decide(fog, self, opts = {}) {
         response_format: { type: "json_object" },
       }),
     });
-    if (!r.ok) throw new Error(`${r.status} ${(await r.text()).slice(0, 120)}`);
+    if (!r.ok) {
+      const body = (await r.text()).slice(0, 120);
+      // The account, not this call. Trip the breaker before throwing so the
+      // rest of the cohort skips instead of queueing behind the same answer.
+      if (r.status === 402 || /insufficient[_ ]balance/i.test(body)) dryUntil = Date.now() + DRY_MS;
+      throw new Error(`${r.status} ${body}`);
+    }
     const j = await r.json();
     // What the call actually cost and who served it. UsePod discloses the
     // serving provider and the route on every response, and prices the call in

@@ -435,7 +435,10 @@ function step(label, body, cls) {
  */
 function reasonFor(raw) {
   const s = String(raw ?? "");
-  if (/insufficient[_ ]balance|402/i.test(s))      return "out of inference budget";
+  // Not the agent's budget: that is the line below, and an agent hitting a 402
+  // still has its full allowance. This is the prepaid account the arena calls
+  // through, and no agent can spend its way out of it.
+  if (/insufficient[_ ]balance|402/i.test(s))      return "the prepaid inference account is empty";
   if (/aborted|timeout|timed out/i.test(s))        return "missed the commit window";
   if (/save a call/i.test(s))                      return "chose to save a call";
   if (/rate limit|429/i.test(s))                   return "provider rate limited";
@@ -660,10 +663,11 @@ async function tick() {
       const top = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
       if (!top) return null;
       const [reason, n] = top;
-      return reason === "out of inference budget"
-        ? `The inference budget is empty, so the agents are playing without it: ` +
-          `they hold their comb and forfeit the prediction. ${n} of the last ` +
-          `${recent.length} calls were skipped for this.`
+      return reason === "the prepaid inference account is empty"
+        ? `The prepaid account the arena buys inference through is empty, so the ` +
+          `agents are playing without it: they hold their comb and forfeit the ` +
+          `prediction. This is not the agents' own budgets, which are untouched. ` +
+          `${n} of the last ${recent.length} calls were skipped for this.`
         : `Nothing answered in this window. ${n} of ${recent.length} calls: ${reason}.`;
     })();
     const note = $("emptyWhy");

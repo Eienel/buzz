@@ -139,10 +139,19 @@ export function makeMarket({ program, payer, connection }) {
   // bet on it: claim_bet needs `settled`, and `settled` needs every target
   // resolved. So the book remembers its own games until they are finished.
   const watching = new Map();   // gameId -> numCircles
-  // Games the house seed has been offered to. In memory on purpose: after a
-  // restart the seed is skipped rather than doubled, and a book with no seed is
-  // a smaller problem than a book seeded twice at different points in a game.
-  const seeded = new Set();
+  // Which targets on which game already carry the house seed. Per target, not
+  // per game: Bet is init_if_needed, so a second place_bet on the same
+  // (market, bettor, target) adds to the existing stake instead of failing, and
+  // a house that leans is the one thing an equal seed exists to avoid.
+  //
+  // In memory on purpose: after a restart the seed is skipped rather than
+  // doubled, and a book with no seed is a smaller problem than a book seeded
+  // twice at different points in a game.
+  const seeded = new Map();     // gameId -> Set<target base58>
+  // The instance each book stops taking bets at, recorded only for books this
+  // run opened. A game we adopted after a restart has no entry and gets no
+  // seed, which is the skip the comment above describes.
+  const seedLock = new Map();   // gameId -> lock instance
   let busy = false;
 
   const tokenProgramFor = async (mint) => {
@@ -168,6 +177,7 @@ export function makeMarket({ program, payer, connection }) {
         systemProgram: SystemProgram.programId,
       }).rpc();
       watching.set(g.gameId, g.numCircles ?? 6);
+      seedLock.set(g.gameId, lock);
       log(`opened on ${g.gameId}, bets close after instance ${lock}`);
     } catch (e) {
       const m = String(e.message ?? e);
@@ -212,31 +222,42 @@ export function makeMarket({ program, payer, connection }) {
   /**
    * Put the house seed on every backable agent in one game.
    *
-   * Runs once per game, after its book exists. Equal size on every target: see
-   * HOUSE above for why the house must not lean. A failure here is logged and
-   * dropped rather than retried, because a seed that arrives late is a seed
-   * placed against a board a bettor has already read, which is the one thing
-   * the lock_instance rule exists to prevent.
-   *
-   * Backable agents are named pod-*, the same filter the arena uses. The
+   * Equal size on every target: see HOUSE above for why the house must not
+   * lean. Backable agents are named pod-*, the same filter the arena uses. The
    * program enforces the real rule with a marker account per agent, so a wrong
    * guess here costs a failed transaction, not a bad bet.
+   *
+   * Retried across ticks until the book locks, rather than attempted once.
+   * Once meant one bad tick retired the game for good: game 1788967835679 went
+   * its whole life with targets 0 and totalPool 0 while the game before it
+   * seeded 15 BUZZ across 3, because the game was marked done before anything
+   * was placed. A first tick that lands before the roster is readable, or a
+   * transient RPC failure, both looked identical to success.
+   *
+   * A retry cannot produce a late seed, which is the thing the lock_instance
+   * rule exists to prevent: past the lock the program rejects place_bet
+   * outright, and this stops asking one instance sooner so it does not spend a
+   * transaction finding that out.
    */
   async function seedFor(g) {
-    if (!HOUSE || HOUSE_SEED <= 0 || seeded.has(g.gameId)) return;
-    seeded.add(g.gameId);
-    const targets = (g.agents ?? [])
-      .filter((a) => (a.name ?? "").startsWith("pod-"))
-      .filter((a) => (g.combs ?? []).find((c) => c.id === a.comb)?.alive !== false)
-      .map((a) => a.owner).filter(Boolean);
+    if (!HOUSE || HOUSE_SEED <= 0) return;
+    const done = seeded.get(g.gameId) ?? new Set();
+    const targets = seedTargets(g, seedLock.get(g.gameId), done);
+    if (targets === null) { forgetSeed(g.gameId); return; }
     if (!targets.length) return;
+    seeded.set(g.gameId, done);
     let placed = 0;
-    for (const t of new Set(targets)) {
-      try { await placeAs(HOUSE, g.gameId, t, HOUSE_SEED); placed++; }
+    for (const t of targets) {
+      // Recorded only on success, so a target that failed is tried again next
+      // tick and one that landed is never topped up.
+      try { await placeAs(HOUSE, g.gameId, t, HOUSE_SEED); done.add(t); placed++; }
       catch (e) { log(`seed ${g.gameId} -> ${String(t).slice(0, 8)}: ${String(e.message ?? e).slice(0, 70)}`); }
     }
-    if (placed) log(`seeded ${g.gameId}: ${HOUSE_SEED} on each of ${placed}`);
+    if (placed) log(`seeded ${g.gameId}: ${HOUSE_SEED} on each of ${placed}, ${done.size} in total`);
   }
+
+  /** Drop a game's seed bookkeeping: its book is locked, settled or gone. */
+  const forgetSeed = (gameId) => { seeded.delete(gameId); seedLock.delete(gameId); };
 
   /** Every TargetPool on this book that still needs deciding. */
   async function unresolvedPools(market) {
@@ -272,18 +293,18 @@ export function makeMarket({ program, payer, connection }) {
     const game = gamePda(gameId);
     const market = marketPda(game);
     const acc = await connection.getAccountInfo(market);
-    if (!acc) { watching.delete(gameId); return; }      // no book on this game
+    if (!acc) { watching.delete(gameId); forgetSeed(gameId); return; }      // no book on this game
     let m;
     try { m = program.coder.accounts.decode("market", acc.data); }
-    catch { watching.delete(gameId); return; }
-    if (m.settled) { watching.delete(gameId); return; }
+    catch { watching.delete(gameId); forgetSeed(gameId); return; }
+    if (m.settled) { watching.delete(gameId); forgetSeed(gameId); return; }
     // Nobody bet. There is nothing to decide and no payout to unblock, so the
     // book is finished even though `settled` stays false: settled means the
     // denominator is final, and with no targets there is no denominator.
-    if (m.targets === 0) { watching.delete(gameId); return; }
+    if (m.targets === 0) { watching.delete(gameId); forgetSeed(gameId); return; }
 
     const pools = await unresolvedPools(market);
-    if (!pools.length) { watching.delete(gameId); return; }
+    if (!pools.length) { watching.delete(gameId); forgetSeed(gameId); return; }
     const comb = await winningComb(game, numCircles);
     if (comb == null) return;                          // not decided yet, try again
 
@@ -694,4 +715,26 @@ export function makeMarket({ program, payer, connection }) {
       } finally { busy = false; }
     },
   };
+}
+
+/**
+ * Who still needs the house seed on this game, or null if it is too late.
+ *
+ * Pure and exported so the retry rule can be tested without a validator: it is
+ * the rule that broke, not the transaction. `null` means stop asking and drop
+ * the bookkeeping, `[]` means nothing to do on this tick but ask again on the
+ * next one, which is the distinction that game 1788967835679 needed and did not
+ * have.
+ *
+ * `lock` is the instance the book stops taking bets at, known only for books
+ * this run opened; undefined is a game adopted after a restart, which gets no
+ * seed rather than a second one.
+ */
+export function seedTargets(g, lock, done) {
+  if (lock === undefined) return null;
+  if ((g.instance ?? 0) >= lock) return null;
+  return [...new Set((g.agents ?? [])
+    .filter((a) => (a.name ?? "").startsWith("pod-"))
+    .filter((a) => (g.combs ?? []).find((c) => c.id === a.comb)?.alive !== false)
+    .map((a) => a.owner).filter(Boolean))].filter((t) => !done.has(t));
 }

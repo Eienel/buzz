@@ -88,5 +88,10 @@ jobs:
       - name: Install JS deps
         run: npm install
 
+      # The server and swarm suites. Cheap, no validator, and until now they ran
+      # nowhere: six test files sat in the repo that CI never executed.
+      - name: Server tests
+        run: node --test "tests/*.test.mjs"
+
       - name: Anchor test (spins a local validator)
         run: anchor test --skip-build
