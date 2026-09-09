@@ -74,3 +74,41 @@ test("an agent out of its own budget is a different skip", async () => {
   assert.match(skips[0], /budget/);
   assert.doesNotMatch(skips[0], /prepaid/);
 });
+
+test("the breaker survives the per-game respawn", async () => {
+  // The swarm is spawned per game, so an in-memory breaker buys one game's
+  // quiet and then pays the slow 402 again. Measured in production: 6.2s to
+  // 9.0s per new swarm while the pods behind it skipped at 0ms.
+  const { mkdtempSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const dir = mkdtempSync(join(tmpdir(), "buzz-dry-"));
+  process.env.DATA_DIR = dir;
+  try {
+    const first = stub(402, '{"error":{"type":"insufficient_balance"}}');
+    const a = await load("respawn-1");
+    await a.decide(fog, 0, { instanceSeconds: 60, onSkip: () => {} });
+    assert.equal(first(), 1);
+    assert.ok(a.inferenceDry() > 0);
+
+    // A fresh module is a fresh process, as far as module state goes.
+    const second = stub(402, '{"error":{"type":"insufficient_balance"}}');
+    const b = await load("respawn-2");
+    assert.ok(b.inferenceDry() > 0, "the new swarm starts already knowing");
+    await b.decide(fog, 0, { instanceSeconds: 60, onSkip: () => {} });
+    assert.equal(second(), 0, "and never makes the call");
+  } finally {
+    delete process.env.DATA_DIR;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("with no DATA_DIR it still works, in memory only", async () => {
+  delete process.env.DATA_DIR;
+  const calls = stub(402, '{"error":{"type":"insufficient_balance"}}');
+  const { decide, inferenceDry } = await load("nodatadir");
+  await decide(fog, 0, { instanceSeconds: 60, onSkip: () => {} });
+  assert.ok(inferenceDry() > 0);
+  await decide(fog, 0, { instanceSeconds: 60, onSkip: () => {} });
+  assert.equal(calls(), 1, "held within the process");
+});

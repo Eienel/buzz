@@ -15,6 +15,9 @@
 // before, and every failure inside falls back to a heuristic, because a model
 // that is slow, broke or wrong must never be able to stall a live game.
 
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+
 const BASE = (t) => `https://api.usepod.ai/proxy/${t}/v1/chat/completions`;
 const TOKEN = process.env.USEPOD_TOKEN ?? "";
 const MODEL = process.env.USEPOD_MODEL ?? "llama-4-maverick";
@@ -169,11 +172,37 @@ function sanitise(raw, fog, self) {
  * So the first 402 opens the breaker for the whole cohort and the rest drop
  * straight to the heuristic with the window intact. It closes on its own,
  * because the account is topped up out of band and nothing here would be told.
+ *
+ * Written through a file because the swarm is spawned per game, so process
+ * memory buys one game's quiet and then pays again: measured after shipping the
+ * in-memory version, every new swarm re-learned it at 6.2s to 9.0s while the
+ * pods behind it in the same process skipped at 0ms.
+ *
+ * Only when DATA_DIR is set, which in production is a volume and locally is
+ * nothing. Read from the environment rather than imported from keypair.mjs on
+ * purpose: this file has no imports at all beyond node builtins, and a strategy
+ * module that pulls in web3.js to find a directory is a worse trade than a
+ * breaker that holds in memory only when running from a checkout, where there
+ * is one swarm anyway. Best effort in both directions: the cost of it failing
+ * is one slow call per game, which is what this already improved on.
  */
 const DRY_MS = Number(process.env.USEPOD_DRY_COOLDOWN_MS ?? 10 * 60 * 1000);
+const DRY_FILE = process.env.DATA_DIR ? join(process.env.DATA_DIR, "inference-dry.json") : null;
 let dryUntil = 0;
+if (DRY_FILE) {
+  try { dryUntil = Number(JSON.parse(readFileSync(DRY_FILE, "utf8")).until) || 0; }
+  catch { /* no file yet, or a shape we did not write: start closed */ }
+}
+
 /** ms timestamp the prepaid account is assumed empty until, or 0 if not. */
 export const inferenceDry = () => (dryUntil > Date.now() ? dryUntil : 0);
+
+function openBreaker() {
+  dryUntil = Date.now() + DRY_MS;
+  if (!DRY_FILE) return;
+  try { writeFileSync(DRY_FILE, JSON.stringify({ until: dryUntil, at: Date.now() })); }
+  catch { /* see above: a breaker that only holds in memory still helps */ }
+}
 
 export async function decide(fog, self, opts = {}) {
   // Reasoning switched off is a state worth publishing, not a silent return.
@@ -259,7 +288,7 @@ export async function decide(fog, self, opts = {}) {
       const body = (await r.text()).slice(0, 120);
       // The account, not this call. Trip the breaker before throwing so the
       // rest of the cohort skips instead of queueing behind the same answer.
-      if (r.status === 402 || /insufficient[_ ]balance/i.test(body)) dryUntil = Date.now() + DRY_MS;
+      if (r.status === 402 || /insufficient[_ ]balance/i.test(body)) openBreaker();
       throw new Error(`${r.status} ${body}`);
     }
     const j = await r.json();
