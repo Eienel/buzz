@@ -723,8 +723,8 @@ export function makeMarket({ program, payer, connection }) {
  * Pure and exported so the retry rule can be tested without a validator: it is
  * the rule that broke, not the transaction. `null` means stop asking and drop
  * the bookkeeping, `[]` means nothing to do on this tick but ask again on the
- * next one, which is the distinction that game 1788967835679 needed and did not
- * have.
+ * next one. Collapsing those two into "done" is what let one bad tick retire a
+ * book for good.
  *
  * `lock` is the instance the book stops taking bets at, known only for books
  * this run opened; undefined is a game adopted after a restart, which gets no
