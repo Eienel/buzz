@@ -1441,6 +1441,48 @@ setInterval(() => {
   catch (e) { console.log("[grades] write failed:", e.message); }
 }, 5000).unref?.();
 
+/**
+ * What the agents have thought, all time.
+ *
+ * The traces are a rolling window of THOUGHTS_MAX and the spool is truncated
+ * to match, so nothing anywhere remembered how many calls had ever been
+ * answered. That is fine while the budget holds and badly wrong when it does
+ * not: the window fills with skipped calls and the page reports 0 calls
+ * answered, as though the agents had never thought at all. Thousands had.
+ *
+ * Counted against a timestamp watermark rather than a set of ids. The spool is
+ * re-read at every boot, so counting on absorb alone would add the last 400
+ * records again on each restart, and a set of every id ever seen grows without
+ * bound. The cost is that a trace arriving out of order behind the watermark
+ * goes uncounted, which is a rounding error on a lifetime total and much
+ * cheaper than counting the same call twice forever.
+ */
+const TOTALS = join(DATA_DIR, "inference-totals.json");
+const lifetime = (() => {
+  const zero = { answered: 0, skipped: 0, tokens: 0, spend: 0, graded: 0, hits: 0, lastAt: 0 };
+  try { return { ...zero, ...JSON.parse(readFileSync(TOTALS, "utf8")) }; }
+  catch { return zero; }
+})();
+let totalsDirty = false;
+function countLifetime(rec) {
+  if (!(rec.at > lifetime.lastAt)) return;
+  lifetime.lastAt = rec.at;
+  if (rec.skipped) lifetime.skipped++;
+  else {
+    lifetime.answered++;
+    lifetime.tokens += (rec.tokensIn ?? 0) + (rec.tokensOut ?? 0);
+    lifetime.spend += rec.cost ?? 0;
+  }
+  totalsDirty = true;
+}
+// Written on a timer rather than per call: this is a counter, not a ledger,
+// and a lost second of it costs nothing.
+setInterval(() => {
+  if (!totalsDirty) return;
+  totalsDirty = false;
+  try { writeFileSync(TOTALS, JSON.stringify(lifetime)); } catch { /* volume is optional */ }
+}, 20_000).unref?.();
+
 const SPOOL = join(DATA_DIR, "thoughts.jsonl");
 const seen = new Set();
 const idOf = (t) => `${t.game}:${t.instance}:${t.agent}:${t.skipped ? "s" : "a"}`;
@@ -1459,6 +1501,7 @@ function absorb(t) {
     if (rec.predict != null) rec.hit = rec.predict === doomed;
     rec.doomed = doomed;
   }
+  countLifetime(rec);
   thoughts.push(rec);
   if (thoughts.length > THOUGHTS_MAX) {
     for (const gone of thoughts.splice(0, thoughts.length - THOUGHTS_MAX)) seen.delete(idOf(gone));
@@ -2437,6 +2480,14 @@ createServer(async (req,res)=>{
         models: [...new Set(all.map((t) => t.model).filter(Boolean))],
         providers: [...new Set(all.map((t) => t.provider).filter(Boolean))].length,
         window: all.length,
+      },
+      // All time, so a page about inference does not read as zero the moment
+      // the budget runs dry. Unfiltered on purpose: the per-model and
+      // per-wallet views narrow the window above, and a lifetime total that
+      // moved with a filter would be a different number wearing the same name.
+      lifetime: {
+        answered: lifetime.answered, skipped: lifetime.skipped,
+        tokens: lifetime.tokens, spend: lifetime.spend,
       },
       // Always the unfiltered roster, so filtering to one agent cannot hide
       // the buttons that get you back to the others.

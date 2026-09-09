@@ -80,6 +80,7 @@
   /* Six equal columns is the shape every dashboard defaults to. Spend is the
      figure this page exists to show, so it gets the room and the others sit
      beside it at a smaller weight. */
+  .alltime{display:block;font-style:normal;color:var(--dimmer);font-size:11px;margin-top:2px}
   .stats{display:grid;grid-template-columns:1.5fr 1fr 1fr 1fr 1.15fr .9fr;
     border-top:1px solid var(--edge);border-bottom:1px solid var(--edge)}
   .stats div{padding:13px 16px 12px;border-left:1px solid var(--edge)}
@@ -619,6 +620,12 @@ async function tick() {
     // while the buffer only reaches back about 27 minutes under load, so the
     // number quietly capped exactly when the arena was busiest.
     $("sHour").textContent = s.answered ?? 0;
+    // The window can honestly be zero while the record is not. Without this
+    // the page reads "0 calls answered" the moment the budget runs dry, which
+    // is the opposite of what a page about inference should say about work
+    // that has already happened.
+    const lt = d.lifetime;
+    $("sAll").textContent = lt && lt.answered ? ` · ${lt.answered.toLocaleString()} all time` : "";
     $("sSpend").innerHTML = s.spend ? esc(usd(s.spend)) : "…";
     $("sP50").innerHTML = s.p50 ? esc(secs(s.p50)) : "…";
     $("sP95").innerHTML = s.p95 ? esc(secs(s.p95)) : "…";
