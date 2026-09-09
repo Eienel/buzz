@@ -60,6 +60,27 @@
   .chip#tally b{color:var(--alive);font-weight:600}
   .chip#tally s{color:var(--dimmer);text-decoration:none}
   .chip.live{color:var(--alive);display:flex;gap:7px;align-items:center}
+  .chip.ca{display:inline-flex;align-items:center;gap:8px;cursor:pointer;font:inherit;
+    font-family:var(--mono);font-size:12px;color:var(--dim);max-width:none}
+  .chip.ca .calab{color:var(--dimmer);letter-spacing:.08em}
+  .chip.ca code{font-family:var(--mono);color:var(--gold);font-size:11.5px}
+  .chip.ca:hover{border-color:var(--honey)} .chip.ca:hover code{color:var(--honey)}
+  .chip.ca.done{border-color:var(--alive)} .chip.ca.done code{color:var(--alive)}
+  .cashort{display:none}
+  /* On a phone the chip row scrolls sideways, so position in the row decides
+     whether a chip exists at all. This one is pinned to the left edge so it
+     survives the scroll.
+     Pinned and full length, it was 344px on a 390px screen and covered every
+     other chip, so the phone shows the short form. Nobody reads 44 characters
+     off a phone to check them: they tap and paste. The button still copies
+     the whole address, and the full one is rendered in full on the home page
+     and in the docs, where checking it is the thing you are there to do. */
+  @media (max-width:760px){
+    .chip.ca{position:sticky;left:0;z-index:2;background:#140f09;
+      box-shadow:6px 0 8px -6px #0b0805}
+    .chip.ca #caval{display:none}
+    .chip.ca .cashort{display:inline}
+  }
   .chip.live i{width:7px;height:7px;border-radius:99px;background:var(--alive);animation:blip 1.7s infinite}
   .chip.live.down{color:var(--dead)} .chip.live.down i{background:var(--dead)}
   @keyframes blip{50%{opacity:.2}}
@@ -581,6 +602,15 @@
     <span class="view" id="mkt">
       <button data-m="all">all</button><button data-m="BUZZ">BUZZ</button><button data-m="ANSEM">ANSEM</button>
     </span>
+    <!-- First in the row on purpose. A link from Twitter lands on this page,
+         not the home page, and "what is the CA" is the first thing asked. On
+         a phone this row scrolls sideways, so anything after the price and
+         the jackpot is off-screen, which is the one place the address must
+         not be. Full length: an address that cannot be checked against a
+         wallet is decoration. -->
+    <button class="chip ca" id="ca" type="button" title="Copy the $BUZZ mint address">
+      <span class="calab">CA</span><code id="caval">DoTMzBpSRPEwaycrSUzgSaDEs42PaiQVvYXAmLkcHr5X</code><code
+        class="cashort" aria-hidden="true">DoTMzB&hellip;kcHr5X</code></button>
     <span class="chip" id="tally">&nbsp;</span>
     <a class="chip tkr" id="tkr" href="https://clawpump.tech/tokens/DoTMzBpSRPEwaycrSUzgSaDEs42PaiQVvYXAmLkcHr5X"
        target="_blank" rel="noopener" hidden></a>
@@ -606,6 +636,38 @@
 </div>
 
 <script>
+// Copy the mint. execCommand is the fallback because navigator.clipboard is
+// undefined over plain http and inside several in-app browsers, which is
+// exactly where a link from Twitter lands.
+(function ca(){
+  const btn = document.getElementById("ca"), val = document.getElementById("caval");
+  if(!btn || !val) return;
+  btn.addEventListener("click", async () => {
+    const text = val.textContent.trim();
+    try { await navigator.clipboard.writeText(text); }
+    catch {
+      const t = document.createElement("textarea");
+      t.value = text; t.setAttribute("readonly", "");
+      t.style.cssText = "position:absolute;left:-9999px";
+      document.body.appendChild(t); t.select();
+      try { document.execCommand("copy"); } catch {}
+      t.remove();
+    }
+    // Both forms, because which one is on screen depends on the breakpoint
+    // and the confirmation has to land on whichever the reader can see.
+    const short = btn.querySelector(".cashort");
+    const wasLong = val.textContent, wasShort = short ? short.textContent : null;
+    val.textContent = "copied";
+    if(short) short.textContent = "copied";
+    btn.classList.add("done");
+    setTimeout(() => {
+      val.textContent = wasLong;
+      if(short) short.textContent = wasShort;
+      btn.classList.remove("done");
+    }, 1500);
+  });
+})();
+
 const PROGRAM_ID="4TNbztSMd3zxG57M25y8WhpcKrQMJQVYEK6EnnkQy1Hw";
 const RPC="https://api.devnet.solana.com";
 const STATUS=["Lobby","Running","Settling","Closed"], PHASE=["Commit","Reveal","Resolving","Scoring"];
