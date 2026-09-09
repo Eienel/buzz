@@ -55,6 +55,23 @@
   nav a{transition:color .15s} nav a:hover{color:var(--honey)}
   nav a:focus-visible,.cta:focus-visible{outline:2px solid var(--gold);outline-offset:3px;border-radius:6px}
 
+  /* The contract address. Monospace and full length on purpose: a truncated
+     address is one nobody can check, which defeats the point of showing it. */
+  .ca{display:flex;align-items:center;justify-content:center;gap:10px;flex-wrap:wrap;
+    margin:14px auto 0;padding:10px 14px;max-width:min(640px,92vw);
+    border:1px solid var(--edge);border-radius:12px;background:#0f0b07}
+  .calab{font-size:12px;color:var(--dimmer);text-transform:uppercase;letter-spacing:.09em}
+  .ca code{font-family:var(--mono);font-size:12.5px;color:var(--gold);word-break:break-all}
+  .cacopy{font:inherit;font-size:12px;cursor:pointer;padding:5px 12px;border-radius:8px;
+    background:var(--card);border:1px solid var(--edge2);color:var(--dim);transition:.15s}
+  .cacopy:hover{color:var(--text);border-color:var(--honey)}
+  .cacopy.done{color:var(--good);border-color:var(--good)}
+  @media(max-width:560px){
+    .ca{flex-direction:column;gap:7px;padding:12px}
+    .ca code{font-size:11.5px;text-align:center}
+    .cacopy{padding:9px 20px}
+  }
+
   /* ---------- hero ---------- */
   .hero{max-width:900px;margin:0 auto;padding:clamp(48px,11vh,120px) 26px 40px;text-align:center}
 
@@ -200,6 +217,17 @@
       <div class="stat"><b id="s-mc">&hellip;</b><span>market cap</span></div>
       <div class="stat"><b class="on">ClawPump</b><span>trade $BUZZ</span></div>
     </a>
+    <!-- The contract address, in full and copyable.
+         It was already on the docs page, four screens into a technical
+         section, which is not where anyone looks for it. The first thing
+         someone asks about a token is its address, and sending them to a
+         link that says "trade $BUZZ" is asking them to trust a redirect
+         instead of checking the address themselves. -->
+    <div class="ca">
+      <span class="calab">$BUZZ contract</span>
+      <code id="caval">DoTMzBpSRPEwaycrSUzgSaDEs42PaiQVvYXAmLkcHr5X</code>
+      <button class="cacopy" id="cacopy" type="button">copy</button>
+    </div>
   </section>
 
   <footer>
@@ -341,6 +369,29 @@ async function loadToken(){
   };
   await tick(); setInterval(tick, 30000);
 }
+</script>
+<script>
+// Copy the contract address. execCommand is the fallback because
+// navigator.clipboard is undefined on a page served over plain http and on
+// some in-app browsers, which is exactly where a link from Twitter lands.
+(function ca(){
+  const btn = document.getElementById("cacopy"), val = document.getElementById("caval");
+  if(!btn || !val) return;
+  btn.addEventListener("click", async () => {
+    const text = val.textContent.trim();
+    try { await navigator.clipboard.writeText(text); }
+    catch {
+      const t = document.createElement("textarea");
+      t.value = text; t.setAttribute("readonly", "");
+      t.style.cssText = "position:absolute;left:-9999px";
+      document.body.appendChild(t); t.select();
+      try { document.execCommand("copy"); } catch {}
+      t.remove();
+    }
+    btn.textContent = "copied"; btn.classList.add("done");
+    setTimeout(() => { btn.textContent = "copy"; btn.classList.remove("done"); }, 1600);
+  });
+})();
 </script>
 </body>
 </html>
