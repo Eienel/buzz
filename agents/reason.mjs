@@ -6,21 +6,85 @@
 // a rule when the board is hidden. This asks a model that question every
 // instance and lets the leaderboard settle it.
 //
-// Routed through UsePod, which is OpenAI-compatible with the token in the URL
-// path rather than a header:
+// Routed through whichever provider has a key: OPENROUTER_KEY, GROQ_KEY or
+// USEPOD_TOKEN, in that order. All three are OpenAI chat-completions. See
+// PROVIDERS below for why the list exists and what the free tiers actually
+// allow.
 //
-//   OPENAI_BASE_URL=https://api.usepod.ai/proxy/<token>/v1
-//
-// Set USEPOD_TOKEN to switch it on. With no token the arena runs exactly as
-// before, and every failure inside falls back to a heuristic, because a model
-// that is slow, broke or wrong must never be able to stall a live game.
+// With no key at all the arena runs exactly as before, and every failure
+// inside falls back to a heuristic, because a model that is slow, broke or
+// wrong must never be able to stall a live game.
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-const BASE = (t) => `https://api.usepod.ai/proxy/${t}/v1/chat/completions`;
-const TOKEN = process.env.USEPOD_TOKEN ?? "";
-const MODEL = process.env.USEPOD_MODEL ?? "llama-4-maverick";
+/**
+ * Where the thinking is bought.
+ *
+ * UsePod was the only route and it is prepaid, so when the balance ran out the
+ * whole reasoning cohort stopped and the traces page went blank. Money is not
+ * always available and the arena should not need it to be interesting, so the
+ * route is now a list and the first provider holding a key wins. All three
+ * speak OpenAI chat-completions; the only real difference is where the
+ * credential goes, which is why UsePod needed a special case at all (its token
+ * is a path segment, not a header).
+ *
+ * Free tiers are the point of this, and they are small. Measured against the
+ * live arena, which makes 105 calls an hour, 2,518 a day:
+ *
+ *   OpenRouter :free, no credits ever bought    50/day    2% of demand
+ *   OpenRouter :free, $10 bought lifetime    1,000/day   40%
+ *   Groq free tier, 30 req/min               1,000/day   40%
+ *
+ * So no single free tier carries the arena as it runs today, which is what
+ * DAILY_CAP below is for: the demand is a choice, not a constraint.
+ *
+ * UNVERIFIED, and worth knowing before trusting a leaderboard built on it: the
+ * free model ids below have never answered this prompt. Only UsePod's three
+ * have. This file already documents the failure to watch for, because it has
+ * bitten four models here: one that spends its allowance on hidden reasoning
+ * tokens returns finish_reason "length" with empty content and never answers
+ * inside a commit window. It shows up on /thinking as "no usable answer", and
+ * the fix is to swap that id out of the list.
+ */
+const PROVIDERS = [
+  { name: "openrouter",
+    env: "OPENROUTER_KEY",
+    url: () => "https://openrouter.ai/api/v1/chat/completions",
+    // The referer and title are how OpenRouter attributes traffic on its own
+    // leaderboards. Free either way, and being visible there costs nothing.
+    headers: (k) => ({ authorization: `Bearer ${k}`,
+                       "http-referer": "https://lastbuzz.fun", "x-title": "BUZZ arena" }),
+    // Read off the live /api/v1/models list on 2026-09-10, not remembered: the
+    // three ids guessed from memory first time round all 404'd. The free roster
+    // churns, so re-check with
+    //   curl -s https://openrouter.ai/api/v1/models | jq -r '.data[].id|select(endswith(":free"))'
+    // Three labs, for the same reason DEFAULT_MODELS has three: identical pods
+    // asking one model are one agent with three wallets. Reasoning-tagged and
+    // task-specific variants are left out on purpose, see below.
+    models: ["google/gemma-4-31b-it:free",
+             "nvidia/nemotron-3-super-120b-a12b:free",
+             "nex-agi/nex-n2.5-pro:free"] },
+  { name: "groq",
+    env: "GROQ_KEY",
+    url: () => "https://api.groq.com/openai/v1/chat/completions",
+    headers: (k) => ({ authorization: `Bearer ${k}` }),
+    // Named in Groq's own rate-limit table. Same caveat as OpenRouter above.
+    models: ["openai/gpt-oss-120b", "qwen/qwen3.8-27b", "openai/gpt-oss-20b"] },
+  { name: "usepod",
+    env: "USEPOD_TOKEN",
+    url: (k) => `https://api.usepod.ai/proxy/${k}/v1/chat/completions`,
+    headers: () => ({}),
+    models: ["meta-llama/llama-4-maverick",
+             "mistralai/mistral-medium-3.1",
+             "anthropic/claude-haiku-4.5"] },
+];
+
+/** The first provider with a key, or null when none is configured. */
+export function activeProvider() {
+  for (const p of PROVIDERS) if ((process.env[p.env] ?? "").length) return p;
+  return null;
+}
 // Four pods asking one model the same question at the same temperature are one
 // agent with four wallets. Each pod gets its own model and its own disposition
 // so the reasoning cohort is four independent opinions, which is the only way
@@ -38,8 +102,12 @@ const DEFAULT_MODELS = [
   "mistralai/mistral-medium-3.1",
   "anthropic/claude-haiku-4.5",
 ];
-const MODELS = (process.env.USEPOD_MODELS ?? DEFAULT_MODELS.join(","))
-  .split(",").map((m) => m.trim()).filter(Boolean);
+const MODELS = (() => {
+  const named = (process.env.INFER_MODELS ?? process.env.USEPOD_MODELS ?? "")
+    .split(",").map((m) => m.trim()).filter(Boolean);
+  if (named.length) return named;
+  return activeProvider()?.models ?? DEFAULT_MODELS;
+})();
 const PERSONAS = [
   "You weight recent trend over the current snapshot; a comb that has been bleeding keeps bleeding.",
   "You assume the other agents are more predictable than they look and lean hard on the known field.",
@@ -84,7 +152,7 @@ function budgetFor(instanceSeconds, stagger = 0) {
   return Math.max(2500, Math.min(TIMEOUT_CAP, commitWindow * 0.85 - stagger));
 }
 
-export const reasoningEnabled = () => TOKEN.length > 0;
+export const reasoningEnabled = () => !!activeProvider();
 
 const SYSTEM =
   "You play Last Comb Standing. Six combs, one dies each round, last one alive wins.\n\n" +
@@ -186,8 +254,51 @@ function sanitise(raw, fog, self) {
  * is one swarm anyway. Best effort in both directions: the cost of it failing
  * is one slow call per game, which is what this already improved on.
  */
+/**
+ * A ceiling on model calls per UTC day, so a free tier is not blown by lunchtime.
+ *
+ * Measured on the live arena: 105 calls an hour, 2,518 a day, from three pods
+ * in each of about three concurrent games. Both free tiers worth using cap at
+ * 1,000 a day, so the arena as it runs cannot fit in one and the honest fix is
+ * to want less rather than to pretend the limit is not there.
+ *
+ * Running out is not an error and does not stop the game: a pod with no call
+ * left holds its comb and forfeits the prediction, exactly as it does when the
+ * model misses the commit window, and /thinking says which. Nine hundred is
+ * deliberately under a thousand, because the provider counts retries and
+ * failures that never reached us.
+ *
+ * Persisted for the same reason as the breaker below: the swarm is a child
+ * process per game, so an in-memory count would reset every sixty seconds and
+ * cap nothing at all.
+ */
+const DAILY_CAP = Number(process.env.INFER_DAILY_CAP ?? 900);
+
 const DRY_MS = Number(process.env.USEPOD_DRY_COOLDOWN_MS ?? 10 * 60 * 1000);
 const DRY_FILE = process.env.DATA_DIR ? join(process.env.DATA_DIR, "inference-dry.json") : null;
+const SPEND_FILE = process.env.DATA_DIR ? join(process.env.DATA_DIR, "inference-spend.json") : null;
+
+const today = () => new Date().toISOString().slice(0, 10);      // UTC day
+
+/** Calls made so far today, read fresh because another swarm may have spent. */
+function spentToday() {
+  if (!SPEND_FILE) return 0;
+  try {
+    const s = JSON.parse(readFileSync(SPEND_FILE, "utf8"));
+    return s.day === today() ? Number(s.calls) || 0 : 0;
+  } catch { return 0; }
+}
+
+/** Count one call against the day. Best effort: a lost write costs one call. */
+function spend() {
+  if (!SPEND_FILE) return;
+  try { writeFileSync(SPEND_FILE, JSON.stringify({ day: today(), calls: spentToday() + 1 })); }
+  catch { /* the cap is a courtesy to the provider, not a correctness guard */ }
+}
+
+/** What is left of today's allowance, for the page and for the tests. */
+export const dailyBudget = () => ({ cap: DAILY_CAP, spent: spentToday(),
+                                    left: Math.max(0, DAILY_CAP - spentToday()) });
 let dryUntil = 0;
 if (DRY_FILE) {
   try { dryUntil = Number(JSON.parse(readFileSync(DRY_FILE, "utf8")).until) || 0; }
@@ -209,8 +320,13 @@ export async function decide(fog, self, opts = {}) {
   // This was the one path that produced no record of any kind, which made an
   // arena with no token look exactly like an arena whose feed was broken, and
   // cost an evening telling the two apart.
-  if (!TOKEN) {
-    if (opts.onSkip) opts.onSkip("USEPOD_TOKEN is not set: reasoning is off", 0);
+  if (!activeProvider()) {
+    const names = PROVIDERS.map((p) => p.env).join(", ");
+    if (opts.onSkip) opts.onSkip(`no inference key set (${names}): reasoning is off`, 0);
+    return null;
+  }
+  if (DAILY_CAP > 0 && spentToday() >= DAILY_CAP) {
+    if (opts.onSkip) opts.onSkip(`daily inference cap reached: ${DAILY_CAP} calls used today`, 0);
     return null;
   }
   if (dryUntil > Date.now()) {
@@ -261,12 +377,17 @@ export async function decide(fog, self, opts = {}) {
   const timer = setTimeout(() => ctl.abort(), budgetFor(opts.instanceSeconds, opts.stagger ?? 0));
   const t0 = Date.now();
   try {
-    const r = await fetch(BASE(TOKEN), {
+    const prov = activeProvider();
+    const key = process.env[prov.env];
+    // Count it before it is sent. A call that fails still consumed the
+    // provider's allowance, and a cap that only counts successes is not a cap.
+    spend();
+    const r = await fetch(prov.url(key), {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...prov.headers(key) },
       signal: ctl.signal,
       body: JSON.stringify({
-        model: opts.model ?? MODEL,
+        model: opts.model ?? MODELS[0],
         messages: [
           { role: "system", content: opts.persona ? `${SYSTEM}\n\nYOUR DISPOSITION: ${opts.persona}` : SYSTEM },
           { role: "user", content: user },
@@ -302,8 +423,10 @@ export async function decide(fog, self, opts = {}) {
       cost: j?.usage?.cost ?? null,
       tokensIn: j?.usage?.prompt_tokens ?? null,
       tokensOut: j?.usage?.completion_tokens ?? null,
-      provider: r.headers.get("x-pod-provider-id"),
-      route: r.headers.get("x-pod-route"),
+      // UsePod discloses who served the call; the others do not, so fall back
+      // to naming the route we chose, which is the honest answer either way.
+      provider: r.headers.get("x-pod-provider-id") ?? prov.name,
+      route: r.headers.get("x-pod-route") ?? prov.name,
     };
     const text = j?.choices?.[0]?.message?.content ?? "";
     // tolerate a model that wraps its JSON in prose or a code fence
