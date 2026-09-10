@@ -2180,9 +2180,17 @@ createServer(async (req,res)=>{
                    fundGoalUsd: Number(process.env.TCG_FUND_GOAL_USD ?? 40) };
         })() });
     }catch(e){
-      // the desk is optional; the arena must not fall over because it is absent
+      // The desk is optional and, on this deployment, absent: the Dockerfile
+      // copies server, agents and app, and tcg/ is not among them. That is a
+      // deliberate omission rather than a broken build, so say so plainly.
+      //
+      // Never echo the exception: it carries the container path
+      // (/app/tcg/store.mjs), which tells a visitor nothing and tells everyone
+      // else our filesystem layout.
+      const absent = e?.code === "ERR_MODULE_NOT_FOUND";
       return send(res, 200, { ok:false, mode:"none", scorecard:{picks:0}, picks:[],
-                              error:String(e.message).slice(0,120) });
+        error: absent ? "the card desk is not deployed on this arena"
+                      : "the card desk is not answering" });
     }
   }
 

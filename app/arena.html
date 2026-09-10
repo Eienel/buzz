@@ -288,6 +288,9 @@
   .rcid{letter-spacing:.06em;color:var(--dim)}
   .rc:hover:not([disabled]) .rcid{color:inherit}
   .rcpool{font-size:13px;color:var(--gold)}
+  /* Whose money is on this comb. The house is a counterparty here, not a
+     neutral seeder, so it says so on the comb rather than in a footnote. */
+  .rchouse{font-size:10px;letter-spacing:.05em;color:var(--dimmer)}
   .rc.died{border-color:var(--dead);background:#1b0c12}
   .rc.died .rcpool{color:#e88aa2}
   @media (max-width:820px){ .rstrip{margin:0 14px 12px} }
@@ -935,6 +938,7 @@ function roundStrip(g){
       <button class="rc" data-rbet="${esc(g.gameId)}" data-comb="${c.id}"${open ? "" : " disabled"}>
         <span class="rcid">comb ${c.id}</span>
         <span class="rcpool">&middot;</span>
+        <span class="rchouse" hidden></span>
       </button>`).join("")}</div>
   </div>`;
 }
@@ -1874,6 +1878,15 @@ async function paintRounds(){
         const pool = book?.pools?.[id] ?? "0";
         const el = btn.querySelector(".rcpool");
         if(el) el.textContent = Number(pool) ? fmtUnits(pool) : "nothing yet";
+        // Say where the house is. It takes the other side of the first bet in
+        // a round, so on a live book one of these combs is us, and a visitor
+        // is entitled to know which before they pick.
+        const hs = btn.querySelector(".rchouse");
+        if(hs){
+          const mine = book?.house && book.house.comb === id;
+          hs.textContent = mine ? `house ${fmtUnits(book.house.amount)}` : "";
+          hs.hidden = !mine;
+        }
         btn.classList.toggle("died", book?.doomed === id);
       }
     }catch{ /* the strip still says what it is for without the numbers */ }

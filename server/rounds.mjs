@@ -27,6 +27,52 @@ const RECONCILE_MS = Number(process.env.ROUND_RECONCILE_MS ?? 5 * 60_000);
 /** How long to leave a book alone when its bettors have not claimed yet. */
 const CLAIM_WAIT_MS = Number(process.env.ROUND_CLAIM_WAIT_MS ?? 60_000);
 
+/**
+ * The house takes the other side of the first bet in a round.
+ *
+ * A parimutuel with one participant pays that participant their own stake back:
+ * they are the whole winning pool and the whole total pool, so the ratio is 1.
+ * Measured, not reasoned: two real bets have ever been placed on this arena and
+ * both returned exactly what went in. That is the round book's arrival problem,
+ * and no amount of marketing fixes a market that cannot pay.
+ *
+ * The game book solves this by seeding every backable agent when the book
+ * opens. The round book cannot copy that, and the reason is worth writing down
+ * so nobody tries: RoundBet is seeded [b"rbet", round, bettor], one position
+ * per bettor per round, and place_round_bet enforces `bet.comb == comb`. One
+ * identity can therefore hold exactly one comb. Seeding every comb would take
+ * one distinct identity per comb, those identities hold no key, and
+ * close_round_bet sends rent to the bettor, so their rent would be stranded at
+ * 0.00105 SOL a seat. At five combs across four games every sixty seconds that
+ * is about 30 SOL a day burnt into keyless accounts, which is the same rent
+ * leak this file already has a comment about, for the third time.
+ *
+ * So the house matches instead of seeding: nothing is staked until a real
+ * bettor is in the book, and then the house puts the same size on the emptiest
+ * living comb, which is the one that most improves what that bettor collects if
+ * they are right. It costs nothing on an empty arena, which is the arena we
+ * have, and it turns the market on the moment somebody shows up.
+ *
+ * The house here is the relayer's own key rather than the game book's keyless
+ * HOUSE, for the rent reason above: the payer funds the position and
+ * close_round_bet hands it back to the same account. The arena says which comb
+ * the house is on and how much, because a counterparty that is not disclosed is
+ * just an operator betting against its users.
+ *
+ * ROUND_HOUSE_MATCH=0 turns it off.
+ */
+const MATCH_MAX = Number(process.env.ROUND_HOUSE_MATCH ?? 5);
+
+/**
+ * How often to ask a live book whether anyone has bet into it.
+ *
+ * The tick runs every 2.5 seconds and a round lasts sixty, so asking every tick
+ * would be twenty-four account reads per round per game to learn "still nobody"
+ * twenty-three times. This arena already runs at 75 requests a second and that
+ * is its most pressing cost, so the match is worth a few seconds of latency.
+ */
+const MATCH_POLL_MS = Number(process.env.ROUND_MATCH_POLL_MS ?? 10_000);
+
 export function makeRounds({ program, payer, connection }) {
   const PID = program.programId;
   const pda = (...seeds) => PublicKey.findProgramAddressSync(seeds, PID)[0];
@@ -34,6 +80,8 @@ export function makeRounds({ program, payer, connection }) {
   const roundPda = (game, instance) =>
     pda(Buffer.from("round"), game.toBuffer(), Buffer.from(new Uint16Array([instance]).buffer));
   const rvaultPda = (r) => pda(Buffer.from("rvault"), r.toBuffer());
+  const rbetPda = (r, bettor) => pda(Buffer.from("rbet"), r.toBuffer(), bettor.toBuffer());
+  const combPda = (g, id) => pda(Buffer.from("circle"), g.toBuffer(), Buffer.from([id]));
   // The program takes this as proof we are allowed to act for a bettor who
   // holds no key, the same way the game book's claims do.
   const relayerPda = pda(Buffer.from("relayer"), payer.publicKey.toBuffer());
@@ -48,6 +96,12 @@ export function makeRounds({ program, payer, connection }) {
   // a closed account on every pass forever.
   const open = new Map();              // round pubkey -> { gameId, instance }
   const settled = new Set();
+  // Rounds the house has already matched into, so a tick does not stack a
+  // second position on the same book. Keyed by the round account, like
+  // everything else here.
+  const matched = new Set();
+  // When each open book was last asked whether a bettor had turned up.
+  const lastLook = new Map();          // round pubkey -> ms
   // Books that are decided and whose rent is therefore owed back. A book is
   // only removed once it is actually closed, or once closing it has failed
   // enough times that retrying is just noise.
@@ -95,6 +149,75 @@ export function makeRounds({ program, payer, connection }) {
       // The game moved on between the snapshot and the send. Next round.
       if (!/WrongPhase|BadParam/.test(m)) log(`open ${key}: ${m.slice(0, 80)}`);
     }
+  }
+
+  /**
+   * Take the other side of the first real bet in this round.
+   *
+   * Reads the book rather than trusting the tick: `bettors` and `pools` are the
+   * chain's own count, so a bet placed by anyone, through the page or straight
+   * at the program, is what triggers this. Nothing is staked on an empty book.
+   *
+   * See MATCH_MAX above for why this matches rather than seeding every comb.
+   */
+  async function matchFor(g, round, key) {
+    if (MATCH_MAX <= 0 || matched.has(key)) return;
+    if (Date.now() - (lastLook.get(key) ?? 0) < MATCH_POLL_MS) return;
+    lastLook.set(key, Date.now());
+    const acc = await connection.getAccountInfo(round);
+    if (!acc) return;
+    let r;
+    try { r = program.coder.accounts.decode("roundMarket", acc.data); } catch { return; }
+    if (r.settled || r.void) { matched.add(key); return; }
+    // Only a real bettor opens the position. Our own match would otherwise
+    // qualify the next tick and the house would trade with itself forever.
+    if (r.bettors < 1) return;
+    const pools = (r.pools ?? []).map((n) => BigInt(n.toString()));
+    const alive = (g.combs ?? []).filter((c) => c.alive !== false && c.id < (g.numCircles ?? 6))
+                                 .map((c) => c.id);
+    const comb = houseComb(pools, alive);
+    if (comb === null) { matched.add(key); return; }
+    // Match the size that is already in the book, capped: the point is to make
+    // the first bettor's ticket pay, not to outweigh them.
+    const decimals = await decimalsOf(g.stakeMint);
+    const staked = Number(pools.reduce((a, b) => a + b, 0n)) / 10 ** decimals;
+    const amount = Math.min(MATCH_MAX, Math.max(1, Math.round(staked)));
+    matched.add(key);                 // before the send: one attempt per round
+    try {
+      await placeAs(g, round, comb, amount, decimals);
+      log(`matched ${g.gameId} round ${g.instance}: ${amount} on comb ${comb}`);
+    } catch (e) {
+      log(`match ${key.slice(0, 8)}: ${String(e.message ?? e).slice(0, 70)}`);
+    }
+  }
+
+  const decimalsCache = new Map();
+  async function decimalsOf(mint) {
+    const k = String(mint);
+    if (!decimalsCache.has(k)) {
+      decimalsCache.set(k, (await connection.getTokenSupply(new PublicKey(mint))).value.decimals);
+    }
+    return decimalsCache.get(k);
+  }
+
+  /** Put the house's own money on one comb of one round. */
+  async function placeAs(g, round, comb, amount, decimals) {
+    const game = gamePda(g.gameId);
+    const mint = new PublicKey(g.stakeMint);
+    const tokenProgram = await tokenProgramFor(mint);
+    const units = new BN(String(BigInt(Math.round(amount)) * 10n ** BigInt(decimals)));
+    // Bettor and payer are the same key on purpose: close_round_bet returns the
+    // position's rent to the bettor, so anything else strands it. See MATCH_MAX.
+    const me = payer.publicKey;
+    const myToken = getAssociatedTokenAddressSync(mint, me, false, tokenProgram);
+    return program.methods.placeRoundBet(comb, units).accountsPartial({
+      game, round, roundVault: rvaultPda(round),
+      circle: combPda(game, comb),
+      roundBet: rbetPda(round, me),
+      payerToken: myToken,
+      bettor: me, payer: me, relayer: relayerPda,
+      stakeMint: mint, tokenProgram, systemProgram: SystemProgram.programId,
+    }).rpc();
   }
 
   /**
@@ -177,12 +300,21 @@ export function makeRounds({ program, payer, connection }) {
       const acc = await connection.getAccountInfo(vault);
       // Already gone: somebody else closed it, which is the permissionless
       // design working rather than a problem.
-      if (!acc) { closable.delete(key); open.delete(key); return; }
+      if (!acc) { closable.delete(key); open.delete(key); matched.delete(key); lastLook.delete(key); return; }
+      // Positions first, and this order is the whole point. close_round_bet
+      // derives `round` from seeds, so once the book is closed every RoundBet
+      // on it is unreachable and its rent is gone for good. Measured on devnet
+      // before this existed: both RoundBets that have ever been placed on this
+      // arena are orphaned exactly this way, 0.0021 SOL that nothing can now
+      // recover. Nothing called close_round_bet at all, which is the same
+      // omission claim_round_bet had, in the same file.
+      await closeBetsFor(round);
       await program.methods.closeRound().accountsPartial({
         round, roundVault: vault, cranker: payer.publicKey,
         tokenProgram: acc.owner,
       }).rpc();
       closable.delete(key); open.delete(key);
+      matched.delete(key); lastLook.delete(key);
       log(`closed ${key}, rent back`);
     } catch (e) {
       const m = String(e.message ?? e);
@@ -205,6 +337,48 @@ export function makeRounds({ program, payer, connection }) {
       }
       closable.set(key, { round, tries });
     }
+  }
+
+  /**
+   * Hand back the rent on every settled position in one book.
+   *
+   * Only claimed positions: close_round_bet demands the bettor's signature to
+   * close one that has not claimed, which is the program refusing to let a
+   * cranker forfeit somebody's ticket on their behalf. sweepClaims marks them,
+   * including losing tickets, so in the normal course everything here is
+   * closable by the time a book is.
+   *
+   * Rent goes to the bettor, which for the house's own match is the payer that
+   * funded it. Failures are logged and dropped: the book still wants closing,
+   * and a position we could not close is one bettor's rent rather than a stuck
+   * crank.
+   */
+  async function closeBetsFor(round) {
+    let bets;
+    try {
+      bets = await connection.getProgramAccounts(PID, {
+        filters: [{ memcmp: { offset: 0, bytes: program.coder.accounts.memcmp("roundBet").bytes } },
+                  { memcmp: { offset: 8, bytes: round.toBase58() } }],
+      });
+    } catch (e) { log(`bets on ${round.toBase58().slice(0, 8)}: ${String(e.message ?? e).slice(0, 60)}`); return 0; }
+    let closed = 0, held = 0;
+    for (const { pubkey, account } of bets) {
+      let bet;
+      try { bet = program.coder.accounts.decode("roundBet", account.data); } catch { continue; }
+      if (!bet.claimed) { held++; continue; }
+      try {
+        await program.methods.closeRoundBet().accountsPartial({
+          round, roundBet: pubkey, bettor: bet.bettor, cranker: payer.publicKey,
+        }).rpc();
+        closed++;
+      } catch (e) {
+        log(`close bet ${pubkey.toBase58().slice(0, 8)}: ${String(e.message ?? e).slice(0, 60)}`);
+      }
+    }
+    if (closed || held)
+      log(`${round.toBase58().slice(0, 8)}: closed ${closed} position${closed === 1 ? "" : "s"}` +
+          (held ? `, ${held} unclaimed and left alone` : ""));
+    return closed;
   }
 
   /**
@@ -316,9 +490,21 @@ export function makeRounds({ program, payer, connection }) {
       let r;
       try { r = program.coder.accounts.decode("roundMarket", acc.data); } catch { return null; }
       const pools = (r.pools ?? []).map((n) => n.toString());
+      // What of this is ours. A counterparty that is not disclosed is just an
+      // operator betting against its users, so the page is given the number
+      // rather than left to infer it. Absent when the house is not in.
+      let house = null;
+      try {
+        const mine = await connection.getAccountInfo(rbetPda(round, payer.publicKey));
+        if (mine) {
+          const b = program.coder.accounts.decode("roundBet", mine.data);
+          house = { comb: b.comb, amount: b.amount.toString() };
+        }
+      } catch { /* the disclosure is best effort; the pools are the truth */ }
       return {
         round: r.instance,
         pools,
+        house,
         totalPool: r.totalPool.toString(),
         bettors: r.bettors,
         // 255 is "not decided". Exposed as null, because a comb id of 255 on a
@@ -338,7 +524,13 @@ export function makeRounds({ program, payer, connection }) {
       try {
         const live = (snapshot?.live ?? []).filter((g) => g.status === 1 && g.instance >= 1);
         for (const g of live) {
-          if (g.phase === COMMIT) await openFor(g);
+          if (g.phase === COMMIT) {
+            await openFor(g);
+            // Only while the round still takes bets, and only once a real
+            // bettor is in the book. See MATCH_MAX.
+            const round = roundPda(gamePda(g.gameId), g.instance);
+            if (open.has(round.toBase58())) await matchFor(g, round, round.toBase58());
+          }
           // Scoring means the comb is dead and the death is on chain, which is
           // the only phase where the answer is both known and still current.
           if (g.phase === SCORING) await settleFor(g);
@@ -369,4 +561,23 @@ export function makeRounds({ program, payer, connection }) {
       } finally { busy = false; }
     },
   };
+}
+
+/**
+ * Which comb the house takes, given the money already in the book.
+ *
+ * The emptiest living comb, lowest id breaking ties. Mechanical and published
+ * so nobody has to take our word for it, and it is the choice that pays the
+ * bettor most if they are right: their ticket is worth
+ * `stake * total / winning`, so money on a comb that is not theirs is the only
+ * thing that makes it worth more than the stake itself.
+ *
+ * Null when there is nothing to take: no living comb, or the book already has
+ * money spread over every one of them, in which case it needs no help.
+ */
+export function houseComb(pools, alive) {
+  if (!alive?.length) return null;
+  const empty = alive.filter((id) => (pools[id] ?? 0n) === 0n);
+  if (!empty.length) return null;
+  return empty[0];
 }
