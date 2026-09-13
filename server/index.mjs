@@ -17,7 +17,7 @@ import { spawn } from "node:child_process";
 import jsSha3 from "js-sha3";
 import { Connection, PublicKey, SystemProgram, Transaction,
          sendAndConfirmTransaction } from "@solana/web3.js";
-import { makeArena, PRICE, challenge, registerAgent, reissueToken, authed, agentName, isJoinable } from "./arena-api.mjs";
+import { makeArena, PRICE, challenge, registerAgent, reissueToken, authed, agentName, isJoinable, badWalletBody } from "./arena-api.mjs";
 import { makeAutoplay } from "./autoplay.mjs";
 import { makeLimiter, LIMITS } from "./limits.mjs";
 import { loadKeypair } from "./keypair.mjs";
@@ -1737,7 +1737,13 @@ createServer(async (req,res)=>{
     // shortest path to a game was register, read a token out of a JSON body,
     // then play, which is three steps of ceremony before anything happens.
     let issuedToken = null, badWallet = null;
-    if(body?.agentWallet && !body?.token){
+    // No wallet at all is the same class of mistake and was the other half of
+    // it: `?lt=&wallet=` arrives with an empty string, which is falsy, so the
+    // block below was skipped and authed() answered "wallet not registered:
+    // call register first" for a call that never named a wallet to register.
+    // A play without one can never work, token or not.
+    if(!body?.agentWallet) badWallet = badWalletBody(body?.agentWallet);
+    else if(!body?.token){
       const r = registerAgent({ agentWallet: body.agentWallet, name: body.name });
       if(r.status === 200){ issuedToken = r.body.token; body.token = issuedToken; }
       // A wallet that is not a wallet. Captured rather than dropped: the fall
