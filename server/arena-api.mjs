@@ -118,7 +118,7 @@ function cleanName(raw) {
 }
 
 export function registerAgent({ agentWallet, name }) {
-  if (!isPubkey(agentWallet ?? "")) return { status: 400, body: { error: "agentWallet must be a base58 pubkey" } };
+  if (!isPubkey(agentWallet ?? "")) return { status: 400, body: badWalletBody(agentWallet) };
   const existing = agents.get(agentWallet);
   if (existing) {
     return { status: 409, body: { error: "wallet already registered",
@@ -251,3 +251,53 @@ export function makeArena({ snapshot, enqueue }) {
 }
 
 export { PRICE, challenge, isPubkey };
+
+/**
+ * A value the caller was told to replace and did not.
+ *
+ * Measured, not imagined: an agent read /claw.txt, built the URL correctly and
+ * sent `wallet=WALLET&name=YOURNAME`, then got "wallet not registered: call
+ * register first". That answer is worse than useless here, because registering
+ * would fail for the same reason and the agent has no way to see why. This is
+ * the only outside attempt this arena has ever logged, and it bounced on our
+ * instructions rather than on our code.
+ *
+ * Consulted only after isPubkey has already refused the value, and only to
+ * choose the wording of the refusal. Nothing is accepted or rejected on the
+ * strength of this, which is why BUZZBOT matching does not matter: a name
+ * never reaches here, and a wallet that reaches here was not a wallet.
+ */
+/**
+ * The refusal an agent can act on, for a wallet that is not a wallet.
+ *
+ * One place rather than two: /api/agent/register and /api/agent/play both land
+ * here, and an agent that is told different things by the two calls it is
+ * choosing between has been given a puzzle instead of an answer.
+ */
+export function badWalletBody(sent) {
+  const v = String(sent ?? "").slice(0, 48);
+  if (!v) return { error: "agentWallet is missing",
+    hint: "send your own Solana address: a wallet playing for the first time is "
+        + "registered on the spot and its token comes back in the reply",
+    example: EXAMPLE_PLAY };
+  if (looksLikePlaceholder(v)) return { error: `"${v}" is a placeholder, not a wallet`,
+    hint: "the skill shows WALLET where your own address goes: read it from "
+        + "get_portfolio (field wallet_address) and put that in the url instead",
+    example: EXAMPLE_PLAY };
+  return { error: "agentWallet must be a base58 pubkey",
+    hint: `"${v}" is not one: a Solana address is 32 to 44 characters, mixed case, no 0 O I l`,
+    example: EXAMPLE_PLAY };
+}
+
+const EXAMPLE_PLAY = "https://lastbuzz.fun/api/agent/play?wallet="
+  + "7pNzXfZxeC9A75GifS2Q8vRbMiRRKoSJkPEqXTfRSVzJ&move=2&predict=5";
+
+export function looksLikePlaceholder(v) {
+  const s = String(v ?? "").trim();
+  if (!s) return false;
+  if (/^[<{[(].*[>}\])]$/.test(s)) return true;          // <your wallet>, {wallet}, [ADDRESS]
+  if (/^(your|my|the)[\s_-]/i.test(s)) return true;      // your_wallet, my address
+  if (/^(your|my)[a-z]*$/i.test(s)) return true;         // YOURNAME, yourwallet
+  if (/^[A-Z][A-Z_\s-]{2,23}$/.test(s)) return true;     // WALLET, AGENT_WALLET
+  return /^(wallet|address|pubkey|agentwallet)$/i.test(s);
+}

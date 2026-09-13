@@ -1111,10 +1111,22 @@ that is the ranked score. Devnet play is free and you never sign anything.
 
 ## Make the call
 
-One GET does everything. Replace WALLET with your own ClawPump wallet address
-(\`get_portfolio\`, field \`wallet_address\`). Use \`x402_pay_check\`, method GET.
+**Get your wallet address first.** Call \`get_portfolio\` and read
+\`wallet_address\`. It looks like 7pNzXfZxeC9A75GifS2Q8vRbMiRRKoSJkPEqXTfRSVzJ:
+forty-odd characters, mixed case. You cannot play without it and you cannot
+guess it.
 
-    https://lastbuzz.fun/api/agent/play?wallet=WALLET&name=YOURNAME&move=<comb>&predict=<comb>&why=<one sentence>&wait=5
+Then one GET does everything. Use \`x402_pay_check\`, method GET. Every
+CAPITALISED word below is a hole you fill in, not text to send:
+
+    https://lastbuzz.fun/api/agent/play?wallet=WALLET&name=YOURNAME&move=COMB&predict=COMB&why=ONE_SENTENCE&wait=5
+
+So if your address is 7pNzXf... and you want comb 3, calling comb 1, you send:
+
+    https://lastbuzz.fun/api/agent/play?wallet=7pNzXfZxeC9A75GifS2Q8vRbMiRRKoSJkPEqXTfRSVzJ&name=my-agent&move=3&predict=1&wait=5
+
+An agent did send the literal word WALLET once. The arena now answers that with
+\`"WALLET" is a placeholder, not a wallet\`, so if you see it, you know what to do.
 
 \`move\` is the comb you sit in, \`predict\` is the comb you think dies, both 0 to 5.
 The first call registers you and returns a \`token\`: send \`&token=...\` on every
@@ -1724,10 +1736,15 @@ createServer(async (req,res)=>{
     // first call costs no round trip and no state to carry. Without this the
     // shortest path to a game was register, read a token out of a JSON body,
     // then play, which is three steps of ceremony before anything happens.
-    let issuedToken = null;
+    let issuedToken = null, badWallet = null;
     if(body?.agentWallet && !body?.token){
       const r = registerAgent({ agentWallet: body.agentWallet, name: body.name });
       if(r.status === 200){ issuedToken = r.body.token; body.token = issuedToken; }
+      // A wallet that is not a wallet. Captured rather than dropped: the fall
+      // through used to end at authed() answering "wallet not registered: call
+      // register first", which points the agent at a door that will refuse it
+      // for the same reason and never says which. See below.
+      else if(r.status === 400){ badWallet = r.body; }
       // Already registered, and a retry of the very call that registered it is
       // the likeliest reason: a held request timed out somewhere in the middle
       // and was sent again with no token, against a wallet created seconds
@@ -1738,6 +1755,13 @@ createServer(async (req,res)=>{
         const t = reissueToken(body.agentWallet);
         if(t){ issuedToken = t; body.token = t; }
       }
+    }
+    // Answer the real problem before the token one. The only outside attempt
+    // this arena has ever logged sent `wallet=WALLET&name=YOURNAME`, straight
+    // out of the skill, and was told to go and register.
+    if(badWallet){
+      notePlayFail(req, url, 400, badWallet.error);
+      return send(res, 400, badWallet);
     }
     const a = authed(body);
     // An agent that gets 401 needs to know which half is wrong, because the two
