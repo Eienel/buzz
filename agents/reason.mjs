@@ -51,20 +51,36 @@ const PROVIDERS = [
   { name: "openrouter",
     env: "OPENROUTER_KEY",
     url: () => "https://openrouter.ai/api/v1/chat/completions",
+    // Turn the thinking off, because it is what breaks these models here.
+    // Measured against nemotron-3.5-lightning on the real prompt: as sent, it
+    // spent 599 of its 700 completion tokens on reasoning, hit
+    // finish_reason "length" and never reached the JSON, in 12.6s. With
+    // reasoning disabled it answered valid JSON in 0.8s with zero reasoning
+    // tokens. `exclude: true` and `effort: "low"` both still burned the
+    // allowance, so it has to be `enabled: false`.
+    //
+    // This is the failure this file already documents four times over. It is
+    // not a property of one lab: it is what a reasoning model does to a prompt
+    // with a hard token ceiling and a sixty second window.
+    extra: { reasoning: { enabled: false } },
     // The referer and title are how OpenRouter attributes traffic on its own
     // leaderboards. Free either way, and being visible there costs nothing.
     headers: (k) => ({ authorization: `Bearer ${k}`,
                        "http-referer": "https://lastbuzz.fun", "x-title": "BUZZ arena" }),
-    // Read off the live /api/v1/models list on 2026-09-10, not remembered: the
-    // three ids guessed from memory first time round all 404'd. The free roster
-    // churns, so re-check with
+    // These three answered the real prompt. Eleven free ids were tried against
+    // it with a real key and the other eight did not, in four distinct ways:
+    // 429 from the provider (both gemma ids, laguna-xs), 400 (ling-flash-vl,
+    // ling-flash-sante), 403 "only available on agentic plans"
+    // (inkling-small), and a timeout at our own commit-window deadline
+    // (nex-n2.5-pro, nemotron-3-ultra). Answering latency on the three kept is
+    // 1.4s, 1.5s and 2.3s.
+    //
+    // Two are NVIDIA, which is worse than three labs and the best that was
+    // available: the roster churns, so re-check with
     //   curl -s https://openrouter.ai/api/v1/models | jq -r '.data[].id|select(endswith(":free"))'
-    // Three labs, for the same reason DEFAULT_MODELS has three: identical pods
-    // asking one model are one agent with three wallets. Reasoning-tagged and
-    // task-specific variants are left out on purpose, see below.
-    models: ["google/gemma-4-31b-it:free",
-             "nvidia/nemotron-3-super-120b-a12b:free",
-             "nex-agi/nex-n2.5-pro:free"] },
+    models: ["nvidia/nemotron-3.5-lightning:free",
+             "dots-studio/dots-3-note-preview:free",
+             "nvidia/nemotron-3-super-120b-a12b:free"] },
   { name: "groq",
     env: "GROQ_KEY",
     url: () => "https://api.groq.com/openai/v1/chat/completions",
@@ -399,6 +415,8 @@ export async function decide(fog, self, opts = {}) {
         // the same failure this file already documents for glm and gemini, and
         // it had quietly reached one of the models actually in play.
         max_tokens: MAX_TOKENS,
+        // Provider-specific knobs, see PROVIDERS.
+        ...(prov.extra ?? {}),
         // Identical agents on an identical board would herd, so each pod is
         // spread across the range rather than all sitting at one value.
         temperature: opts.temperature ?? 0.7,
