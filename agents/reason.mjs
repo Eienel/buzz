@@ -15,7 +15,7 @@
 // inside falls back to a heuristic, because a model that is slow, broke or
 // wrong must never be able to stall a live game.
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 
 /**
@@ -290,6 +290,24 @@ function sanitise(raw, fog, self) {
  */
 const DAILY_CAP = Number(process.env.INFER_DAILY_CAP ?? 900);
 
+/**
+ * Per-provider caps, because one free tier does not carry this arena.
+ *
+ * Verified against the providers' own docs: OpenRouter allows 50 requests a
+ * day until ten dollars has been bought at any point ever and a thousand after
+ * that, Groq a thousand. The arena makes about 2,500. So the way to run this
+ * for free is several free accounts at once rather than one generous one, and
+ * INFER_CAP_<NAME> sets each one's ceiling independently.
+ *
+ * Google and Cerebras also publish free tiers, but both have moved the actual
+ * numbers off their docs and into a signed-in dashboard, so they are not
+ * guessed at here: set the cap when you know it.
+ */
+const capFor = (name) => {
+  const v = process.env[`INFER_CAP_${name.toUpperCase()}`];
+  return v == null || v === "" ? DAILY_CAP : Number(v);
+};
+
 const DRY_MS = Number(process.env.USEPOD_DRY_COOLDOWN_MS ?? 10 * 60 * 1000);
 const DRY_FILE = process.env.DATA_DIR ? join(process.env.DATA_DIR, "inference-dry.json") : null;
 const SPEND_FILE = process.env.DATA_DIR ? join(process.env.DATA_DIR, "inference-spend.json") : null;
@@ -297,37 +315,71 @@ const SPEND_FILE = process.env.DATA_DIR ? join(process.env.DATA_DIR, "inference-
 const today = () => new Date().toISOString().slice(0, 10);      // UTC day
 
 /** Calls made so far today, read fresh because another swarm may have spent. */
-function spentToday() {
-  if (!SPEND_FILE) return 0;
+function ledger() {
+  if (!SPEND_FILE) return {};
   try {
     const s = JSON.parse(readFileSync(SPEND_FILE, "utf8"));
-    return s.day === today() ? Number(s.calls) || 0 : 0;
-  } catch { return 0; }
+    return s.day === today() ? (s.by ?? {}) : {};
+  } catch { return {}; }
 }
+const spentToday = (name) => Number(ledger()[name]) || 0;
 
-/** Count one call against the day. Best effort: a lost write costs one call. */
-function spend() {
+/**
+ * Count one call against one provider's day.
+ *
+ * The directory is created rather than assumed. A missing DATA_DIR made every
+ * write throw into the catch below, so the ledger stayed empty, the cap never
+ * bound, and the only symptom would have been a free tier spent by lunchtime
+ * with nothing on the page explaining why.
+ */
+function spend(name) {
   if (!SPEND_FILE) return;
-  try { writeFileSync(SPEND_FILE, JSON.stringify({ day: today(), calls: spentToday() + 1 })); }
-  catch { /* the cap is a courtesy to the provider, not a correctness guard */ }
+  try {
+    try { mkdirSync(process.env.DATA_DIR, { recursive: true }); } catch { /* already there */ }
+    const by = ledger(); by[name] = (Number(by[name]) || 0) + 1;
+    writeFileSync(SPEND_FILE, JSON.stringify({ day: today(), by }));
+  } catch (e) {
+    // Said once, loudly: a cap that is not recording is not a cap.
+    if (!spend.warned) { spend.warned = true;
+      console.log(`[reason] cannot write ${SPEND_FILE}: ${e.message}. The daily cap will not bind.`); }
+  }
 }
 
-/** What is left of today's allowance, for the page and for the tests. */
-export const dailyBudget = () => ({ cap: DAILY_CAP, spent: spentToday(),
-                                    left: Math.max(0, DAILY_CAP - spentToday()) });
-let dryUntil = 0;
+/** What is left today, per provider and in total. */
+export const dailyBudget = () => {
+  const by = {};
+  let cap = 0, spent = 0;
+  for (const p of PROVIDERS) {
+    if (!(process.env[p.env] ?? "").length) continue;
+    const c = capFor(p.name), sp = spentToday(p.name);
+    by[p.name] = { cap: c, spent: sp, left: Math.max(0, c - sp) };
+    cap += c; spent += sp;
+  }
+  return { cap, spent, left: Math.max(0, cap - spent), by };
+};
+let dry = {};                 // provider name -> ms timestamp it is dry until
 if (DRY_FILE) {
-  try { dryUntil = Number(JSON.parse(readFileSync(DRY_FILE, "utf8")).until) || 0; }
+  try { dry = JSON.parse(readFileSync(DRY_FILE, "utf8")).dry ?? {}; }
   catch { /* no file yet, or a shape we did not write: start closed */ }
 }
 
 /** ms timestamp the prepaid account is assumed empty until, or 0 if not. */
-export const inferenceDry = () => (dryUntil > Date.now() ? dryUntil : 0);
+const dryUntilOf = (name) => Number(dry[name]?.until ?? dry[name]) || 0;
+const isDry = (name) => dryUntilOf(name) > Date.now();
+/** The soonest any configured provider comes back, or 0 if one is usable. */
+export const inferenceDry = () => {
+  const live = PROVIDERS.filter((p) => (process.env[p.env] ?? "").length);
+  if (!live.length) return 0;
+  if (live.some((p) => !isDry(p.name))) return 0;
+  return Math.min(...live.map((p) => dryUntilOf(p.name)));
+};
 
-function openBreaker() {
-  dryUntil = Date.now() + DRY_MS;
+function openBreaker(name, why) {
+  // The reason travels with the breaker, because /thinking shows it and
+  // "a provider is dry" tells a reader nothing they can act on.
+  dry[name] = { until: Date.now() + DRY_MS, why };
   if (!DRY_FILE) return;
-  try { writeFileSync(DRY_FILE, JSON.stringify({ until: dryUntil, at: Date.now() })); }
+  try { writeFileSync(DRY_FILE, JSON.stringify({ dry, at: Date.now() })); }
   catch { /* see above: a breaker that only holds in memory still helps */ }
 }
 
@@ -341,13 +393,21 @@ export async function decide(fog, self, opts = {}) {
     if (opts.onSkip) opts.onSkip(`no inference key set (${names}): reasoning is off`, 0);
     return null;
   }
-  if (DAILY_CAP > 0 && spentToday() >= DAILY_CAP) {
-    if (opts.onSkip) opts.onSkip(`daily inference cap reached: ${DAILY_CAP} calls used today`, 0);
-    return null;
-  }
-  if (dryUntil > Date.now()) {
-    const mins = Math.ceil((dryUntil - Date.now()) / 60000);
-    if (opts.onSkip) opts.onSkip(`402 insufficient balance: prepaid account is empty, not retrying for ${mins}m`, 0);
+  // Which providers could take this call: keyed, not dry, not over their cap.
+  // Several free tiers stacked is how this runs for nothing, so one being out
+  // has to hand off rather than stop. See capFor.
+  const usable = PROVIDERS.filter((p) => (process.env[p.env] ?? "").length)
+    .filter((p) => !isDry(p.name))
+    .filter((p) => { const c = capFor(p.name); return c <= 0 || spentToday(p.name) < c; });
+  if (!usable.length) {
+    const keyed = PROVIDERS.filter((p) => (process.env[p.env] ?? "").length);
+    const out = keyed.filter((p) => spentToday(p.name) >= capFor(p.name)).map((p) => p.name);
+    const mins = (n) => Math.max(1, Math.ceil((dryUntilOf(n) - Date.now()) / 60000));
+    const said = keyed.filter((p) => isDry(p.name))
+      .map((p) => `${p.name}: ${dry[p.name]?.why ?? "unavailable"}, not retrying for ${mins(p.name)}m`);
+    if (opts.onSkip) opts.onSkip(
+      [...said, ...out.map((n) => `${n}: daily cap of ${capFor(n)} reached`)].join(" | ")
+      || "no inference provider available", 0);
     return null;
   }
   // Thinking is not free. An agent out of budget does not fall back to a rule,
@@ -393,11 +453,13 @@ export async function decide(fog, self, opts = {}) {
   const timer = setTimeout(() => ctl.abort(), budgetFor(opts.instanceSeconds, opts.stagger ?? 0));
   const t0 = Date.now();
   try {
-    const prov = activeProvider();
+    // The first provider that can take it. `usable` is already ordered free
+    // before prepaid and filtered for dry and over-cap.
+    const prov = usable[0];
     const key = process.env[prov.env];
     // Count it before it is sent. A call that fails still consumed the
     // provider's allowance, and a cap that only counts successes is not a cap.
-    spend();
+    spend(prov.name);
     const r = await fetch(prov.url(key), {
       method: "POST",
       headers: { "content-type": "application/json", ...prov.headers(key) },
@@ -427,7 +489,12 @@ export async function decide(fog, self, opts = {}) {
       const body = (await r.text()).slice(0, 120);
       // The account, not this call. Trip the breaker before throwing so the
       // rest of the cohort skips instead of queueing behind the same answer.
-      if (r.status === 402 || /insufficient[_ ]balance/i.test(body)) openBreaker();
+      // 402 is the account, 429 is the tier's ceiling for now. Both mean this
+      // provider is done for a while and the next one should take over.
+      if (r.status === 402 || r.status === 429 || /insufficient[_ ]balance/i.test(body))
+        openBreaker(prov.name, r.status === 429
+          ? "rate limited, its free tier is spent for now"
+          : "insufficient balance: the prepaid account is empty");
       throw new Error(`${r.status} ${body}`);
     }
     const j = await r.json();

@@ -43,7 +43,11 @@ test("a 402 opens the breaker and the cohort stops calling", async () => {
 
   // The page reads this line. It must not blame the agent's own budget, which
   // at this point is untouched.
+  // The message must name the provider and the cause: "a provider is dry"
+  // tells a reader of /thinking nothing they can act on.
+  assert.match(skips.at(-1).why, /usepod/);
   assert.match(skips.at(-1).why, /prepaid account is empty/);
+  assert.match(skips.at(-1).why, /not retrying for \d+m/);
   assert.equal(skips.at(-1).ms, 0);
 });
 

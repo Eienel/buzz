@@ -75,7 +75,8 @@ test("the daily cap stops calls and survives the per-game respawn", async () => 
     const skips = [];
     await a.decide(fog, 0, { onSkip: (w) => skips.push(w) });
     assert.equal(calls, 3, "the fourth does not reach the network");
-    assert.match(skips[0], /daily inference cap/);
+    assert.match(skips[0], /openrouter/);
+    assert.match(skips[0], /daily cap of 3/);
 
     // A fresh module is a fresh swarm process; the count must not reset.
     const b = await load("cap2");
@@ -116,6 +117,66 @@ test("yesterday's spend does not eat today's allowance", async () => {
   try {
     const a = await load("cap4");
     assert.equal(a.dailyBudget().spent, 0, "a stale day reads as nothing spent");
+  } finally {
+    delete process.env.DATA_DIR; clear();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a spent provider hands off to the next instead of stopping", async () => {
+  // Stacking free tiers is the whole point: one being out must not end the
+  // round for everyone. OpenRouter allows 50 a day on a fresh account and Groq
+  // a thousand; the arena wants about 2,500, so no single tier carries it.
+  clear();
+  const dir = mkdtempSync(join(tmpdir(), "buzz-fail-"));
+  process.env.DATA_DIR = dir;
+  process.env.INFER_CAP_OPENROUTER = "1";
+  process.env.INFER_CAP_GROQ = "50";
+  process.env.OPENROUTER_KEY = "o";
+  process.env.GROQ_KEY = "g";
+  const hits = [];
+  globalThis.fetch = async (url) => {
+    hits.push(String(url).includes("groq") ? "groq" : "openrouter");
+    return { ok: false, status: 500, text: async () => "nope", headers: { get: () => null } };
+  };
+  try {
+    const a = await load("failover");
+    const fog = { 0: 2, 1: 1, 2: 3 };
+    await a.decide(fog, 0, { onSkip: () => {} });
+    assert.equal(hits[0], "openrouter", "free-before-prepaid order still holds");
+    await a.decide(fog, 0, { onSkip: () => {} });
+    assert.equal(hits[1], "groq", "openrouter is at its cap, so groq takes it");
+    const b = a.dailyBudget();
+    assert.equal(b.by.openrouter.left, 0);
+    assert.equal(b.by.groq.left, 49);
+    assert.equal(b.cap, 51, "the budget is the sum of the tiers, not one of them");
+  } finally {
+    delete process.env.DATA_DIR; delete process.env.INFER_CAP_OPENROUTER;
+    delete process.env.INFER_CAP_GROQ; clear();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a rate limited provider is benched and the next one answers", async () => {
+  clear();
+  const dir = mkdtempSync(join(tmpdir(), "buzz-429-"));
+  process.env.DATA_DIR = dir;
+  process.env.OPENROUTER_KEY = "o";
+  process.env.GROQ_KEY = "g";
+  const hits = [];
+  globalThis.fetch = async (url) => {
+    const who = String(url).includes("groq") ? "groq" : "openrouter";
+    hits.push(who);
+    return { ok: false, status: who === "openrouter" ? 429 : 500,
+             text: async () => "limit", headers: { get: () => null } };
+  };
+  try {
+    const a = await load("bench429");
+    const fog = { 0: 2, 1: 1, 2: 3 };
+    await a.decide(fog, 0, { onSkip: () => {} });
+    assert.equal(hits[0], "openrouter");
+    await a.decide(fog, 0, { onSkip: () => {} });
+    assert.equal(hits[1], "groq", "429 benches openrouter, groq picks it up");
   } finally {
     delete process.env.DATA_DIR; clear();
     rmSync(dir, { recursive: true, force: true });
