@@ -70,13 +70,16 @@ const POD_MIN_TEMPO = Number(process.env.POD_MIN_TEMPO ?? 60);
 const POD_STAGGER_MS = Number(process.env.POD_STAGGER_MS ?? 0);
 // How many games may be live at once, and how long to wait between starting
 // them so three lobbies do not all crank on the same second.
-// Three. A slot cycles an 8.3 min game plus about 3 min idle, so it is busy
-// roughly 73% of the time: three slots average 2.2 live games and the
-// scheduler adds one, which lands at 3 to 4 on a board that renders four.
-// Two was tried first and measured 2.5 average, a board with visible gaps.
-// The seven-game wall that started this came from the fast scheduler tempo,
-// not from this number, and SCHED_TEMPOS fixed that.
-const MAX_CONCURRENT = Number(process.env.MAX_CONCURRENT ?? 3);
+// Two. Three slots cycling an 8.3 min game plus 3 min idle ran the board at
+// 3 to 4 live games, which is what the page renders, and measured 612 games a
+// day against Alchemy. That is what spent the RPC month: the arena went dark
+// for 78 hours on a spending limit, not on a bug. Two slots with a longer idle
+// below land at about 254 games a day, roughly 40% of the compute units.
+// Three is the better board and the reason is still in the history: two was
+// tried before and averaged 2.5 live games, which leaves visible gaps. This
+// trades that fullness for an arena that is still answering tomorrow. Put it
+// back to 3 once the RPC budget is not the binding constraint.
+const MAX_CONCURRENT = Number(process.env.MAX_CONCURRENT ?? 2);
 // The ceiling on the whole board, this swarm's games and the server
 // scheduler's together. Four is what the arena page renders, so at four
 // everything running is visible at once. Same default on the server side.
@@ -126,7 +129,11 @@ const ASSETS = Object.entries(mints).map(([name, m]) => ({
   name, mint: new PublicKey(m.mint), decimals: m.decimals,
   tokenProgram: new PublicKey(m.tokenProgram),
 }));
-const GAME_INTERVAL = Number(process.env.GAME_INTERVAL_SECONDS ?? 180) * 1000; // idle between games
+// Idle between games. Raised from 180s: with MAX_CONCURRENT at 2 this sets the
+// duty cycle, and a 7 min game against a 7 min idle keeps each slot busy about
+// half the time. Lengthening the gap costs nothing on chain, unlike opening
+// another game, so it is the cheaper of the two ways to slow the board down.
+const GAME_INTERVAL = Number(process.env.GAME_INTERVAL_SECONDS ?? 420) * 1000;
 // Per-agent funding: fixed headroom for PDA rent and tx fees. The stake is a
 // token, not SOL, so this scales with account sizes rather than with the stake.
 //

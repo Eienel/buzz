@@ -48,7 +48,13 @@ const MIN_CIRCLES = 4;
 // lives. At four minutes the scheduler was opening a second game before the
 // first had finished, so its own games stacked two deep before the swarm's
 // three were counted.
-const TEMPOS = (process.env.SCHED_TEMPOS ?? "60:480")
+// One every thirty minutes, down from eight. The eight minute slot was sized
+// against how long a 60 second game lives, so it kept a scheduler game on the
+// board almost continuously: 180 games a day on its own. The swarm is the
+// producer that fills the board (MAX_CONCURRENT there), so this tier is the
+// one to thin when the RPC budget binds, and thinning it costs a tempo nobody
+// was betting on rather than a slot that was drawing agents.
+const TEMPOS = (process.env.SCHED_TEMPOS ?? "60:1800")
   .split(",").map((s) => {
     const [tempo, every] = s.split(":").map(Number);
     return { tempo, every };
